@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 import numpy as np
 
-cores = 30  # Fixed to match JAX CPU devices and NUTS chains.
+cores = 4  # Fixed to match JAX CPU devices and NUTS chains.
 seed_default = 12345
 output_dir_default = "validation_runs/mock_recovery"
 mock_caustic_grid_chunk_memory_gb = 8.0
@@ -204,6 +204,10 @@ def build_config(
         subhalo_spatial_cut_radius_arcsec=180.0,
         subhalo_field_radius_arcsec=250.0,
         subhalo_force_core_count=0,
+        subhalo_alpha_sigma=0.25,
+        subhalo_gamma_ml=0.0,
+        subhalo_sigma_scatter_dex=0.0,
+        subhalo_cut_scatter_dex=0.0,
         min_images_per_family=3,
         max_images_per_family=None,
         primary_source_redshifts=np.linspace(1.5, 9.0, 25) if production else np.linspace(1.5, 9.0, 3),

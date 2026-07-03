@@ -535,14 +535,16 @@ def test_generate_single_bcg_mock_uses_family_class_image_min_distances(tmp_path
         n_primary_families=1,
         n_subhalo_families=1,
         n_subhalos=8,
+        subhalo_sigma_ref=300.0,
+        subhalo_cut_radius_arcsec=45.0,
         primary_source_redshifts=(2.0,),
         subhalo_source_redshifts=(2.0,),
         primary_image_min_distance_arcsec=2.5,
         subhalo_image_min_distance_arcsec=0.75,
         mock_image_search_window_arcsec=90.0,
         max_sources_to_try=100,
-        caustic_compute_window_arcsec=60.0,
-        caustic_grid_scale_arcsec=2.0,
+        caustic_compute_window_arcsec=80.0,
+        caustic_grid_scale_arcsec=1.0,
     )
 
     _paths, images, truth = generate_single_bcg_mock(tmp_path, config)
@@ -589,7 +591,7 @@ def test_generate_single_bcg_mock_with_subhalos_current_truth_schema(tmp_path: P
         n_subhalos=6,
         n_primary_families=1,
         max_sources_to_try=80,
-        caustic_compute_window_arcsec=60.0,
+        caustic_compute_window_arcsec=80.0,
         caustic_grid_scale_arcsec=2.0,
     )
 
@@ -2021,7 +2023,7 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
         n_primary_families=1,
         n_subhalos=8,
         pos_sigma_arcsec=0.0,
-        caustic_compute_window_arcsec=60.0,
+        caustic_compute_window_arcsec=80.0,
         caustic_grid_scale_arcsec=2.0,
         mock_image_candidate_batch_size=8,
     )
@@ -2065,7 +2067,12 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
     assert selection["luminosity_peak"] == pytest.approx(config.subhalo_schechter_alpha + 1.0)
     assert selection["mass_luminosity_exponent"] == pytest.approx(1.0)
     assert truth["parameter_truth"]["potfile.alpha_sigma"] == pytest.approx(config.subhalo_alpha_sigma)
-    assert truth["parameter_truth"]["potfile.beta_radius"] == pytest.approx(config.subhalo_beta_radius)
+    assert truth["parameter_truth"]["potfile.gamma_ml"] == pytest.approx(config.subhalo_gamma_ml)
+    assert truth["parameter_truth"]["potfile.beta_radius"] == pytest.approx(
+        mock_generation._subhalo_beta_radius_from_config(config)
+    )
+    assert "potfile.sigma_log_scatter" not in truth["parameter_truth"]
+    assert "potfile.mass_log_scatter" not in truth["parameter_truth"]
     assert selection["mass_peak"] == pytest.approx(
         config.subhalo_mass_ref * (config.subhalo_schechter_alpha + 1.0) ** selection["mass_luminosity_exponent"]
     )
@@ -2143,7 +2150,8 @@ def test_subhalo_schechter_luminosity_to_mass_conversion_uses_dpie_scaling() -> 
     mags = mock_generation._subhalo_magnitude_from_luminosity_ratio(luminosities, config)
 
     assert config.subhalo_alpha_sigma == pytest.approx(0.25)
-    assert config.subhalo_beta_radius == pytest.approx(0.50)
+    assert config.subhalo_gamma_ml == pytest.approx(0.0)
+    assert mock_generation._subhalo_beta_radius_from_config(config) == pytest.approx(0.50)
     assert exponent == pytest.approx(1.0)
     assert masses[0] == pytest.approx(config.subhalo_mass_ref)
     assert mags[0] == pytest.approx(config.subhalo_mag0)
@@ -2243,11 +2251,19 @@ def test_subhalo_spatial_dpie_is_broader_than_compact_gamma() -> None:
         ({"mock_caustic_grid_chunk_memory_gb": -1.0}, "mock_caustic_grid_chunk_memory_gb"),
         ({"mock_caustic_grid_chunk_memory_gb": float("nan")}, "mock_caustic_grid_chunk_memory_gb"),
         ({"mock_caustic_grid_chunk_memory_gb": float("inf")}, "mock_caustic_grid_chunk_memory_gb"),
+        ({"subhalo_alpha_sigma": float("nan")}, "subhalo_alpha_sigma"),
+        ({"subhalo_gamma_ml": float("nan")}, "subhalo_gamma_ml"),
+        ({"subhalo_alpha_sigma": 0.6, "subhalo_gamma_ml": 0.0}, "Derived subhalo beta_radius"),
     ],
 )
 def test_subhalo_spatial_invalid_config_raises(updates: dict[str, Any], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         SingleBCGMockConfig(n_primary_families=1, **updates).validate()
+
+
+def test_caustic_config_from_truth_rejects_legacy_subhalo_beta_radius() -> None:
+    with pytest.raises(ValueError, match="subhalo_beta_radius"):
+        mock_generation._caustic_config_from_truth({"config": {"subhalo_beta_radius": 0.5}})
 
 
 def test_subhalo_spatial_config_round_trips_from_truth() -> None:
@@ -3693,11 +3709,13 @@ def test_generate_single_bcg_mock_can_request_subhalo_caustic_family(tmp_path: P
         n_primary_families=1,
         n_subhalo_families=1,
         n_subhalos=8,
+        subhalo_sigma_ref=300.0,
+        subhalo_cut_radius_arcsec=45.0,
         pos_sigma_arcsec=0.0,
         primary_source_redshifts=(2.0,),
         subhalo_source_redshifts=(2.0,),
-        caustic_compute_window_arcsec=60.0,
-        caustic_grid_scale_arcsec=2.0,
+        caustic_compute_window_arcsec=80.0,
+        caustic_grid_scale_arcsec=1.0,
         mock_image_candidate_batch_size=8,
     )
 

@@ -19,10 +19,13 @@ plots/
 *.pkl
 *.egg-info/
 *.xsh
+!run_mock.xsh
 *.par
 data/*
 results/*
 notebooks/*
+!notebooks/run_ff_sims_fit.ipynb
+!notebooks/replot_truth_recovery_critical_line.ipynb
 *.zip
 paper/*
 *.out

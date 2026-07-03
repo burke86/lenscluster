@@ -129,14 +129,14 @@ class SingleBCGMockConfig:
     subhalo_mag0: float = 17.0
     subhalo_sigma_ref: float = 245.0
     subhalo_sigma_ref_std: float = 35.0
-    subhalo_sigma_scatter_dex: float = 0.07
+    subhalo_sigma_scatter_dex: float = 0.0
     subhalo_core_radius_arcsec: float = 0.0001
     subhalo_cut_radius_arcsec: float = 35.0
     subhalo_cut_lower_arcsec: float = 8.0
     subhalo_cut_upper_arcsec: float = 80.0
-    subhalo_cut_scatter_dex: float = 0.20
+    subhalo_cut_scatter_dex: float = 0.0
     subhalo_alpha_sigma: float = 0.25
-    subhalo_beta_radius: float = 0.50
+    subhalo_gamma_ml: float = 0.0
     halo: DPIETruth = DPIETruth(
         potential_id="halo",
         x_centre=0.0,
@@ -261,6 +261,10 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         raise ValueError("subhalo_force_core_max_arcsec must exceed subhalo_force_core_min_arcsec.")
     if force_max > float(config.subhalo_field_radius_arcsec):
         raise ValueError("subhalo_force_core_max_arcsec must not exceed subhalo_field_radius_arcsec.")
+    for name in ("subhalo_alpha_sigma", "subhalo_gamma_ml"):
+        if not math.isfinite(float(getattr(config, name))):
+            raise ValueError(f"{name} must be finite.")
+    _subhalo_beta_radius_from_config(config)
 
 
 def _lenstool_ellipticite_to_axis_ratio(ellipticite: float) -> float:
@@ -290,6 +294,15 @@ def _config_to_jsonable(config: SingleBCGMockConfig, kpc_per_arcsec: float) -> d
 
 def _dex_scatter_to_ln(scatter_dex: float) -> float:
     return float(np.log(10.0) * max(float(scatter_dex), 0.0))
+
+
+def _subhalo_beta_radius_from_config(config: SingleBCGMockConfig) -> float:
+    alpha_sigma = float(config.subhalo_alpha_sigma)
+    gamma_ml = float(config.subhalo_gamma_ml)
+    beta_radius = 1.0 + gamma_ml - 2.0 * alpha_sigma
+    if not np.isfinite(beta_radius) or beta_radius <= 0.0:
+        raise ValueError("Derived subhalo beta_radius = 1 + gamma_ml - 2 * alpha_sigma must be positive and finite.")
+    return float(beta_radius)
 
 
 def _sample_truncated_schechter_luminosities(
@@ -326,7 +339,7 @@ def _sample_truncated_schechter_luminosities(
 
 def _subhalo_mass_luminosity_exponent(config: SingleBCGMockConfig) -> float:
     alpha_sigma = float(config.subhalo_alpha_sigma)
-    beta_radius = float(config.subhalo_beta_radius)
+    beta_radius = _subhalo_beta_radius_from_config(config)
     exponent = 2.0 * alpha_sigma + beta_radius
     if not np.isfinite(exponent) or exponent <= 0.0:
         raise ValueError("Subhalo mass-luminosity exponent must be positive and finite.")
@@ -527,16 +540,17 @@ def _scaled_subhalo_params(row: dict[str, Any], config: SingleBCGMockConfig) -> 
     luminosity_ratio = float(row["luminosity_ratio"])
     sigma_log_offset = float(row.get("sigma_log_offset", 0.0))
     cut_log_offset = float(row.get("cut_log_offset", 0.0))
+    beta_radius = _subhalo_beta_radius_from_config(config)
     return DPIETruth(
         potential_id=str(row["id"]),
         x_centre=float(row["x_arcsec"]),
         y_centre=float(row["y_arcsec"]),
         ellipticite=float(row["ellipticite"]),
         angle_pos=float(row["angle_pos"]),
-        core_radius_arcsec=float(config.subhalo_core_radius_arcsec * luminosity_ratio ** config.subhalo_beta_radius),
+        core_radius_arcsec=float(config.subhalo_core_radius_arcsec * luminosity_ratio ** beta_radius),
         cut_radius_arcsec=float(
             config.subhalo_cut_radius_arcsec
-            * luminosity_ratio ** config.subhalo_beta_radius
+            * luminosity_ratio ** beta_radius
             * np.exp(cut_log_offset)
         ),
         v_disp=float(config.subhalo_sigma_ref * luminosity_ratio ** config.subhalo_alpha_sigma * np.exp(sigma_log_offset)),
@@ -714,7 +728,8 @@ def _truth_parameter_values(config: SingleBCGMockConfig, kpc_per_arcsec: float) 
         truth["potfile.sigma"] = float(config.subhalo_sigma_ref)
         truth["potfile.cutkpc"] = float(config.subhalo_cut_radius_arcsec) * float(kpc_per_arcsec)
         truth["potfile.alpha_sigma"] = float(config.subhalo_alpha_sigma)
-        truth["potfile.beta_radius"] = float(config.subhalo_beta_radius)
+        truth["potfile.gamma_ml"] = float(config.subhalo_gamma_ml)
+        truth["potfile.beta_radius"] = _subhalo_beta_radius_from_config(config)
         if config.subhalo_sigma_scatter_dex > 0.0:
             truth["potfile.sigma_log_scatter"] = _dex_scatter_to_ln(config.subhalo_sigma_scatter_dex)
         if config.subhalo_cut_scatter_dex > 0.0:
@@ -2000,6 +2015,8 @@ def _source_redshift_tuple_from_config(raw: Any, default: tuple[float, ...]) -> 
 def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
     raw = truth.get("config", {})
     config = raw if isinstance(raw, dict) else {}
+    if "subhalo_beta_radius" in config:
+        raise ValueError("Legacy mock config field subhalo_beta_radius is unsupported; regenerate the mock with subhalo_gamma_ml.")
     defaults = SingleBCGMockConfig()
     legacy_source_redshifts_raw = config.get("source_redshifts", defaults.primary_source_redshifts)
     primary_source_redshifts = _source_redshift_tuple_from_config(
@@ -2062,6 +2079,7 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
             config.get("subhalo_sigma_scatter_dex", defaults.subhalo_sigma_scatter_dex)
         ),
         subhalo_cut_scatter_dex=float(config.get("subhalo_cut_scatter_dex", defaults.subhalo_cut_scatter_dex)),
+        subhalo_gamma_ml=float(config.get("subhalo_gamma_ml", defaults.subhalo_gamma_ml)),
         caustic_compute_window_arcsec=float(
             config.get("caustic_compute_window_arcsec", defaults.caustic_compute_window_arcsec)
         ),
