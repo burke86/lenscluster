@@ -14,7 +14,6 @@ LOG_DIR = PROJECT_ROOT / "hpc_scripts/mock_validation/logs"
 
 DEFAULT_SEEDS = tuple(range(12345, 12355))
 DEFAULT_PRESET = "production"
-DEFAULT_CAMPAIGN = "mock_validation_array"
 DEFAULT_OUTPUT_DIR = "validation_runs/mock_recovery"
 
 CPUS_PER_TASK = 4
@@ -43,7 +42,11 @@ def parse_seed_list(value: str) -> tuple[int, ...]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Submit mock-validation SLURM array jobs.")
-    parser.add_argument("--campaign", default=DEFAULT_CAMPAIGN, help="Campaign name passed to run_mock.xsh.")
+    parser.add_argument(
+        "--campaign",
+        default=None,
+        help="Campaign name passed to run_mock.xsh. Default: <date>_mock_validation.",
+    )
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output directory passed to run_mock.xsh.")
     parser.add_argument("--preset", choices=("smoke", "production"), default=DEFAULT_PRESET)
     parser.add_argument(
@@ -59,6 +62,11 @@ def parse_args() -> argparse.Namespace:
 def make_run_stamp() -> str:
     now = datetime.now()
     return f"{now.strftime('%b').lower()}{now.day}_{now.strftime('%I%M%p').lower()}"
+
+
+def make_campaign_name() -> str:
+    now = datetime.now()
+    return f"{now.strftime('%b').lower()}{now.day}_{now:%H%M}_mock_validation"
 
 
 def shell_array(values: tuple[int, ...]) -> str:
@@ -159,7 +167,9 @@ def submit_array(sbatch_path: Path, num_tasks: int) -> str:
 
 def main() -> None:
     args = parse_args()
-    prefix = f"mock_validation_{args.preset}_{make_run_stamp()}"
+    if args.campaign is None:
+        args.campaign = make_campaign_name()
+    prefix = f"{args.campaign}_{args.preset}_{make_run_stamp()}"
     sbatch_path = write_sbatch_script(prefix, build_sbatch_script(prefix, args))
 
     print(f"Wrote sbatch script: {sbatch_path}")
