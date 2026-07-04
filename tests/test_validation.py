@@ -11621,6 +11621,105 @@ def test_packed_lens_state_is_array_only_pytree_for_grouped_lensing() -> None:
     assert all(np.asarray(value).shape == (2,) for value in outputs)
 
 
+def test_mock_recovery_static_lens_state_from_packed_preserves_arrays() -> None:
+    packed_state = PackedLensState(
+        profile_type=jnp.asarray([cluster_solver.DP_IE_PROFILE, cluster_solver.SHEAR_PROFILE], dtype=jnp.int32),
+        sigma0=jnp.asarray([1.2, 0.0], dtype=jnp.float64),
+        Ra=jnp.asarray([0.15, 0.0], dtype=jnp.float64),
+        Rs=jnp.asarray([3.0, 0.0], dtype=jnp.float64),
+        e1=jnp.asarray([0.05, 0.0], dtype=jnp.float64),
+        e2=jnp.asarray([-0.02, 0.0], dtype=jnp.float64),
+        center_x=jnp.asarray([0.1, 0.0], dtype=jnp.float64),
+        center_y=jnp.asarray([-0.1, 0.0], dtype=jnp.float64),
+        gamma1=jnp.asarray([0.0, 0.01], dtype=jnp.float64),
+        gamma2=jnp.asarray([0.0, -0.02], dtype=jnp.float64),
+    )
+
+    static_state = validation._static_lens_state_from_packed(packed_state)
+
+    assert isinstance(static_state, validation.jax_lensing.StaticLensState)
+    for field_name in packed_state._fields:
+        np.testing.assert_allclose(np.asarray(getattr(static_state, field_name)), np.asarray(getattr(packed_state, field_name)))
+
+
+def test_truth_caustic_plot_uses_static_jax_lens_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = SimpleNamespace()
+    truth = {"config": SingleBCGMockConfig().to_json_dict()}
+    packed_state = PackedLensState(
+        profile_type=jnp.asarray([cluster_solver.DP_IE_PROFILE], dtype=jnp.int32),
+        sigma0=jnp.asarray([1.2], dtype=jnp.float64),
+        Ra=jnp.asarray([0.15], dtype=jnp.float64),
+        Rs=jnp.asarray([3.0], dtype=jnp.float64),
+        e1=jnp.asarray([0.05], dtype=jnp.float64),
+        e2=jnp.asarray([-0.02], dtype=jnp.float64),
+        center_x=jnp.asarray([0.1], dtype=jnp.float64),
+        center_y=jnp.asarray([-0.1], dtype=jnp.float64),
+        gamma1=jnp.asarray([0.0], dtype=jnp.float64),
+        gamma2=jnp.asarray([0.0], dtype=jnp.float64),
+    )
+    calls: list[tuple[Any, ...]] = []
+
+    monkeypatch.setattr(validation, "_packed_lens_state_from_current_truth_components", lambda *_args: packed_state)
+
+    def fake_compute(*args: Any) -> list[validation.CausticContour]:
+        calls.append(args)
+        assert len(args) == 2
+        assert isinstance(args[0], validation.jax_lensing.StaticLensState)
+        assert isinstance(args[1], SingleBCGMockConfig)
+        return []
+
+    monkeypatch.setattr(validation, "_compute_tangential_caustic_contours", fake_compute)
+
+    result = validation._truth_caustic_contours_by_z_for_plot(state, truth, ["2.0"])
+
+    assert result == {}
+    assert len(calls) == 1
+
+
+def test_recovered_caustic_plot_uses_static_jax_lens_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = SimpleNamespace(parameter_specs=[], lens_model_list=["DPIE_NIE"])
+    best_fit = np.empty((0,), dtype=float)
+    truth = {"config": SingleBCGMockConfig().to_json_dict()}
+    packed_state = PackedLensState(
+        profile_type=jnp.asarray([cluster_solver.DP_IE_PROFILE], dtype=jnp.int32),
+        sigma0=jnp.asarray([1.2], dtype=jnp.float64),
+        Ra=jnp.asarray([0.15], dtype=jnp.float64),
+        Rs=jnp.asarray([3.0], dtype=jnp.float64),
+        e1=jnp.asarray([0.05], dtype=jnp.float64),
+        e2=jnp.asarray([-0.02], dtype=jnp.float64),
+        center_x=jnp.asarray([0.1], dtype=jnp.float64),
+        center_y=jnp.asarray([-0.1], dtype=jnp.float64),
+        gamma1=jnp.asarray([0.0], dtype=jnp.float64),
+        gamma2=jnp.asarray([0.0], dtype=jnp.float64),
+    )
+    calls: list[tuple[Any, ...]] = []
+
+    class FakeEvaluator:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def reported_physical_to_latent_parameter_vector(self, values: np.ndarray) -> np.ndarray:
+            return values
+
+        def _build_packed_lens_state(self, _values: Any, _z_source: float) -> PackedLensState:
+            return packed_state
+
+    def fake_compute(*args: Any) -> list[validation.CausticContour]:
+        calls.append(args)
+        assert len(args) == 2
+        assert isinstance(args[0], validation.jax_lensing.StaticLensState)
+        assert isinstance(args[1], SingleBCGMockConfig)
+        return []
+
+    monkeypatch.setattr(cluster_solver, "ClusterJAXEvaluator", FakeEvaluator)
+    monkeypatch.setattr(validation, "_compute_tangential_caustic_contours", fake_compute)
+
+    result = validation._recovered_caustic_contours_by_z(state, best_fit, truth, ["2.0"])
+
+    assert result == {}
+    assert len(calls) == 1
+
+
 def test_grouped_lensing_hot_paths_do_not_string_index_packed_state() -> None:
     for method in (
         cluster_solver.ClusterJAXEvaluator._grouped_dpie_params,

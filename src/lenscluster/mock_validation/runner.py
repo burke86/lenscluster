@@ -59,6 +59,7 @@ from ..jax_cosmology import (
     critical_surface_density_angle_from_config,
     flat_wcdm_config,
 )
+from .. import jax_lensing
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.path import Path as MplPath
 from matplotlib.ticker import AutoMinorLocator, MaxNLocator
@@ -2209,6 +2210,21 @@ def _packed_lens_state_from_current_truth_components(state: Any, truth: dict[str
     )
 
 
+def _static_lens_state_from_packed(packed_state: Any) -> jax_lensing.StaticLensState:
+    return jax_lensing.StaticLensState(
+        profile_type=packed_state.profile_type,
+        sigma0=packed_state.sigma0,
+        Ra=packed_state.Ra,
+        Rs=packed_state.Rs,
+        e1=packed_state.e1,
+        e2=packed_state.e2,
+        center_x=packed_state.center_x,
+        center_y=packed_state.center_y,
+        gamma1=packed_state.gamma1,
+        gamma2=packed_state.gamma2,
+    )
+
+
 def _grouped_deflection_magnitude_arcsec(
     evaluator: Any,
     packed_state: Any,
@@ -2569,10 +2585,8 @@ def _recovered_caustic_contours_by_z(
             if progress:
                 progress.advance_subtask(progress_task)
             continue
-        model, _solver = evaluator._get_exact_model_solver(z_source)
         packed_state = evaluator._build_packed_lens_state(jnp.asarray(best_fit_latent, dtype=jnp.float64), z_source)
-        kwargs_lens = evaluator._packed_to_kwargs_lens(packed_state)
-        contours = _compute_tangential_caustic_contours(model, kwargs_lens, config)
+        contours = _compute_tangential_caustic_contours(_static_lens_state_from_packed(packed_state), config)
         if contours:
             contours_by_z[str(z_key)] = contours
         if progress:
@@ -2603,14 +2617,6 @@ def _truth_caustic_contours_by_z_for_plot(
         truth,
         caustic_grid_scale_arcsec=caustic_grid_scale_arcsec,
     )
-    raw_config = truth.get("config", {})
-    truth_config = raw_config if isinstance(raw_config, dict) else {}
-    z_lens = float(truth_config.get("z_lens", config.z_lens))
-    lens_model_list = list(truth.get("lens_model_list", getattr(state, "lens_model_list", [])))
-    truth_kwargs_by_z = truth.get("kwargs_lens_by_source_redshift", {})
-    if not lens_model_list:
-        return {}
-    cosmo = FlatLambdaCDM(H0=70.0, Om0=0.3)
     contours_by_z: dict[str, list[CausticContour]] = {}
     progress_task = progress.add_subtask("truth plot caustics: redshifts", total=len(z_keys)) if progress else None
     for z_key in z_keys:
@@ -2622,18 +2628,8 @@ def _truth_caustic_contours_by_z_for_plot(
             if progress:
                 progress.advance_subtask(progress_task)
             continue
-        kwargs_lens = (
-            truth_kwargs_by_z.get(f"{z_source:.8f}", truth.get("kwargs_lens", []))
-            if isinstance(truth_kwargs_by_z, dict)
-            else truth.get("kwargs_lens", [])
-        )
-        model = LensModel(
-            lens_model_list=lens_model_list,
-            z_lens=z_lens,
-            z_source=z_source,
-            cosmo=cosmo,
-        )
-        contours = _compute_tangential_caustic_contours(model, kwargs_lens, config)
+        packed_state = _packed_lens_state_from_current_truth_components(state, truth, z_source)
+        contours = _compute_tangential_caustic_contours(_static_lens_state_from_packed(packed_state), config)
         if contours:
             contours_by_z[str(z_key)] = contours
         if progress:
