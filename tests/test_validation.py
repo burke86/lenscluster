@@ -18414,3 +18414,497 @@ def test_plot_critical_caustic_recovery_ignores_marker_inputs(tmp_path: Path, mo
     )
 
     assert scatter_labels == ["truth caustic", "recovered caustic"]
+
+
+def _write_aggregate_result(
+    root: Path,
+    *,
+    seed: int,
+    variant: str,
+    stage: str,
+    records: list[dict[str, object]] | None = None,
+) -> Path:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    stage_alias = aggregate_plots.stage_alias(stage)
+    path = (
+        root
+        / "single_bcg_production_source"
+        / f"seed_{seed:08d}"
+        / variant
+        / "recovery"
+        / stage
+        / "results.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "seed": seed,
+        "validation": {
+            "recovery": {
+                stage_alias: {
+                    "tables": {
+                        "parameters": {
+                            "columns": [
+                                "parameter",
+                                "truth",
+                                "best_fit",
+                                "q16",
+                                "median",
+                                "q84",
+                                "bias",
+                                "truth_percentile",
+                                "covered_68",
+                            ],
+                            "records": records
+                            or [
+                                {
+                                    "parameter": "halo.x_centre",
+                                    "truth": 1.0,
+                                    "best_fit": 1.05,
+                                    "q16": 0.9,
+                                    "median": 1.04,
+                                    "q84": 1.2,
+                                    "bias": 0.04,
+                                    "truth_percentile": 0.4,
+                                    "covered_68": True,
+                                },
+                                {
+                                    "parameter": "halo.v_disp",
+                                    "truth": 760.0,
+                                    "best_fit": 770.0,
+                                    "q16": 720.0,
+                                    "median": 765.0,
+                                    "q84": 805.0,
+                                    "bias": 5.0,
+                                    "truth_percentile": 0.45,
+                                    "covered_68": True,
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_aggregate_combined_recovery(
+    root: Path,
+    *,
+    seed: int,
+    variant: str,
+    truth_masses: list[float],
+    recovered_log_masses: list[float],
+) -> Path:
+    path = root / "single_bcg_production_source" / f"seed_{seed:08d}" / variant / "recovery" / "results.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "mock_cluster": {
+            "truth": {
+                "subhalos": [
+                    {"id": f"member{index:03d}", "subhalo_mass_msun": mass}
+                    for index, mass in enumerate(truth_masses, start=1)
+                ],
+                "subhalo_selection": {
+                    "schechter_alpha": -1.3,
+                    "mass_ref": 1.0e12,
+                    "mass_luminosity_exponent": 1.0,
+                },
+            }
+        },
+        "solver": {
+            "stage_manifests": [
+                {
+                    "stage": "stage2_free_source_forward_fit",
+                    "table_artifacts": {
+                        "scaling_relation_summary.csv": {
+                            "data": {
+                                "columns": ["catalog_id", "scaling_log10_mass_msun_best"],
+                                "records": [
+                                    {
+                                        "catalog_id": f"member{index:03d}",
+                                        "scaling_log10_mass_msun_best": log_mass,
+                                    }
+                                    for index, log_mass in enumerate(recovered_log_masses, start=1)
+                                ],
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_aggregate_parameter_recovery_loads_stage_and_variant_methods(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for stage in aggregate_plots.DEFAULT_STAGES:
+        for variant in aggregate_plots.DEFAULT_VARIANTS:
+            _write_aggregate_result(campaign, seed=12345, variant=variant, stage=stage)
+
+    parameter_df, inventory_df = aggregate_plots.collect_parameter_recovery(campaign)
+
+    assert len(parameter_df) == 8
+    assert inventory_df["loaded"].all()
+    assert set(parameter_df["method_label"]) == {
+        "Stage 1 Anisotropic",
+        "Stage 1 Isotropic",
+        "Stage 2 Anisotropic",
+        "Stage 2 Isotropic",
+    }
+    assert set(parameter_df["stage_label"]) == {"Stage 1", "Stage 2"}
+    assert {"truth", "median", "q16", "q84", "covered_68"} <= set(parameter_df.columns)
+
+
+def test_aggregate_parameter_recovery_collapses_seed_runs(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed, truth, median in ((12345, 1.0, 1.10), (12346, 3.0, 2.90), (12347, 5.0, 5.20)):
+        for stage in aggregate_plots.DEFAULT_STAGES:
+            for variant in aggregate_plots.DEFAULT_VARIANTS:
+                _write_aggregate_result(
+                    campaign,
+                    seed=seed,
+                    variant=variant,
+                    stage=stage,
+                    records=[
+                        {
+                            "parameter": "halo.x_centre",
+                            "truth": truth,
+                            "best_fit": median,
+                            "q16": median - 0.2,
+                            "median": median,
+                            "q84": median + 0.2,
+                            "bias": median - truth,
+                            "truth_percentile": 0.5,
+                            "covered_68": True,
+                        }
+                    ],
+                )
+
+    parameter_df, _inventory_df = aggregate_plots.collect_parameter_recovery(campaign)
+    aggregate_df = aggregate_plots.aggregate_parameter_recovery(parameter_df)
+
+    assert len(aggregate_df) == 4
+    row = aggregate_df[
+        (aggregate_df["stage"] == "stage1_backprojected_centroid_fit")
+        & (aggregate_df["variant"] == "anisotropic")
+        & (aggregate_df["parameter"] == "halo.x_centre")
+    ].iloc[0]
+    assert int(row["n_seed_runs"]) == 3
+    assert float(row["truth"]) == pytest.approx(3.0)
+    assert float(row["truth_q16"]) == pytest.approx(np.quantile([1.0, 3.0, 5.0], 0.16))
+    assert float(row["truth_q84"]) == pytest.approx(np.quantile([1.0, 3.0, 5.0], 0.84))
+    assert float(row["median"]) == pytest.approx(2.9)
+    assert float(row["q16"]) == pytest.approx(np.quantile([1.10, 2.90, 5.20], 0.16))
+    assert float(row["q84"]) == pytest.approx(np.quantile([1.10, 2.90, 5.20], 0.84))
+    assert float(row["coverage_68_fraction"]) == pytest.approx(1.0)
+
+
+def test_aggregate_parameter_recovery_bias_quantiles_use_per_seed_biases(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    seed_rows = (
+        (12345, 700.0, 720.0, 0.0, 0.020),
+        (12346, 760.0, 750.0, 0.0, 0.045),
+        (12347, 820.0, 850.0, 0.0, 0.080),
+    )
+    for seed, v_truth, v_median, gamma_truth, gamma_median in seed_rows:
+        _write_aggregate_result(
+            campaign,
+            seed=seed,
+            variant="anisotropic",
+            stage="stage1_backprojected_centroid_fit",
+            records=[
+                {
+                    "parameter": "halo.v_disp",
+                    "truth": v_truth,
+                    "best_fit": v_median,
+                    "q16": v_median - 10.0,
+                    "median": v_median,
+                    "q84": v_median + 10.0,
+                    "bias": v_median - v_truth,
+                    "truth_percentile": 0.5,
+                    "covered_68": True,
+                },
+                {
+                    "parameter": "potfile.gamma_ml",
+                    "truth": gamma_truth,
+                    "best_fit": gamma_median,
+                    "q16": gamma_median - 0.01,
+                    "median": gamma_median,
+                    "q84": gamma_median + 0.01,
+                    "bias": gamma_median - gamma_truth,
+                    "truth_percentile": 0.5,
+                    "covered_68": False,
+                },
+            ],
+        )
+
+    parameter_df, _inventory_df = aggregate_plots.collect_parameter_recovery(
+        campaign,
+        stages=("stage1_backprojected_centroid_fit",),
+        variants=("anisotropic",),
+    )
+    aggregate_df = aggregate_plots.aggregate_parameter_recovery(parameter_df)
+
+    v_row = aggregate_df[aggregate_df["parameter"] == "halo.v_disp"].iloc[0]
+    v_bias = np.asarray([20.0, -10.0, 30.0], dtype=float)
+    v_fractional = np.asarray([20.0 / 700.0, -10.0 / 760.0, 30.0 / 820.0], dtype=float)
+    assert float(v_row["bias_q16"]) == pytest.approx(np.quantile(v_bias, 0.16))
+    assert float(v_row["bias_median"]) == pytest.approx(np.quantile(v_bias, 0.5))
+    assert float(v_row["bias_q84"]) == pytest.approx(np.quantile(v_bias, 0.84))
+    assert float(v_row["fractional_bias_q16"]) == pytest.approx(np.quantile(v_fractional, 0.16))
+    assert float(v_row["fractional_bias_median"]) == pytest.approx(np.quantile(v_fractional, 0.5))
+    assert float(v_row["fractional_bias_q84"]) == pytest.approx(np.quantile(v_fractional, 0.84))
+
+    gamma_row = aggregate_df[aggregate_df["parameter"] == "potfile.gamma_ml"].iloc[0]
+    gamma_bias = np.asarray([0.020, 0.045, 0.080], dtype=float)
+    assert float(gamma_row["bias_q16"]) == pytest.approx(np.quantile(gamma_bias, 0.16))
+    assert float(gamma_row["bias_median"]) == pytest.approx(np.quantile(gamma_bias, 0.5))
+    assert float(gamma_row["bias_q84"]) == pytest.approx(np.quantile(gamma_bias, 0.84))
+    assert pd.isna(gamma_row["fractional_bias_q16"])
+    assert pd.isna(gamma_row["fractional_bias_median"])
+    assert pd.isna(gamma_row["fractional_bias_q84"])
+
+
+def test_aggregate_bias_parameter_classification_keeps_gamma_ml_absolute() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    assert aggregate_plots.is_fractional_bias_parameter("halo.v_disp")
+    assert aggregate_plots.is_fractional_bias_parameter("bcg.core_radius_kpc")
+    assert aggregate_plots.is_fractional_bias_parameter("potfile.sigma")
+    assert aggregate_plots.is_absolute_bias_parameter("potfile.gamma_ml")
+    assert aggregate_plots.is_absolute_bias_parameter("halo.x_centre")
+    assert aggregate_plots.is_absolute_bias_parameter("source.1.beta_x")
+    assert not aggregate_plots.is_fractional_bias_parameter("potfile.gamma_ml")
+
+
+def test_aggregate_parameter_recovery_missing_outputs_warn_or_fail(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    _write_aggregate_result(
+        campaign,
+        seed=12345,
+        variant="anisotropic",
+        stage="stage1_backprojected_centroid_fit",
+    )
+
+    with pytest.warns(RuntimeWarning, match="Missing aggregate input"):
+        parameter_df, inventory_df = aggregate_plots.collect_parameter_recovery(campaign)
+
+    assert len(parameter_df) == 2
+    assert int(inventory_df["loaded"].sum()) == 1
+    with pytest.raises(FileNotFoundError, match="Missing aggregate input"):
+        aggregate_plots.collect_parameter_recovery(campaign, strict=True)
+
+
+def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed in (12345, 12346):
+        for stage in aggregate_plots.DEFAULT_STAGES:
+            for variant in aggregate_plots.DEFAULT_VARIANTS:
+                _write_aggregate_result(campaign, seed=seed, variant=variant, stage=stage)
+        for variant in aggregate_plots.DEFAULT_VARIANTS:
+            _write_aggregate_combined_recovery(
+                campaign,
+                seed=seed,
+                variant=variant,
+                truth_masses=[1.0e10, 1.0e11, 1.0e12],
+                recovered_log_masses=[10.1, 11.0, 11.9],
+            )
+
+    outputs = aggregate_plots.write_aggregate_plots(campaign, parameter_set="both", formats=("pdf",))
+
+    assert outputs.parameter_table.exists()
+    assert outputs.aggregate_parameter_table.exists()
+    assert outputs.inventory_table.exists()
+    assert outputs.subhalo_shmf_seed_table is not None
+    assert outputs.subhalo_shmf_seed_table.exists()
+    assert outputs.subhalo_shmf_summary_table is not None
+    assert outputs.subhalo_shmf_summary_table.exists()
+    assert {path.name for path in outputs.plot_paths} == {
+        "parameter_recovery_paper.pdf",
+        "parameter_recovery_all.pdf",
+        "parameter_bias_summary.pdf",
+        "subhalo_recovery_shmf.pdf",
+    }
+    for path in outputs.plot_paths:
+        assert path.exists()
+        assert path.stat().st_size > 0
+    table = pd.read_csv(outputs.parameter_table)
+    aggregate_table = pd.read_csv(outputs.aggregate_parameter_table)
+    assert len(table) == 16
+    assert len(aggregate_table) == 8
+    assert aggregate_table.groupby("parameter").size().to_dict() == {"halo.v_disp": 4, "halo.x_centre": 4}
+    assert set(table["method_label"]) == {
+        "Stage 1 Anisotropic",
+        "Stage 1 Isotropic",
+        "Stage 2 Anisotropic",
+        "Stage 2 Isotropic",
+    }
+
+
+def test_subhalo_shmf_tables_aggregate_seed_quantiles(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    bins = np.asarray([10.0, 11.0, 12.0], dtype=float)
+    _write_aggregate_combined_recovery(
+        campaign,
+        seed=12345,
+        variant="anisotropic",
+        truth_masses=[1.0e10],
+        recovered_log_masses=[10.2],
+    )
+    _write_aggregate_combined_recovery(
+        campaign,
+        seed=12346,
+        variant="anisotropic",
+        truth_masses=[1.0e10],
+        recovered_log_masses=[10.3, 11.2],
+    )
+
+    shmf_inputs, selection = aggregate_plots.collect_subhalo_shmf_inputs(
+        campaign,
+        variants=("anisotropic",),
+    )
+    seed_df, summary_df = aggregate_plots.build_subhalo_shmf_tables(shmf_inputs, log_mass_bins=bins)
+
+    assert selection["mass_ref"] == pytest.approx(1.0e12)
+    assert len(seed_df) == 4
+    assert set(seed_df["variant"]) == {"anisotropic"}
+    recovered_bin0 = summary_df[
+        (summary_df["series"] == "recovered")
+        & (summary_df["variant"] == "anisotropic")
+        & (summary_df["bin_index"] == 0)
+    ].iloc[0]
+    assert float(recovered_bin0["value_median"]) == pytest.approx(np.median([1.0, 1.0]))
+    ratio_bin1 = summary_df[
+        (summary_df["series"] == "ratio")
+        & (summary_df["variant"] == "anisotropic")
+        & (summary_df["bin_index"] == 1)
+    ]
+    assert ratio_bin1.empty
+
+
+def test_subhalo_shmf_outputs_create_plot_and_tables(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    output_dir = campaign / "aggregate_plots"
+    output_dir.mkdir(parents=True)
+    for seed in (12345, 12346):
+        for variant in aggregate_plots.DEFAULT_VARIANTS:
+            _write_aggregate_combined_recovery(
+                campaign,
+                seed=seed,
+                variant=variant,
+                truth_masses=[1.0e10, 1.0e11, 1.0e12],
+                recovered_log_masses=[10.1, 11.0, 11.9],
+            )
+
+    seed_table, summary_table, plot_paths = aggregate_plots.write_subhalo_shmf_outputs(
+        campaign,
+        output_dir,
+        formats=("pdf",),
+    )
+
+    assert seed_table is not None and seed_table.exists()
+    assert summary_table is not None and summary_table.exists()
+    assert [path.name for path in plot_paths] == ["subhalo_recovery_shmf.pdf"]
+    assert plot_paths[0].exists()
+    assert plot_paths[0].stat().st_size > 0
+
+
+def test_stage2_seed_recovery_rows_keep_each_seed_and_variant(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed in (12345, 12346):
+        for stage in aggregate_plots.DEFAULT_STAGES:
+            for variant in aggregate_plots.DEFAULT_VARIANTS:
+                _write_aggregate_result(campaign, seed=seed, variant=variant, stage=stage)
+
+    parameter_df, _inventory_df = aggregate_plots.collect_parameter_recovery(campaign)
+    seed_df = aggregate_plots.stage2_seed_recovery_rows(parameter_df)
+
+    assert set(seed_df["stage"]) == {"stage2_free_source_forward_fit"}
+    assert set(seed_df["variant"]) == {"anisotropic", "isotropic"}
+    assert set(seed_df["seed"]) == {12345, 12346}
+    assert len(seed_df) == 8
+
+
+def test_aggregate_plot_parameter_display_labels_are_paper_friendly() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    assert aggregate_plots._format_parameter_label("bcg.core_radius_kpc") == r"BCG $r_\mathrm{core}$"
+    assert aggregate_plots._format_parameter_label("halo.cut_radius_kpc") == r"Halo $r_\mathrm{cut}$"
+    assert aggregate_plots._format_parameter_label("source.12.beta_x") == r"Source $\beta_x$"
+    assert aggregate_plots._format_parameter_label("source.12.beta_y") == r"Source $\beta_y$"
+
+
+def test_aggregate_bias_summary_splits_fractional_and_absolute_parameters(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    df = pd.DataFrame(
+        [
+            {
+                "campaign": "mock",
+                "run_name": "run",
+                "parameter": "halo.v_disp",
+                "variant": "anisotropic",
+                "stage": "stage1_backprojected_centroid_fit",
+                "stage_label": "Stage 1",
+                "method_label": "Stage 1 Anisotropic",
+                "truth": 760.0,
+                "median": 780.0,
+                "q16": 760.0,
+                "q84": 800.0,
+                "bias": 20.0,
+            },
+            {
+                "campaign": "mock",
+                "run_name": "run",
+                "parameter": "potfile.gamma_ml",
+                "variant": "anisotropic",
+                "stage": "stage1_backprojected_centroid_fit",
+                "stage_label": "Stage 1",
+                "method_label": "Stage 1 Anisotropic",
+                "truth": 0.0,
+                "median": 0.045,
+                "q16": 0.02,
+                "q84": 0.07,
+                "bias": 0.045,
+            },
+        ]
+    )
+
+    finite = aggregate_plots.finite_recovery_rows(df)
+    parameters = finite["parameter"].astype(str)
+    fractional_mask = (
+        parameters.map(aggregate_plots.is_fractional_bias_parameter).to_numpy(dtype=bool)
+        & np.isfinite(finite["truth"].to_numpy(dtype=float))
+        & (np.abs(finite["truth"].to_numpy(dtype=float)) > 1.0e-6)
+    )
+    absolute_mask = parameters.map(aggregate_plots.is_absolute_bias_parameter).to_numpy(dtype=bool) | ~fractional_mask
+
+    assert set(finite.loc[fractional_mask, "parameter"]) == {"halo.v_disp"}
+    assert "potfile.gamma_ml" in set(finite.loc[absolute_mask, "parameter"])
+
+    paths = aggregate_plots.plot_parameter_bias_summary(df, tmp_path / "parameter_bias_summary", ("pdf",))
+
+    assert [path.name for path in paths] == ["parameter_bias_summary.pdf"]
+    assert paths[0].exists()
+    assert paths[0].stat().st_size > 0
