@@ -4871,6 +4871,8 @@ def test_perturbation_discovery_score_table_matches_threshold_rule() -> None:
 
 def test_perturbation_discovery_scores_free_branch_but_selects_scaling_identity() -> None:
     state = SimpleNamespace(
+        sigma_arcsec=0.02,
+        independent_scaling_free_log_sigma_offset_width=0.10,
         potfiles=[{"id": "members"}],
         scaling_component_records=[
             {
@@ -4905,8 +4907,6 @@ def test_perturbation_discovery_scores_free_branch_but_selects_scaling_identity(
     class FakeEvaluator:
         scaling_component_indices = np.asarray([10, 11], dtype=np.int32)
         flat_critical_arc_data = flat_data
-        perturbation_discovery_alpha_tol_arcsec = 0.1
-        perturbation_discovery_jacobian_tol = 0.5
         perturbation_discovery_jacobian_weight = 1.0
 
         def _physical_parameter_vector(self, reference):
@@ -4956,8 +4956,10 @@ def test_perturbation_discovery_scores_free_branch_but_selects_scaling_identity(
     assert bool(table.loc[0, "selected_galaxy"]) is True
 
 
-def test_perturbation_discovery_top_k_selects_per_image_union_below_threshold() -> None:
+def test_perturbation_discovery_top_k_caps_threshold_passing_members() -> None:
     state = SimpleNamespace(
+        sigma_arcsec=0.2,
+        independent_scaling_free_log_sigma_offset_width=0.10,
         potfiles=[{"id": "members"}],
         scaling_component_records=[
             {
@@ -4995,8 +4997,6 @@ def test_perturbation_discovery_top_k_selects_per_image_union_below_threshold() 
     class FakeEvaluator:
         scaling_component_indices = np.asarray([10, 11, 12], dtype=np.int32)
         flat_critical_arc_data = flat_data
-        perturbation_discovery_alpha_tol_arcsec = 10.0
-        perturbation_discovery_jacobian_tol = 10.0
         perturbation_discovery_jacobian_weight = 1.0
         perturbation_discovery_top_k = 1
 
@@ -5044,6 +5044,8 @@ def test_perturbation_discovery_top_k_selects_per_image_union_below_threshold() 
     assert diagnostics["top_k_requested"] == 1
     assert diagnostics["count"] == 2
     assert diagnostics["pairs"] == 2
+    assert diagnostics["threshold_selected_galaxies"] == 3
+    assert diagnostics["top_k_selected_galaxies"] == 2
     assert set(table.columns) >= {
         "selection_mode",
         "top_k_requested",
@@ -5067,28 +5069,40 @@ def test_perturbation_discovery_top_k_selects_per_image_union_below_threshold() 
     }
 
 
-def test_perturbation_discovery_top_k_larger_than_candidates_selects_all() -> None:
-    score = np.asarray([[0.2, 0.1], [0.4, 0.3]], dtype=float)
+def test_perturbation_discovery_top_k_larger_than_candidates_selects_all_threshold_passers() -> None:
+    score = np.asarray([[1.2, 1.1], [1.4, 1.3]], dtype=float)
     selected, selected_pair, rank_score, rank_position, image_rank_position = (
         cluster_solver._perturbation_discovery_top_k_selected(score, 10)
     )
 
     np.testing.assert_array_equal(selected, np.asarray([True, True]))
     np.testing.assert_array_equal(selected_pair, np.asarray([[True, True], [True, True]]))
-    np.testing.assert_allclose(rank_score, np.asarray([0.2, 0.4]))
+    np.testing.assert_allclose(rank_score, np.asarray([1.2, 1.4]))
     np.testing.assert_array_equal(rank_position, np.asarray([2, 1]))
     np.testing.assert_array_equal(image_rank_position, np.asarray([[2, 2], [1, 1]]))
 
 
+def test_perturbation_discovery_top_k_never_admits_below_threshold_members() -> None:
+    # top_k is a pure cap: members whose plausible offset is undetectable
+    # (score <= 1) are never promoted, no matter how large top_k is.
+    score = np.asarray([[0.2, 0.1], [0.4, 0.3]], dtype=float)
+    selected, selected_pair, _rank_score, _rank_position, _image_rank_position = (
+        cluster_solver._perturbation_discovery_top_k_selected(score, 10)
+    )
+
+    np.testing.assert_array_equal(selected, np.asarray([False, False]))
+    assert not selected_pair.any()
+
+
 def test_perturbation_discovery_top_k_breaks_ties_by_candidate_order() -> None:
-    score = np.asarray([[1.0, 0.0], [1.0, 2.0], [0.5, 2.0]], dtype=float)
+    score = np.asarray([[1.5, 0.0], [1.5, 2.0], [0.5, 2.0]], dtype=float)
     selected, selected_pair, rank_score, rank_position, image_rank_position = (
         cluster_solver._perturbation_discovery_top_k_selected(score, 1)
     )
 
     np.testing.assert_array_equal(selected_pair, np.asarray([[True, False], [False, True], [False, False]]))
     np.testing.assert_array_equal(selected, np.asarray([True, True, False]))
-    np.testing.assert_allclose(rank_score, np.asarray([1.0, 2.0, 2.0]))
+    np.testing.assert_allclose(rank_score, np.asarray([1.5, 2.0, 2.0]))
     np.testing.assert_array_equal(rank_position, np.asarray([3, 1, 2]))
     np.testing.assert_array_equal(image_rank_position, np.asarray([[1, 3], [2, 1], [3, 2]]))
 
@@ -5875,9 +5889,8 @@ def test_independent_scaling_parameter_specs_log_displacement_replaces_direct_fr
         potfiles,
         [{0, 1}],
         start_index=20,
-        log_sigma_tau_prior_median=0.22,
-        log_mass_tau_prior_median=0.33,
-        log_tau_prior_sigma=0.55,
+        log_sigma_offset_width=0.22,
+        log_mass_offset_width=0.33,
     )
 
     fields = [spec.field for spec in specs]
@@ -5917,16 +5930,8 @@ def test_independent_scaling_parameter_specs_log_displacement_replaces_direct_fr
     ]
     assert len(shape_sites) == 1
     assert len(shape_sites[0].indices) == 4
-    assert len(sites) == 5
-    for field_name, median in (
-        ("independent_free_log_sigma_tau", 0.22),
-        ("independent_free_log_mass_tau", 0.33),
-    ):
-        field_specs = [spec for spec in specs if spec.field == field_name]
-        assert len(field_specs) == 1
-        assert field_specs[0].transform_kind == "log_positive"
-        assert field_specs[0].physical_mean == pytest.approx(median)
-        assert field_specs[0].std == pytest.approx(0.55)
+    assert len(sites) == 3
+    assert not any("tau" in field for field in fields)
     assert not any("offset" in field for field in fields)
     assert not any("scatter" in field for field in fields)
     assert not any("residual" in field for field in fields)
@@ -5934,9 +5939,6 @@ def test_independent_scaling_parameter_specs_log_displacement_replaces_direct_fr
     assert indices[0][1]["independent_free_log_sigma_delta_unit"] >= 0
     assert indices[0][0]["independent_free_e1"] >= 0
     assert indices[0][0]["independent_free_e2"] >= 0
-    assert indices[0][0]["independent_free_log_sigma_tau"] == indices[0][1][
-        "independent_free_log_sigma_tau"
-    ]
 
 
 def _independent_scaling_plot_fixture() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -6334,8 +6336,6 @@ def _stage4_state_with_independent_and_inactive_scaling() -> BuildState:
             ),
             "independent_free_log_sigma_delta_unit_param_index": np.asarray([-1, -1, 1, -1], dtype=np.int32),
             "independent_free_log_mass_delta_unit_param_index": np.asarray([-1, -1, 2, -1], dtype=np.int32),
-            "independent_free_log_sigma_tau_param_index": np.asarray([-1, -1, 3, -1], dtype=np.int32),
-            "independent_free_log_mass_tau_param_index": np.asarray([-1, -1, 4, -1], dtype=np.int32),
             "independent_magnitude_feature": np.asarray([0.0, 0.5, 0.5, 0.0], dtype=float),
         }
     )
@@ -6367,40 +6367,6 @@ def _stage4_state_with_independent_and_inactive_scaling() -> BuildState:
             mean=0.0,
             std=1.0,
             component_family="independent_scaling",
-        ),
-        ParameterSpec(
-            name="members.independent_free_log_sigma_tau",
-            sample_name="members_independent_free_log_sigma_tau",
-            potential_id="members",
-            profile_type=cluster_solver.DP_IE_PROFILE,
-            field="independent_free_log_sigma_tau",
-            prior_kind="normal",
-            lower=-np.inf,
-            upper=np.inf,
-            step=0.1,
-            mean=np.log(0.25),
-            std=0.5,
-            transform_kind="log_positive",
-            component_family="independent_scaling",
-            physical_lower=0.0,
-            physical_mean=0.25,
-        ),
-        ParameterSpec(
-            name="members.independent_free_log_mass_tau",
-            sample_name="members_independent_free_log_mass_tau",
-            potential_id="members",
-            profile_type=cluster_solver.DP_IE_PROFILE,
-            field="independent_free_log_mass_tau",
-            prior_kind="normal",
-            lower=-np.inf,
-            upper=np.inf,
-            step=0.1,
-            mean=np.log(0.25),
-            std=0.5,
-            transform_kind="log_positive",
-            component_family="independent_scaling",
-            physical_lower=0.0,
-            physical_mean=0.25,
         ),
     ]
     return replace(
@@ -11907,152 +11873,11 @@ def test_numpyro_nuts_sampler_parallel_requires_device_per_chain(
         )
 
 
-def test_structured_dense_mass_blocks_group_non_source_and_source_families() -> None:
-    specs = [
-        ParameterSpec("O1.x", "O1_x", "O1", 0, "x", "normal", -np.inf, np.inf, 0.1, component_family="halo"),
-        ParameterSpec("O1.y", "O1_y", "O1", 0, "y", "normal", -np.inf, np.inf, 0.1, component_family="halo"),
-        ParameterSpec(
-            "image.sigma",
-            "image_sigma_int",
-            "image",
-            0,
-            "sigma_int",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="image_scatter",
-        ),
-        ParameterSpec(
-            "source.1.beta_x",
-            "source_1_beta_x",
-            "1",
-            0,
-            "beta_x",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-        ),
-        ParameterSpec(
-            "source.1.beta_y",
-            "source_1_beta_y",
-            "1",
-            0,
-            "beta_y",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-        ),
-        ParameterSpec(
-            "source.2.beta_x",
-            "source_2_beta_x",
-            "2",
-            0,
-            "beta_x",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-        ),
-        ParameterSpec(
-            "source.2.beta_y",
-            "source_2_beta_y",
-            "2",
-            0,
-            "beta_y",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-        ),
-    ]
-
-    assert cluster_solver._structured_nuts_dense_mass_blocks(specs) == (
-        ("O1_x", "O1_y", "image_sigma_int"),
-        ("source_1_beta_x", "source_1_beta_y"),
-        ("source_2_beta_x", "source_2_beta_y"),
-    )
-
-
-def test_structured_dense_mass_blocks_emit_shared_source_position_vector_once() -> None:
-    specs = [
-        ParameterSpec("O1.x", "O1_x", "O1", 0, "x", "normal", -np.inf, np.inf, 0.1, component_family="halo"),
-        ParameterSpec(
-            "source.1.beta_x",
-            "source_1_beta_x",
-            "1",
-            0,
-            "beta_x",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-            sample_site_name=cluster_solver.SOURCE_POSITION_VECTOR_SAMPLE_SITE_NAME,
-            sample_site_index=0,
-        ),
-        ParameterSpec(
-            "source.1.beta_y",
-            "source_1_beta_y",
-            "1",
-            0,
-            "beta_y",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-            sample_site_name=cluster_solver.SOURCE_POSITION_VECTOR_SAMPLE_SITE_NAME,
-            sample_site_index=1,
-        ),
-        ParameterSpec(
-            "source.2.beta_x",
-            "source_2_beta_x",
-            "2",
-            0,
-            "beta_x",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-            sample_site_name=cluster_solver.SOURCE_POSITION_VECTOR_SAMPLE_SITE_NAME,
-            sample_site_index=2,
-        ),
-        ParameterSpec(
-            "source.2.beta_y",
-            "source_2_beta_y",
-            "2",
-            0,
-            "beta_y",
-            "normal",
-            -np.inf,
-            np.inf,
-            0.1,
-            component_family="source_position",
-            sample_site_name=cluster_solver.SOURCE_POSITION_VECTOR_SAMPLE_SITE_NAME,
-            sample_site_index=3,
-        ),
-    ]
-
-    assert cluster_solver._structured_nuts_dense_mass_blocks(specs) == (
-        ("O1_x",),
-        (cluster_solver.SOURCE_POSITION_VECTOR_SAMPLE_SITE_NAME,),
-    )
-
-
 @pytest.mark.parametrize(
     ("dense_mass", "expected_numpyro_dense_mass"),
     [
         (cluster_solver.NUTS_DENSE_MASS_FULL, True),
         (cluster_solver.NUTS_DENSE_MASS_DIAGONAL, False),
-        (cluster_solver.NUTS_DENSE_MASS_STRUCTURED, True),
     ],
 )
 def test_block_nuts_once_passes_dense_mass_to_numpyro(
@@ -18522,6 +18347,7 @@ def _write_aggregate_result(
     variant: str,
     stage: str,
     records: list[dict[str, object]] | None = None,
+    magnification_records: list[dict[str, object]] | None = None,
 ) -> Path:
     import lenscluster.mock_validation.aggregate_plots as aggregate_plots
 
@@ -18579,7 +18405,45 @@ def _write_aggregate_result(
                                     "covered_68": True,
                                 },
                             ],
-                        }
+                        },
+                        "magnification": {
+                            "columns": [
+                                "image_label",
+                                "magnification_true",
+                                "magnification_recovered",
+                                "magnification_q16",
+                                "magnification_q50",
+                                "magnification_q84",
+                                "magnification_bias",
+                                "abs_magnification_fractional_error",
+                                "parity_match",
+                            ],
+                            "records": magnification_records
+                            or [
+                                {
+                                    "image_label": "1.1",
+                                    "magnification_true": 2.0,
+                                    "magnification_recovered": 2.1,
+                                    "magnification_q16": 1.8,
+                                    "magnification_q50": 2.05,
+                                    "magnification_q84": 2.3,
+                                    "magnification_bias": 0.1,
+                                    "abs_magnification_fractional_error": 0.05,
+                                    "parity_match": True,
+                                },
+                                {
+                                    "image_label": "1.2",
+                                    "magnification_true": -4.0,
+                                    "magnification_recovered": -3.7,
+                                    "magnification_q16": -4.2,
+                                    "magnification_q50": -3.8,
+                                    "magnification_q84": -3.4,
+                                    "magnification_bias": 0.3,
+                                    "abs_magnification_fractional_error": 0.075,
+                                    "parity_match": True,
+                                },
+                            ],
+                        },
                     }
                 }
             }
@@ -18596,6 +18460,7 @@ def _write_aggregate_combined_recovery(
     variant: str,
     truth_masses: list[float],
     recovered_log_masses: list[float],
+    stages: tuple[str, ...] = ("stage2_free_source_forward_fit",),
 ) -> Path:
     path = root / "single_bcg_production_source" / f"seed_{seed:08d}" / variant / "recovery" / "results.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -18616,7 +18481,7 @@ def _write_aggregate_combined_recovery(
         "solver": {
             "stage_manifests": [
                 {
-                    "stage": "stage2_free_source_forward_fit",
+                    "stage": stage,
                     "table_artifacts": {
                         "scaling_relation_summary.csv": {
                             "data": {
@@ -18632,6 +18497,7 @@ def _write_aggregate_combined_recovery(
                         }
                     },
                 }
+                for stage in stages
             ]
         },
     }
@@ -18659,6 +18525,292 @@ def test_aggregate_parameter_recovery_loads_stage_and_variant_methods(tmp_path: 
     }
     assert set(parameter_df["stage_label"]) == {"Stage 1", "Stage 2"}
     assert {"truth", "median", "q16", "q84", "covered_68"} <= set(parameter_df.columns)
+
+
+def test_aggregate_magnification_recovery_loads_stage_and_variant_methods(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed in (12345, 12346):
+        for stage in aggregate_plots.DEFAULT_STAGES:
+            for variant in aggregate_plots.DEFAULT_VARIANTS:
+                _write_aggregate_result(campaign, seed=seed, variant=variant, stage=stage)
+
+    magnification_df, inventory_df = aggregate_plots.collect_magnification_recovery(campaign)
+
+    assert len(magnification_df) == 16
+    assert inventory_df["loaded"].all()
+    assert set(magnification_df["stage_label"]) == {"Stage 1", "Stage 2"}
+    assert set(magnification_df["variant"]) == {"anisotropic", "isotropic"}
+    assert set(magnification_df["seed"]) == {12345, 12346}
+    assert {
+        "magnification_true",
+        "magnification_q16",
+        "magnification_q50",
+        "magnification_q84",
+    } <= set(magnification_df.columns)
+    assert magnification_df["magnification_q50"].dtype.kind in {"f", "i"}
+
+
+def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_labels(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from matplotlib.axes import Axes
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    magnification_df = pd.DataFrame(
+        [
+            {
+                "stage": "stage1_backprojected_centroid_fit",
+                "variant": "anisotropic",
+                "magnification_true": 2.0,
+                "magnification_q16": 1.7,
+                "magnification_q50": 2.1,
+                "magnification_q84": 2.4,
+            },
+            {
+                "stage": "stage1_backprojected_centroid_fit",
+                "variant": "isotropic",
+                "magnification_true": -3.0,
+                "magnification_q16": -3.5,
+                "magnification_q50": -3.1,
+                "magnification_q84": -2.7,
+            },
+            {
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic",
+                "magnification_true": 4.0,
+                "magnification_q16": 3.7,
+                "magnification_q50": 4.2,
+                "magnification_q84": 4.5,
+            },
+        ]
+    )
+    saved_figures: list[Figure] = []
+    errorbar_calls: list[dict[str, object]] = []
+    scatter_calls: list[dict[str, object]] = []
+    original_errorbar = Axes.errorbar
+    original_scatter = Axes.scatter
+
+    def record_savefig(self: Figure, *_args: object, **_kwargs: object) -> None:
+        saved_figures.append(self)
+
+    def record_errorbar(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        errorbar_calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "y": np.asarray(y, dtype=float),
+                "yerr": kwargs.get("yerr"),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return original_errorbar(self, x, y, *args, **kwargs)
+
+    def record_scatter(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        scatter_calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "y": np.asarray(y, dtype=float),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "errorbar", record_errorbar)
+    monkeypatch.setattr(Axes, "scatter", record_scatter)
+    monkeypatch.setattr(Figure, "savefig", record_savefig)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    try:
+        aggregate_plots.plot_aggregate_magnification_recovery(
+            magnification_df,
+            tmp_path / "magnification_recovery",
+            ("pdf",),
+        )
+        assert len(saved_figures) == 1
+        ax = saved_figures[0].axes[0]
+        assert ax.get_xlabel() == r"Image $|\mu|$ (truth)"
+        assert ax.get_ylabel() == r"Image $|\mu|$ (fit)"
+        assert ax.get_xscale() == "log"
+        assert ax.get_yscale() == "log"
+        legend = ax.get_legend()
+        assert legend is not None
+        labels = [text.get_text() for text in legend.get_texts()]
+        assert labels == ["Anisotropic", "Isotropic"]
+        assert "Stage 1" not in labels
+        assert "Stage 2" not in labels
+        assert "Stage 2 Anisotropic" not in labels
+        isotropic_call = next(call for call in errorbar_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
+        np.testing.assert_allclose(isotropic_call["y"], [3.1])
+        errorbar_kwargs = isotropic_call["kwargs"]
+        assert errorbar_kwargs["fmt"] == "none"
+        assert errorbar_kwargs["elinewidth"] == pytest.approx(0.65)
+        assert errorbar_kwargs["capsize"] == pytest.approx(1.8)
+        assert errorbar_kwargs["capthick"] == pytest.approx(0.65)
+        assert errorbar_kwargs["alpha"] == pytest.approx(0.30)
+        assert errorbar_kwargs["zorder"] == 1
+        assert errorbar_kwargs["label"] == "_nolegend_"
+        yerr = isotropic_call["yerr"]
+        assert isinstance(yerr, list)
+        np.testing.assert_allclose(yerr[0], [0.4])
+        np.testing.assert_allclose(yerr[1], [0.4])
+        isotropic_scatter = next(call for call in scatter_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
+        np.testing.assert_allclose(isotropic_scatter["y"], [3.1])
+        scatter_kwargs = isotropic_scatter["kwargs"]
+        assert scatter_kwargs["marker"] == "o"
+        assert scatter_kwargs["facecolors"] == "white"
+        assert scatter_kwargs["edgecolors"] == "tab:orange"
+        assert scatter_kwargs["s"] == pytest.approx(21.0)
+        assert scatter_kwargs["linewidths"] == pytest.approx(0.75)
+        assert scatter_kwargs["zorder"] == 2
+        stage2_scatter = next(call for call in scatter_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(4.0))
+        assert stage2_scatter["kwargs"]["marker"] == "D"
+        assert stage2_scatter["kwargs"]["facecolors"] == "tab:blue"
+    finally:
+        plt.close("all")
+
+
+def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from matplotlib.axes import Axes
+    import matplotlib.pyplot as plt
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    parameter_df = pd.DataFrame(
+        [
+            {
+                "stage": "stage1_backprojected_centroid_fit",
+                "variant": "anisotropic",
+                "seed": 1,
+                "parameter": "halo.v_disp",
+                "truth": 1000.0,
+                "median": 1010.0,
+                "q16": 990.0,
+                "q84": 1030.0,
+            },
+            {
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "isotropic",
+                "seed": 2,
+                "parameter": "halo.v_disp",
+                "truth": 1000.0,
+                "median": 980.0,
+                "q16": 950.0,
+                "q84": 1005.0,
+            },
+        ]
+    )
+    errorbar_calls: list[dict[str, object]] = []
+    scatter_calls: list[dict[str, object]] = []
+    original_errorbar = Axes.errorbar
+    original_scatter = Axes.scatter
+
+    def record_errorbar(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        errorbar_calls.append({"x": np.asarray(x, dtype=float), "y": np.asarray(y, dtype=float), "kwargs": dict(kwargs)})
+        return original_errorbar(self, x, y, *args, **kwargs)
+
+    def record_scatter(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        scatter_calls.append({"x": np.asarray(x, dtype=float), "y": np.asarray(y, dtype=float), "kwargs": dict(kwargs)})
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "errorbar", record_errorbar)
+    monkeypatch.setattr(Axes, "scatter", record_scatter)
+    fig, ax = plt.subplots()
+    try:
+        aggregate_plots._draw_seed_parameter_axis(ax, parameter_df, "halo.v_disp")
+        assert len(errorbar_calls) == 2
+        assert len(scatter_calls) == 2
+        for call in errorbar_calls:
+            kwargs = call["kwargs"]
+            assert kwargs["fmt"] == "none"
+            assert kwargs["elinewidth"] == pytest.approx(0.65)
+            assert kwargs["capsize"] == pytest.approx(1.8)
+            assert kwargs["capthick"] == pytest.approx(0.65)
+            assert kwargs["alpha"] == pytest.approx(0.30)
+            assert kwargs["zorder"] == 1
+            assert kwargs["label"] == "_nolegend_"
+        anisotropic_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
+        assert anisotropic_scatter["kwargs"]["facecolors"] == "white"
+        assert anisotropic_scatter["kwargs"]["edgecolors"] == "tab:blue"
+        isotropic_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
+        assert isotropic_scatter["kwargs"]["facecolors"] == "tab:orange"
+        assert isotropic_scatter["kwargs"]["s"] == pytest.approx(21.0)
+        assert isotropic_scatter["kwargs"]["linewidths"] == pytest.approx(0.75)
+        assert isotropic_scatter["kwargs"]["zorder"] == 2
+    finally:
+        plt.close(fig)
+
+
+def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from matplotlib.axes import Axes
+    import matplotlib.pyplot as plt
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    metric_df = pd.DataFrame(
+        [
+            {
+                "stage": "stage1_backprojected_centroid_fit",
+                "variant": "anisotropic",
+                "method_label": "Stage 1 Anisotropic",
+                "parameter": "halo.v_disp",
+                "bias_median": 0.1,
+                "bias_q16": -0.1,
+                "bias_q84": 0.3,
+            },
+            {
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "isotropic",
+                "method_label": "Stage 2 Isotropic",
+                "parameter": "halo.v_disp",
+                "bias_median": -0.2,
+                "bias_q16": -0.5,
+                "bias_q84": 0.1,
+            },
+        ]
+    )
+    errorbar_calls: list[dict[str, object]] = []
+    scatter_calls: list[dict[str, object]] = []
+    original_errorbar = Axes.errorbar
+    original_scatter = Axes.scatter
+
+    def record_errorbar(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        errorbar_calls.append({"x": np.asarray(x, dtype=float), "y": np.asarray(y, dtype=float), "kwargs": dict(kwargs)})
+        return original_errorbar(self, x, y, *args, **kwargs)
+
+    def record_scatter(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        scatter_calls.append({"x": np.asarray(x, dtype=float), "y": np.asarray(y, dtype=float), "kwargs": dict(kwargs)})
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "errorbar", record_errorbar)
+    monkeypatch.setattr(Axes, "scatter", record_scatter)
+    fig, ax = plt.subplots()
+    try:
+        aggregate_plots._plot_bias_metric_panel(
+            ax,
+            metric_df,
+            ["halo.v_disp"],
+            ["Stage 1 Anisotropic", "Stage 2 Isotropic"],
+            ylabel="bias",
+            title="Bias",
+            metric_column="bias_median",
+            metric_q16_column="bias_q16",
+            metric_q84_column="bias_q84",
+        )
+        assert len(errorbar_calls) == 2
+        assert len(scatter_calls) == 2
+        assert {call["kwargs"]["fmt"] for call in errorbar_calls} == {"none"}
+        assert {call["kwargs"]["marker"] for call in scatter_calls} == {"D", "o"}
+        stage1_call = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
+        assert stage1_call["kwargs"]["facecolors"] == "white"
+        stage2_call = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
+        assert stage2_call["kwargs"]["facecolors"] == "tab:orange"
+    finally:
+        plt.close(fig)
 
 
 def test_aggregate_parameter_recovery_collapses_seed_runs(tmp_path: Path) -> None:
@@ -18822,6 +18974,7 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
                 variant=variant,
                 truth_masses=[1.0e10, 1.0e11, 1.0e12],
                 recovered_log_masses=[10.1, 11.0, 11.9],
+                stages=aggregate_plots.DEFAULT_STAGES,
             )
 
     outputs = aggregate_plots.write_aggregate_plots(campaign, parameter_set="both", formats=("pdf",))
@@ -18829,14 +18982,20 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
     assert outputs.parameter_table.exists()
     assert outputs.aggregate_parameter_table.exists()
     assert outputs.inventory_table.exists()
+    assert outputs.magnification_table is not None
+    assert outputs.magnification_table.exists()
     assert outputs.subhalo_shmf_seed_table is not None
     assert outputs.subhalo_shmf_seed_table.exists()
     assert outputs.subhalo_shmf_summary_table is not None
     assert outputs.subhalo_shmf_summary_table.exists()
     assert {path.name for path in outputs.plot_paths} == {
+        "parameter_recovery_stage1_paper.pdf",
         "parameter_recovery_paper.pdf",
         "parameter_recovery_all.pdf",
         "parameter_bias_summary.pdf",
+        "magnification_recovery_stage1.pdf",
+        "magnification_recovery.pdf",
+        "subhalo_recovery_stage1_shmf.pdf",
         "subhalo_recovery_shmf.pdf",
     }
     for path in outputs.plot_paths:
@@ -18846,6 +19005,17 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
     aggregate_table = pd.read_csv(outputs.aggregate_parameter_table)
     assert len(table) == 16
     assert len(aggregate_table) == 8
+    magnification_table = pd.read_csv(outputs.magnification_table)
+    assert len(magnification_table) == 16
+    assert {
+        "stage",
+        "seed",
+        "variant",
+        "magnification_true",
+        "magnification_q16",
+        "magnification_q50",
+        "magnification_q84",
+    } <= set(magnification_table.columns)
     assert aggregate_table.groupby("parameter").size().to_dict() == {"halo.v_disp": 4, "halo.x_centre": 4}
     assert set(table["method_label"]) == {
         "Stage 1 Anisotropic",
@@ -18853,6 +19023,54 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         "Stage 2 Anisotropic",
         "Stage 2 Isotropic",
     }
+
+
+def test_write_aggregate_plots_creates_stage1_paper_plot_when_stage1_requested(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed in (12345, 12346):
+        for variant in aggregate_plots.DEFAULT_VARIANTS:
+            _write_aggregate_result(
+                campaign,
+                seed=seed,
+                variant=variant,
+                stage="stage1_backprojected_centroid_fit",
+                records=[
+                    {
+                        "parameter": "halo.x_centre",
+                        "truth": 0.0,
+                        "best_fit": 0.1 if variant == "anisotropic" else -0.1,
+                        "q16": -0.2,
+                        "median": 0.1 if variant == "anisotropic" else -0.1,
+                        "q84": 0.2,
+                        "bias": 0.1 if variant == "anisotropic" else -0.1,
+                        "truth_percentile": 0.5,
+                        "covered_68": True,
+                    }
+                ],
+            )
+
+    outputs = aggregate_plots.write_aggregate_plots(
+        campaign,
+        stages=("stage1_backprojected_centroid_fit",),
+        parameter_set="paper",
+        formats=("pdf",),
+    )
+
+    assert {path.name for path in outputs.plot_paths if path.name.startswith("parameter_recovery")} == {
+        "parameter_recovery_paper.pdf"
+    }
+    paper_plot = outputs.output_dir / "parameter_recovery_paper.pdf"
+    assert paper_plot.exists()
+    assert paper_plot.stat().st_size > 0
+    assert not (outputs.output_dir / "parameter_recovery_stage1_paper.pdf").exists()
+    magnification_plot = outputs.output_dir / "magnification_recovery.pdf"
+    assert magnification_plot.exists()
+    assert magnification_plot.stat().st_size > 0
+    assert not (outputs.output_dir / "magnification_recovery_stage1.pdf").exists()
+    table = pd.read_csv(outputs.parameter_table)
+    assert set(table["stage"]) == {"stage1_backprojected_centroid_fit"}
 
 
 def test_subhalo_shmf_tables_aggregate_seed_quantiles(tmp_path: Path) -> None:
@@ -18912,6 +19130,7 @@ def test_subhalo_shmf_outputs_create_plot_and_tables(tmp_path: Path) -> None:
                 variant=variant,
                 truth_masses=[1.0e10, 1.0e11, 1.0e12],
                 recovered_log_masses=[10.1, 11.0, 11.9],
+                stages=aggregate_plots.DEFAULT_STAGES,
             )
 
     seed_table, summary_table, plot_paths = aggregate_plots.write_subhalo_shmf_outputs(
@@ -18922,9 +19141,14 @@ def test_subhalo_shmf_outputs_create_plot_and_tables(tmp_path: Path) -> None:
 
     assert seed_table is not None and seed_table.exists()
     assert summary_table is not None and summary_table.exists()
-    assert [path.name for path in plot_paths] == ["subhalo_recovery_shmf.pdf"]
-    assert plot_paths[0].exists()
-    assert plot_paths[0].stat().st_size > 0
+    assert [path.name for path in plot_paths] == ["subhalo_recovery_stage1_shmf.pdf", "subhalo_recovery_shmf.pdf"]
+    for path in plot_paths:
+        assert path.exists()
+        assert path.stat().st_size > 0
+    seed_df = pd.read_csv(seed_table)
+    summary_df = pd.read_csv(summary_table)
+    assert set(seed_df["stage"]) == set(aggregate_plots.DEFAULT_STAGES)
+    assert set(summary_df["stage"]) == set(aggregate_plots.DEFAULT_STAGES)
 
 
 def test_stage2_seed_recovery_rows_keep_each_seed_and_variant(tmp_path: Path) -> None:

@@ -266,7 +266,7 @@ def build_config(cluster: str, *, cores: int) -> LensClusterSolverConfig:
             debug_sampler_diagnostics=True,
             numpyro_print_summary=True,
             nuts_chain_method="parallel",
-            dense_mass="structured",
+            dense_mass="full",
             jax_clear_caches_after_svi_refresh=False,
         ),
         workflow=WorkflowConfig(
@@ -297,9 +297,8 @@ def build_config(cluster: str, *, cores: int) -> LensClusterSolverConfig:
         ),
 cczz
         scaling=ScalingModelConfig(
-            independent_scaling_free_log_sigma_tau_prior_median=0.45,
-            independent_scaling_free_log_mass_tau_prior_median=0.55,
-            independent_scaling_free_log_tau_prior_sigma=0.30,
+            independent_scaling_free_log_sigma_offset_width=0.45,
+            independent_scaling_free_log_mass_offset_width=0.55,
             potfile_alpha_sigma_prior_mean=0.25,
             potfile_alpha_sigma_prior_std=0.3,
             potfile_alpha_sigma_prior_lower=0.05,

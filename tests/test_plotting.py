@@ -234,12 +234,8 @@ def test_scaling_results_summary_table_reports_bergamini_reference_values_and_ma
     assert row["sigma_log_scatter_median"] == pytest.approx(
         plotting._weighted_quantile(samples[:, 5], weights, [0.5])[0]
     )
-    assert row["free_log_sigma_tau_median"] == pytest.approx(
-        plotting._weighted_quantile(samples[:, 6], weights, [0.5])[0]
-    )
-    assert row["free_log_mass_tau_median"] == pytest.approx(
-        plotting._weighted_quantile(samples[:, 7], weights, [0.5])[0]
-    )
+    assert "free_log_sigma_tau_median" not in table.columns
+    assert "free_log_mass_tau_median" not in table.columns
     assert plotting.SCALING_RESULTS_MASS_NOTE in row["m_star_definition"]
 
 
@@ -1874,11 +1870,9 @@ def test_potfile_corner_includes_shared_free_hyperparameters(tmp_path: Path, mon
     assert [spec.field for spec in subset_specs] == [
         "sigma_ref",
         "alpha_sigma",
-        "independent_free_log_sigma_tau",
-        "independent_free_log_mass_tau",
     ]
-    np.testing.assert_allclose(subset_samples, samples[:, [0, 1, 2, 3]])
-    np.testing.assert_allclose(subset_best_fit, best_fit[[0, 1, 2, 3]])
+    np.testing.assert_allclose(subset_samples, samples[:, [0, 1]])
+    np.testing.assert_allclose(subset_best_fit, best_fit[[0, 1]])
 
     plotting._plot_potfile_corner(
         tmp_path,
@@ -1887,46 +1881,34 @@ def test_potfile_corner_includes_shared_free_hyperparameters(tmp_path: Path, mon
         truth_values={
             "members_sigma_star": 10.5,
             "members_alpha_sigma": 0.205,
-            "members_independent_free_log_sigma_tau": 0.105,
-            "members_independent_free_log_mass_tau": 0.305,
         },
         best_fit_values={
             "members_sigma_star": 12.0,
             "members_alpha_sigma": 0.22,
-            "members_independent_free_log_sigma_tau": 0.12,
-            "members_independent_free_log_mass_tau": 0.32,
         },
         map_values={
             "members_sigma_star": 13.0,
             "members_alpha_sigma": 0.23,
-            "members_independent_free_log_sigma_tau": 0.13,
-            "members_independent_free_log_mass_tau": 0.33,
         },
         maximum_likelihood_values={
             "members_sigma_star": 12.5,
             "members_alpha_sigma": 0.225,
-            "members_independent_free_log_sigma_tau": 0.125,
-            "members_independent_free_log_mass_tau": 0.325,
         },
         previous_stage_best_values={
             "members_sigma_star": 11.5,
             "members_alpha_sigma": 0.215,
-            "members_independent_free_log_sigma_tau": 0.115,
-            "members_independent_free_log_mass_tau": 0.315,
         },
     )
 
-    assert calls[0][1].shape == (5, 4)
+    assert calls[0][1].shape == (5, 2)
     assert calls[0][2]["labels"] == [
         "members.sigma_star",
         "members.alpha_sigma",
-        "members.independent_free_log_sigma_tau",
-        "members.independent_free_log_mass_tau",
     ]
-    assert calls[0][2]["truths"] == [10.5, 0.205, 0.105, 0.305]
+    assert calls[0][2]["truths"] == [10.5, 0.205]
     assert calls[1] == (
         "points",
-        [[11.5, 0.215, 0.115, 0.315]],
+        [[11.5, 0.215]],
         {
             "marker": "x",
             "color": plotting.CORNER_PREVIOUS_STAGE_COLOR,
@@ -1936,7 +1918,7 @@ def test_potfile_corner_includes_shared_free_hyperparameters(tmp_path: Path, mon
     )
     assert calls[2] == (
         "points",
-        [[13.0, 0.23, 0.13, 0.33]],
+        [[13.0, 0.23]],
         {
             "marker": "x",
             "color": plotting.CORNER_MAP_COLOR,
@@ -1946,7 +1928,7 @@ def test_potfile_corner_includes_shared_free_hyperparameters(tmp_path: Path, mon
     )
     assert calls[3] == (
         "points",
-        [[12.5, 0.225, 0.125, 0.325]],
+        [[12.5, 0.225]],
         {
             "marker": "x",
             "color": plotting.CORNER_MAXIMUM_LIKELIHOOD_COLOR,

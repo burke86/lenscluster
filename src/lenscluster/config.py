@@ -127,7 +127,7 @@ class RuntimeConfig:
     jax_default_device: str = "auto"
     smc_device: str = "auto"
     nuts_chain_method: str = "parallel"
-    dense_mass: str = "structured"
+    dense_mass: str = "full"
     jax_clear_caches_after_svi_refresh: bool = True
 
 
@@ -176,17 +176,14 @@ class MemberSelectionConfig:
 
 @dataclass(frozen=True)
 class PerturbationDiscoveryConfig:
-    perturbation_discovery_alpha_tol_arcsec: float = 0.01
-    perturbation_discovery_jacobian_tol: float = 0.01
     perturbation_discovery_jacobian_weight: float = 1.0
     perturbation_discovery_top_k: int | None = None
 
 
 @dataclass(frozen=True)
 class ScalingModelConfig:
-    independent_scaling_free_log_sigma_tau_prior_median: float = 0.10
-    independent_scaling_free_log_mass_tau_prior_median: float = 0.20
-    independent_scaling_free_log_tau_prior_sigma: float = 0.25
+    independent_scaling_free_log_sigma_offset_width: float = 0.10
+    independent_scaling_free_log_mass_offset_width: float = 0.20
     scaling_relation_mode: str = "direct-exponents"
     potfile_alpha_sigma_prior_mean: float = 0.25
     potfile_alpha_sigma_prior_std: float = 0.04
@@ -401,8 +398,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("svi_learning_rate must be positive.")
     if config.perturbation.perturbation_discovery_top_k is not None:
         top_k = config.perturbation.perturbation_discovery_top_k
-        if isinstance(top_k, bool) or not isinstance(top_k, Integral) or int(top_k) <= 0:
-            raise ValueError("perturbation_discovery_top_k must be a positive integer or None.")
+        if isinstance(top_k, bool) or not isinstance(top_k, Integral) or int(top_k) < 0:
+            raise ValueError("perturbation_discovery_top_k must be a nonnegative integer or None.")
     if config.scaling.softening_length_kpc < 0.0:
         raise ValueError("softening_length_kpc must be nonnegative.")
     if config.scaling.softening_length_prior_log_sigma <= 0.0:
@@ -421,12 +418,10 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         lower=config.scaling.potfile_gamma_ml_prior_lower,
         upper=config.scaling.potfile_gamma_ml_prior_upper,
     )
-    if config.scaling.independent_scaling_free_log_sigma_tau_prior_median <= 0.0:
-        raise ValueError("independent_scaling_free_log_sigma_tau_prior_median must be positive.")
-    if config.scaling.independent_scaling_free_log_mass_tau_prior_median <= 0.0:
-        raise ValueError("independent_scaling_free_log_mass_tau_prior_median must be positive.")
-    if config.scaling.independent_scaling_free_log_tau_prior_sigma <= 0.0:
-        raise ValueError("independent_scaling_free_log_tau_prior_sigma must be positive.")
+    if config.scaling.independent_scaling_free_log_sigma_offset_width <= 0.0:
+        raise ValueError("independent_scaling_free_log_sigma_offset_width must be positive.")
+    if config.scaling.independent_scaling_free_log_mass_offset_width <= 0.0:
+        raise ValueError("independent_scaling_free_log_mass_offset_width must be positive.")
     if config.truth.truth_grid_mode not in {"median", "posterior"}:
         raise ValueError("truth_grid_mode must be 'median' or 'posterior'.")
     if config.truth.posterior_truth_recovery_draws is not None and int(config.truth.posterior_truth_recovery_draws) <= 0:

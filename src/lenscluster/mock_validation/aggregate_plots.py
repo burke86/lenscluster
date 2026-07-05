@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import to_rgb
 from matplotlib.lines import Line2D
 
 from lenscluster.plot_style import apply_lenscluster_plot_style
@@ -58,6 +59,10 @@ STAGE_MARKERS = {
     "stage1_backprojected_centroid_fit": "o",
     "stage2_free_source_forward_fit": "s",
 }
+VARIANT_MARKERS = {
+    "anisotropic": "D",
+    "isotropic": "o",
+}
 METHOD_JITTER = {
     ("stage1_backprojected_centroid_fit", "anisotropic"): -0.018,
     ("stage1_backprojected_centroid_fit", "isotropic"): -0.006,
@@ -100,6 +105,7 @@ class AggregatePlotOutputs:
     parameter_table: Path
     aggregate_parameter_table: Path
     inventory_table: Path
+    magnification_table: Path | None
     subhalo_shmf_seed_table: Path | None
     subhalo_shmf_summary_table: Path | None
     plot_paths: tuple[Path, ...]
@@ -134,6 +140,19 @@ def variant_label(variant: str) -> str:
     return VARIANT_LABELS.get(str(variant), str(variant).replace("_", " ").title())
 
 
+def _darken_color(color: str, factor: float = 0.72) -> tuple[float, float, float]:
+    rgb = np.asarray(to_rgb(color), dtype=float)
+    return tuple(np.clip(rgb * float(factor), 0.0, 1.0))
+
+
+def _stage_marker_facecolor(stage: str, variant_color: str) -> str:
+    return "white" if str(stage).startswith("stage1") else variant_color
+
+
+def _stage_marker_edgecolor(stage: str, variant_color: str) -> str | tuple[float, float, float]:
+    return variant_color if str(stage).startswith("stage1") else _darken_color(variant_color)
+
+
 def method_label(stage: str, variant: str) -> str:
     return f"{stage_label(stage)} {variant_label(variant)}"
 
@@ -157,6 +176,16 @@ def _parameter_records_from_result(path: Path, stage: str) -> list[dict[str, Any
     records = stage_payload.get("tables", {}).get("parameters", {}).get("records", [])
     if not isinstance(records, list):
         raise ValueError(f"{path} has no parameter recovery records for {stage_alias(stage)!r}.")
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _table_records_from_recovery_result(path: Path, stage: str, table_name: str) -> list[dict[str, Any]]:
+    payload = _load_json(path)
+    recovery = payload.get("validation", {}).get("recovery", {})
+    stage_payload = recovery.get(stage_alias(stage), {})
+    records = stage_payload.get("tables", {}).get(table_name, {}).get("records", [])
+    if not isinstance(records, list):
+        raise ValueError(f"{path} has no {table_name!r} recovery records for {stage_alias(stage)!r}.")
     return [record for record in records if isinstance(record, dict)]
 
 
@@ -239,6 +268,98 @@ def collect_parameter_recovery(
     if "covered_68" in parameter_df:
         parameter_df["covered_68"] = parameter_df["covered_68"].astype(bool)
     return parameter_df, inventory_df
+
+
+def collect_magnification_recovery(
+    campaign_root: str | Path,
+    *,
+    run_name: str = DEFAULT_RUN_NAME,
+    stages: tuple[str, ...] = DEFAULT_STAGES,
+    variants: tuple[str, ...] = DEFAULT_VARIANTS,
+    strict: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    root = Path(campaign_root)
+    run_root = root / run_name
+    if not run_root.exists():
+        raise FileNotFoundError(f"Run directory does not exist: {run_root}")
+    campaign = root.name
+    magnification_rows: list[dict[str, Any]] = []
+    inventory_rows: list[dict[str, Any]] = []
+    seed_dirs = sorted(path for path in run_root.glob("seed_*") if path.is_dir())
+    if not seed_dirs:
+        raise FileNotFoundError(f"No seed_* directories found under {run_root}.")
+    for seed_dir in seed_dirs:
+        seed = _seed_from_dir(seed_dir)
+        for variant in variants:
+            for stage in stages:
+                result_path = seed_dir / variant / "recovery" / stage / "results.json"
+                inventory = {
+                    "campaign": campaign,
+                    "run_name": run_name,
+                    "seed": seed,
+                    "variant": variant,
+                    "stage": stage,
+                    "stage_label": stage_label(stage),
+                    "method_label": method_label(stage, variant),
+                    "result_path": str(result_path),
+                    "exists": result_path.exists(),
+                    "loaded": False,
+                    "message": "",
+                }
+                if not result_path.exists():
+                    message = f"Missing aggregate magnification input: {result_path}"
+                    inventory["message"] = message
+                    inventory_rows.append(inventory)
+                    if strict:
+                        raise FileNotFoundError(message)
+                    warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    continue
+                try:
+                    records = _table_records_from_recovery_result(result_path, stage, "magnification")
+                except Exception as exc:
+                    message = f"Could not read magnification from {result_path}: {type(exc).__name__}: {exc}"
+                    inventory["message"] = message
+                    inventory_rows.append(inventory)
+                    if strict:
+                        raise
+                    warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    continue
+                inventory["loaded"] = True
+                inventory["message"] = f"loaded {len(records)} magnification rows"
+                inventory_rows.append(inventory)
+                for record in records:
+                    row = {
+                        "campaign": campaign,
+                        "run_name": run_name,
+                        "seed": seed,
+                        "variant": variant,
+                        "stage": stage,
+                        "stage_label": stage_label(stage),
+                        "method_label": method_label(stage, variant),
+                        "result_path": str(result_path),
+                    }
+                    row.update(record)
+                    magnification_rows.append(row)
+    magnification_df = pd.DataFrame(magnification_rows)
+    inventory_df = pd.DataFrame(inventory_rows)
+    if not magnification_df.empty:
+        for column in (
+            "magnification_true",
+            "magnification_recovered",
+            "magnification_q16",
+            "magnification_q50",
+            "magnification_q84",
+            "magnification_bias",
+            "abs_magnification_fractional_error",
+            "abs_magnification_fractional_error_q16",
+            "abs_magnification_fractional_error_q50",
+            "abs_magnification_fractional_error_q84",
+        ):
+            if column in magnification_df:
+                magnification_df[column] = pd.to_numeric(magnification_df[column], errors="coerce")
+        if "parity_match" in magnification_df:
+            magnification_df["parity_match"] = magnification_df["parity_match"].astype(bool)
+    return magnification_df, inventory_df
 
 
 def finite_recovery_rows(parameter_df: pd.DataFrame) -> pd.DataFrame:
@@ -409,13 +530,16 @@ def _plot_recovery_page(
     for ax, parameter in zip(axes.ravel(), parameters):
         panel = page_df[page_df["parameter"].astype(str) == parameter]
         for (stage, variant), group in panel.groupby(["stage", "variant"], sort=False):
+            stage = str(stage)
+            variant = str(variant)
+            variant_color = VARIANT_COLORS.get(variant, "0.35")
             truth = group["truth"].to_numpy(dtype=float)
             median = group["median"].to_numpy(dtype=float)
             q16 = group["q16"].to_numpy(dtype=float)
             q84 = group["q84"].to_numpy(dtype=float)
             truth_q16 = group["truth_q16"].to_numpy(dtype=float) if "truth_q16" in group else truth
             truth_q84 = group["truth_q84"].to_numpy(dtype=float) if "truth_q84" in group else truth
-            x = _jittered_truth(truth, parameter, str(stage), str(variant))
+            x = _jittered_truth(truth, parameter, stage, variant)
             yerr = [np.maximum(0.0, median - q16), np.maximum(0.0, q84 - median)]
             xerr = [np.maximum(0.0, truth - truth_q16), np.maximum(0.0, truth_q84 - truth)]
             ax.errorbar(
@@ -423,13 +547,27 @@ def _plot_recovery_page(
                 median,
                 xerr=xerr,
                 yerr=yerr,
-                fmt=STAGE_MARKERS.get(str(stage), "o"),
-                color=VARIANT_COLORS.get(str(variant), "0.35"),
-                markerfacecolor="white" if str(stage).startswith("stage1") else VARIANT_COLORS.get(str(variant), "0.35"),
-                markeredgewidth=1.2,
+                fmt="none",
+                ecolor=variant_color,
+                elinewidth=0.65,
+                capsize=1.8,
+                capthick=0.65,
                 linestyle="none",
-                alpha=0.82,
-                label=method_label(str(stage), str(variant)),
+                alpha=0.30,
+                zorder=1,
+                label="_nolegend_",
+            )
+            ax.scatter(
+                x,
+                median,
+                s=21.0,
+                marker=VARIANT_MARKERS.get(variant, "o"),
+                facecolors=_stage_marker_facecolor(stage, variant_color),
+                edgecolors=_stage_marker_edgecolor(stage, variant_color),
+                linewidths=0.75,
+                alpha=0.86,
+                zorder=2,
+                label=method_label(stage, variant),
             )
         limits = _axis_limits(
             panel["truth"].to_numpy(dtype=float),
@@ -453,7 +591,7 @@ def _plot_recovery_page(
     return fig
 
 
-def stage2_seed_recovery_rows(
+def seed_recovery_rows_for_stage(
     parameter_df: pd.DataFrame,
     *,
     stage: str = "stage2_free_source_forward_fit",
@@ -462,6 +600,30 @@ def stage2_seed_recovery_rows(
     df = finite_recovery_rows(parameter_df)
     mask = df["stage"].astype(str).eq(str(stage)) & df["variant"].astype(str).isin(variants)
     return df.loc[mask].copy()
+
+
+def stage2_seed_recovery_rows(
+    parameter_df: pd.DataFrame,
+    *,
+    stage: str = "stage2_free_source_forward_fit",
+    variants: tuple[str, ...] = DEFAULT_VARIANTS,
+) -> pd.DataFrame:
+    return seed_recovery_rows_for_stage(parameter_df, stage=stage, variants=variants)
+
+
+def _paper_recovery_stage(stages: tuple[str, ...]) -> str:
+    normalized = tuple(str(stage) for stage in stages)
+    if "stage2_free_source_forward_fit" in normalized:
+        return "stage2_free_source_forward_fit"
+    if not normalized:
+        raise ValueError("stages must contain at least one stage.")
+    return normalized[0]
+
+
+def _paper_plot_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
+    if str(stage) == str(primary_stage):
+        return output_path / "parameter_recovery_paper"
+    return output_path / f"parameter_recovery_{stage_alias(stage)}_paper"
 
 
 def source_position_recovery_rows(parameter_df: pd.DataFrame) -> pd.DataFrame:
@@ -491,25 +653,41 @@ def _plot_seed_recovery_page(
 def _draw_seed_parameter_axis(ax: plt.Axes, page_df: pd.DataFrame, parameter: str) -> None:
     panel = page_df[page_df["parameter"].astype(str) == parameter]
     for variant, group in panel.groupby("variant", sort=False):
+        variant = str(variant)
+        stage = str(group["stage"].iloc[0]) if "stage" in group and not group.empty else "stage2_free_source_forward_fit"
+        variant_color = VARIANT_COLORS.get(variant, "0.35")
         truth = group["truth"].to_numpy(dtype=float)
         median = group["median"].to_numpy(dtype=float)
         q16 = group["q16"].to_numpy(dtype=float)
         q84 = group["q84"].to_numpy(dtype=float)
         seeds = group["seed"].to_numpy() if "seed" in group else np.arange(len(group))
-        x = _jittered_seed_truth(truth, seeds, str(variant))
+        x = _jittered_seed_truth(truth, seeds, variant)
         yerr = [np.maximum(0.0, median - q16), np.maximum(0.0, q84 - median)]
         ax.errorbar(
             x,
             median,
             yerr=yerr,
-            fmt=STAGE_MARKERS.get("stage2_free_source_forward_fit", "s"),
-            color=VARIANT_COLORS.get(str(variant), "0.35"),
-            markerfacecolor=VARIANT_COLORS.get(str(variant), "0.35"),
-            markeredgewidth=1.0,
+            fmt="none",
+            ecolor=variant_color,
+            elinewidth=0.65,
+            capsize=1.8,
+            capthick=0.65,
             linestyle="none",
-            alpha=0.55,
-            markersize=4.5,
-            label=variant_label(str(variant)),
+            alpha=0.30,
+            zorder=1,
+            label="_nolegend_",
+        )
+        ax.scatter(
+            x,
+            median,
+            s=21.0,
+            marker=VARIANT_MARKERS.get(variant, "o"),
+            facecolors=_stage_marker_facecolor(stage, variant_color),
+            edgecolors=_stage_marker_edgecolor(stage, variant_color),
+            linewidths=0.75,
+            alpha=0.86,
+            zorder=2,
+            label=variant_label(variant),
         )
     limits = _axis_limits(
         panel["truth"].to_numpy(dtype=float),
@@ -533,24 +711,40 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
         return False
     plot_df = df.assign(coordinate=np.where(df["parameter"].astype(str).str.endswith(".beta_y"), "beta_y", "beta_x"))
     for (variant, coordinate), group in plot_df.groupby(["variant", "coordinate"], sort=False):
+        variant = str(variant)
+        stage = str(group["stage"].iloc[0]) if "stage" in group and not group.empty else "stage2_free_source_forward_fit"
+        variant_color = VARIANT_COLORS.get(variant, "0.35")
         truth = group["truth"].to_numpy(dtype=float)
         median = group["median"].to_numpy(dtype=float)
         q16 = group["q16"].to_numpy(dtype=float)
         q84 = group["q84"].to_numpy(dtype=float)
         seeds = group["seed"].to_numpy() if "seed" in group else np.arange(len(group))
-        x = _jittered_seed_truth(truth, seeds, str(variant))
+        x = _jittered_seed_truth(truth, seeds, variant)
         yerr = [np.maximum(0.0, median - q16), np.maximum(0.0, q84 - median)]
         ax.errorbar(
             x,
             median,
             yerr=yerr,
-            fmt="^" if coordinate == "beta_y" else "o",
-            color=VARIANT_COLORS.get(str(variant), "0.35"),
-            markerfacecolor="white" if coordinate == "beta_y" else VARIANT_COLORS.get(str(variant), "0.35"),
-            markeredgewidth=0.9,
+            fmt="none",
+            ecolor=variant_color,
+            elinewidth=0.65,
+            capsize=1.8,
+            capthick=0.65,
             linestyle="none",
-            alpha=0.42,
-            markersize=4.0,
+            alpha=0.30,
+            zorder=1,
+            label="_nolegend_",
+        )
+        ax.scatter(
+            x,
+            median,
+            s=21.0,
+            marker=VARIANT_MARKERS.get(variant, "o"),
+            facecolors=_stage_marker_facecolor(stage, variant_color),
+            edgecolors=_stage_marker_edgecolor(stage, variant_color),
+            linewidths=0.75,
+            alpha=0.86,
+            zorder=2,
         )
     limits = _axis_limits(
         df["truth"].to_numpy(dtype=float),
@@ -566,15 +760,18 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
     ax.set_ylabel("Source Position (fit)")
     if include_legend:
         handles = [
-            Line2D([0], [0], marker="o", color=color, linestyle="none", label=variant_label(variant))
+            Line2D(
+                [0],
+                [0],
+                marker=VARIANT_MARKERS.get(variant, "o"),
+                color=color,
+                markerfacecolor=color,
+                markeredgecolor=_darken_color(color),
+                linestyle="none",
+                label=variant_label(variant),
+            )
             for variant, color in VARIANT_COLORS.items()
         ]
-        handles.extend(
-            [
-                Line2D([0], [0], marker="o", color="0.3", linestyle="none", label=r"$\beta_x$"),
-                Line2D([0], [0], marker="^", color="0.3", markerfacecolor="white", linestyle="none", label=r"$\beta_y$"),
-            ]
-        )
         ax.legend(handles=handles, loc="best", frameon=False)
     return True
 
@@ -616,7 +813,16 @@ def _plot_seed_recovery_single_page(
 
 def _add_variant_legend(fig: plt.Figure) -> None:
     variant_handles = [
-        Line2D([0], [0], marker="s", color=color, linestyle="none", label=variant_label(variant))
+        Line2D(
+            [0],
+            [0],
+            marker=VARIANT_MARKERS.get(variant, "o"),
+            color=color,
+            markerfacecolor=color,
+            markeredgecolor=_darken_color(color),
+            linestyle="none",
+            label=variant_label(variant),
+        )
         for variant, color in VARIANT_COLORS.items()
     ]
     fig.legend(handles=variant_handles, loc="upper center", ncol=len(variant_handles), frameon=False)
@@ -624,20 +830,30 @@ def _add_variant_legend(fig: plt.Figure) -> None:
 
 def _add_method_legend(fig: plt.Figure) -> None:
     variant_handles = [
-        Line2D([0], [0], marker="o", color=color, linestyle="none", label=variant_label(variant))
+        Line2D(
+            [0],
+            [0],
+            marker=VARIANT_MARKERS.get(variant, "o"),
+            color=color,
+            markerfacecolor=color,
+            markeredgecolor=_darken_color(color),
+            linestyle="none",
+            label=variant_label(variant),
+        )
         for variant, color in VARIANT_COLORS.items()
     ]
     stage_handles = [
         Line2D(
             [0],
             [0],
-            marker=marker,
+            marker="o",
             color="0.2",
             markerfacecolor="white" if stage.startswith("stage1") else "0.2",
+            markeredgecolor="0.2",
             linestyle="none",
             label=stage_label(stage),
         )
-        for stage, marker in STAGE_MARKERS.items()
+        for stage in STAGE_MARKERS
     ]
     fig.legend(
         handles=[*variant_handles, *stage_handles],
@@ -692,7 +908,7 @@ def _save_multipage_seed_recovery_plot(
 ) -> tuple[Path, ...]:
     paths: list[Path] = []
     if not parameters:
-        warnings.warn(f"No finite stage-2 seed parameters available for {output_base.name}.", RuntimeWarning, stacklevel=2)
+        warnings.warn(f"No finite seed parameters available for {output_base.name}.", RuntimeWarning, stacklevel=2)
         return tuple(paths)
     pages = [parameters[index : index + parameters_per_page] for index in range(0, len(parameters), parameters_per_page)]
     if "pdf" in formats:
@@ -807,16 +1023,31 @@ def _plot_bias_metric_panel(
                 continue
             stage = str(row["stage"])
             variant = str(row["variant"])
+            variant_color = VARIANT_COLORS.get(variant, "0.35")
             ax.errorbar(
                 [x],
                 [y],
                 yerr=[[max(0.0, y - y_q16)], [max(0.0, y_q84 - y)]],
-                fmt=STAGE_MARKERS.get(stage, "o"),
-                color=VARIANT_COLORS.get(variant, "0.35"),
-                markerfacecolor="white" if stage.startswith("stage1") else VARIANT_COLORS.get(variant, "0.35"),
-                markeredgewidth=1.2,
+                fmt="none",
+                ecolor=variant_color,
+                elinewidth=0.65,
+                capsize=1.8,
+                capthick=0.65,
                 linestyle="none",
-                alpha=0.9,
+                alpha=0.30,
+                zorder=1,
+                label="_nolegend_",
+            )
+            ax.scatter(
+                [x],
+                [y],
+                s=21.0,
+                marker=VARIANT_MARKERS.get(variant, "o"),
+                facecolors=_stage_marker_facecolor(stage, variant_color),
+                edgecolors=_stage_marker_edgecolor(stage, variant_color),
+                linewidths=0.75,
+                alpha=0.86,
+                zorder=2,
             )
     ax.axhline(0.0, color="0.25", linewidth=1.0)
     ax.set_xticks(positions, labels, rotation=90)
@@ -903,6 +1134,123 @@ def plot_parameter_bias_summary(
     return tuple(paths)
 
 
+def _finite_magnification_rows(magnification_df: pd.DataFrame) -> pd.DataFrame:
+    required = ["magnification_true", "magnification_q16", "magnification_q50", "magnification_q84"]
+    if magnification_df.empty or any(column not in magnification_df for column in required):
+        return pd.DataFrame()
+    values = magnification_df[required].apply(pd.to_numeric, errors="coerce")
+    mask = np.isfinite(values.to_numpy(dtype=float)).all(axis=1)
+    return magnification_df.loc[mask].copy()
+
+
+def _magnification_recovery_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
+    if str(stage) == str(primary_stage):
+        return output_path / "magnification_recovery"
+    return output_path / f"magnification_recovery_{stage_alias(stage)}"
+
+
+def _absolute_magnification_interval(
+    q16: np.ndarray,
+    q50: np.ndarray,
+    q84: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    interval = np.vstack([np.abs(q16), np.abs(q50), np.abs(q84)])
+    center = np.abs(q50)
+    lower = np.nanmin(interval, axis=0)
+    upper = np.nanmax(interval, axis=0)
+    return lower, center, upper
+
+
+def plot_aggregate_magnification_recovery(
+    magnification_df: pd.DataFrame,
+    output_base: Path,
+    formats: tuple[str, ...],
+) -> tuple[Path, ...]:
+    plot_df = _finite_magnification_rows(magnification_df)
+    if plot_df.empty:
+        return tuple()
+    paths: list[Path] = []
+    finite_values = np.concatenate(
+        [
+            np.abs(plot_df["magnification_true"].to_numpy(dtype=float)),
+            np.abs(plot_df["magnification_q16"].to_numpy(dtype=float)),
+            np.abs(plot_df["magnification_q50"].to_numpy(dtype=float)),
+            np.abs(plot_df["magnification_q84"].to_numpy(dtype=float)),
+        ]
+    )
+    finite_values = finite_values[np.isfinite(finite_values) & (finite_values > 0.0)]
+    limits: tuple[float, float] | None = None
+    if finite_values.size:
+        log_values = np.log10(finite_values)
+        lo = float(np.nanmin(log_values))
+        hi = float(np.nanmax(log_values))
+        pad = max(0.08 * (hi - lo), 0.08) if hi > lo else 0.08
+        limits = (float(np.power(10.0, lo - pad)), float(np.power(10.0, hi + pad)))
+    for fmt in formats:
+        path = output_base.with_suffix(f".{fmt}")
+        fig, ax = plt.subplots(figsize=(6.0, 5.4))
+        labeled_variants: set[str] = set()
+        for (stage, variant), group in plot_df.groupby(["stage", "variant"], sort=False):
+            variant = str(variant)
+            stage = str(stage)
+            variant_color = VARIANT_COLORS.get(variant, "0.35")
+            truth = np.abs(group["magnification_true"].to_numpy(dtype=float))
+            q16 = group["magnification_q16"].to_numpy(dtype=float)
+            q50 = group["magnification_q50"].to_numpy(dtype=float)
+            q84 = group["magnification_q84"].to_numpy(dtype=float)
+            abs_q16, abs_q50, abs_q84 = _absolute_magnification_interval(q16, q50, q84)
+            valid = (truth > 0.0) & (abs_q16 > 0.0) & (abs_q50 > 0.0) & (abs_q84 > 0.0)
+            if not np.any(valid):
+                continue
+            label = variant_label(variant) if variant not in labeled_variants else "_nolegend_"
+            labeled_variants.add(variant)
+            ax.errorbar(
+                truth[valid],
+                abs_q50[valid],
+                yerr=[
+                    np.maximum(0.0, abs_q50[valid] - abs_q16[valid]),
+                    np.maximum(0.0, abs_q84[valid] - abs_q50[valid]),
+                ],
+                fmt="none",
+                ecolor=variant_color,
+                elinewidth=0.65,
+                capsize=1.8,
+                capthick=0.65,
+                linestyle="none",
+                alpha=0.30,
+                zorder=1,
+                label="_nolegend_",
+            )
+            ax.scatter(
+                truth[valid],
+                abs_q50[valid],
+                s=21.0,
+                marker=VARIANT_MARKERS.get(variant, "o"),
+                facecolors="white" if stage.startswith("stage1") else variant_color,
+                edgecolors=variant_color if stage.startswith("stage1") else _darken_color(variant_color),
+                linewidths=0.75,
+                alpha=0.86,
+                zorder=2,
+                label=label,
+            )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        if limits is not None:
+            ax.plot(limits, limits, color="0.25", linewidth=1.0, alpha=0.75, zorder=0.5)
+            ax.set_xlim(limits)
+            ax.set_ylim(limits)
+        ax.set_xlabel(r"Image $|\mu|$ (truth)")
+        ax.set_ylabel(r"Image $|\mu|$ (fit)")
+        handles, labels = ax.get_legend_handles_labels()
+        if labels:
+            ax.legend(handles, labels, loc="best", frameon=False)
+        fig.tight_layout()
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
+        paths.append(path)
+    return tuple(paths)
+
+
 def _positive_finite_values(values: list[Any] | np.ndarray) -> np.ndarray:
     array = pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce").to_numpy(dtype=float)
     return array[np.isfinite(array) & (array > 0.0)]
@@ -940,8 +1288,8 @@ def _truth_subhalo_masses(payload: dict[str, Any]) -> np.ndarray:
     return _positive_finite_values(masses)
 
 
-def _recovered_stage2_subhalo_log_masses(payload: dict[str, Any]) -> np.ndarray:
-    manifest = _stage_manifest(payload, "stage2_free_source_forward_fit")
+def _recovered_stage_subhalo_log_masses(payload: dict[str, Any], stage: str) -> np.ndarray:
+    manifest = _stage_manifest(payload, stage)
     if manifest is None:
         return np.empty((0,), dtype=float)
     records = _table_records_from_manifest(manifest, "scaling_relation_summary.csv")
@@ -984,6 +1332,7 @@ def collect_subhalo_shmf_inputs(
     *,
     run_name: str = DEFAULT_RUN_NAME,
     variants: tuple[str, ...] = DEFAULT_VARIANTS,
+    stage: str = "stage2_free_source_forward_fit",
     strict: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     root = Path(campaign_root)
@@ -1009,9 +1358,9 @@ def collect_subhalo_shmf_inputs(
                 warnings.warn(message, RuntimeWarning, stacklevel=2)
                 continue
             truth_mass = _truth_subhalo_masses(payload)
-            recovered_log_mass = _recovered_stage2_subhalo_log_masses(payload)
+            recovered_log_mass = _recovered_stage_subhalo_log_masses(payload, stage)
             if truth_mass.size == 0 or recovered_log_mass.size == 0:
-                message = f"Missing truth or recovered SHMF masses in {path}"
+                message = f"Missing truth or recovered SHMF masses for {stage} in {path}"
                 if strict:
                     raise ValueError(message)
                 warnings.warn(message, RuntimeWarning, stacklevel=2)
@@ -1024,6 +1373,7 @@ def collect_subhalo_shmf_inputs(
                     "run_name": run_name,
                     "seed": seed,
                     "variant": variant,
+                    "stage": str(stage),
                     "truth_log_mass": np.log10(truth_mass),
                     "recovered_log_mass": recovered_log_mass,
                     "result_path": str(path),
@@ -1067,6 +1417,7 @@ def build_subhalo_shmf_tables(
                     "run_name": row["run_name"],
                     "seed": row["seed"],
                     "variant": row["variant"],
+                    "stage": row.get("stage", "stage2_free_source_forward_fit"),
                     "bin_index": index,
                     "log_mass_left": float(bins[index]),
                     "log_mass_right": float(bins[index + 1]),
@@ -1094,6 +1445,7 @@ def build_subhalo_shmf_tables(
             q16, median, q84 = np.quantile(values, [0.16, 0.5, 0.84])
             summary_rows.append(
                 {
+                    "stage": str(first.get("stage", "stage2_free_source_forward_fit")),
                     "series": series,
                     "variant": variant,
                     "bin_index": int(bin_index),
@@ -1107,11 +1459,12 @@ def build_subhalo_shmf_tables(
                 }
             )
 
-    truth_frame = seed_df.drop_duplicates(["seed", "bin_index"])
-    add_summary_rows(truth_frame, series="truth", variant="truth", value_column="truth_density")
-    for variant, variant_frame in seed_df.groupby("variant", sort=False):
-        add_summary_rows(variant_frame, series="recovered", variant=str(variant), value_column="recovered_density")
-        add_summary_rows(variant_frame, series="ratio", variant=str(variant), value_column="recovered_to_truth")
+    for _stage, stage_frame in seed_df.groupby("stage", sort=False):
+        truth_frame = stage_frame.drop_duplicates(["seed", "bin_index"])
+        add_summary_rows(truth_frame, series="truth", variant="truth", value_column="truth_density")
+        for variant, variant_frame in stage_frame.groupby("variant", sort=False):
+            add_summary_rows(variant_frame, series="recovered", variant=str(variant), value_column="recovered_density")
+            add_summary_rows(variant_frame, series="ratio", variant=str(variant), value_column="recovered_to_truth")
     return seed_df, pd.DataFrame(summary_rows)
 
 
@@ -1226,35 +1579,59 @@ def plot_subhalo_shmf_summary(
     return tuple(paths)
 
 
+def _subhalo_shmf_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
+    if str(stage) == str(primary_stage):
+        return output_path / "subhalo_recovery_shmf"
+    return output_path / f"subhalo_recovery_{stage_alias(stage)}_shmf"
+
+
 def write_subhalo_shmf_outputs(
     campaign_root: str | Path,
     output_path: Path,
     *,
     run_name: str = DEFAULT_RUN_NAME,
+    stages: tuple[str, ...] = DEFAULT_STAGES,
     variants: tuple[str, ...] = DEFAULT_VARIANTS,
     formats: tuple[str, ...] = DEFAULT_FORMATS,
     strict: bool = False,
 ) -> tuple[Path | None, Path | None, tuple[Path, ...]]:
-    shmf_inputs, selection = collect_subhalo_shmf_inputs(
-        campaign_root,
-        run_name=run_name,
-        variants=variants,
-        strict=strict,
-    )
-    seed_df, summary_df = build_subhalo_shmf_tables(shmf_inputs)
+    primary_stage = _paper_recovery_stage(stages)
+    selection: dict[str, Any] = {}
+    seed_frames: list[pd.DataFrame] = []
+    summary_frames: list[pd.DataFrame] = []
+    plot_paths: list[Path] = []
+    for stage in tuple(str(value) for value in stages):
+        shmf_inputs, stage_selection = collect_subhalo_shmf_inputs(
+            campaign_root,
+            run_name=run_name,
+            variants=variants,
+            stage=stage,
+            strict=strict,
+        )
+        if not selection and stage_selection:
+            selection = stage_selection
+        stage_seed_df, stage_summary_df = build_subhalo_shmf_tables(shmf_inputs)
+        if stage_seed_df.empty or stage_summary_df.empty:
+            continue
+        seed_frames.append(stage_seed_df)
+        summary_frames.append(stage_summary_df)
+        plot_paths.extend(
+            plot_subhalo_shmf_summary(
+                stage_summary_df,
+                _subhalo_shmf_output_base(output_path, stage, primary_stage),
+                formats,
+                selection=selection,
+            )
+        )
+    seed_df = pd.concat(seed_frames, ignore_index=True) if seed_frames else pd.DataFrame()
+    summary_df = pd.concat(summary_frames, ignore_index=True) if summary_frames else pd.DataFrame()
     if seed_df.empty or summary_df.empty:
         return None, None, tuple()
     seed_table = output_path / "subhalo_recovery_shmf_seed_table.csv"
     summary_table = output_path / "subhalo_recovery_shmf_summary_table.csv"
     seed_df.to_csv(seed_table, index=False)
     summary_df.to_csv(summary_table, index=False)
-    plot_paths = plot_subhalo_shmf_summary(
-        summary_df,
-        output_path / "subhalo_recovery_shmf",
-        formats,
-        selection=selection,
-    )
-    return seed_table, summary_table, plot_paths
+    return seed_table, summary_table, tuple(plot_paths)
 
 
 def write_aggregate_plots(
@@ -1287,9 +1664,17 @@ def write_aggregate_plots(
         variants=variants,
         strict=strict,
     )
+    magnification_df, _magnification_inventory_df = collect_magnification_recovery(
+        campaign_root,
+        run_name=run_name,
+        stages=stages,
+        variants=variants,
+        strict=strict,
+    )
     parameter_table_path = output_path / "parameter_recovery_table.csv"
     aggregate_parameter_table_path = output_path / "aggregate_parameter_recovery_table.csv"
     inventory_path = output_path / "run_inventory.csv"
+    magnification_table_path = output_path / "magnification_recovery_table.csv"
     aggregate_df = aggregate_parameter_recovery(
         parameter_df,
         seed_aggregation=seed_aggregation,
@@ -1299,22 +1684,28 @@ def write_aggregate_plots(
     parameter_df.to_csv(parameter_table_path, index=False)
     aggregate_df.to_csv(aggregate_parameter_table_path, index=False)
     inventory_df.to_csv(inventory_path, index=False)
+    if not magnification_df.empty:
+        magnification_df.to_csv(magnification_table_path, index=False)
 
     apply_lenscluster_plot_style()
-    seed_df = stage2_seed_recovery_rows(parameter_df, variants=variants)
+    paper_stage = _paper_recovery_stage(stages)
+    seed_df = seed_recovery_rows_for_stage(parameter_df, stage=paper_stage, variants=variants)
     seed_available_parameters = seed_df["parameter"].dropna().astype(str).drop_duplicates().tolist()
     plot_paths: list[Path] = []
     if parameter_set in {"paper", "both"}:
-        paper_parameters = [parameter for parameter in PAPER_PARAMETERS if parameter in set(seed_available_parameters)]
-        plot_paths.extend(
-            _save_multipage_seed_recovery_plot(
-                seed_df,
-                paper_parameters,
-                output_path / "parameter_recovery_paper",
-                formats,
-                include_source_position_panel=True,
+        for stage in tuple(str(value) for value in stages):
+            stage_seed_df = seed_recovery_rows_for_stage(parameter_df, stage=stage, variants=variants)
+            stage_available_parameters = stage_seed_df["parameter"].dropna().astype(str).drop_duplicates().tolist()
+            paper_parameters = [parameter for parameter in PAPER_PARAMETERS if parameter in set(stage_available_parameters)]
+            plot_paths.extend(
+                _save_multipage_seed_recovery_plot(
+                    stage_seed_df,
+                    paper_parameters,
+                    _paper_plot_output_base(output_path, stage, paper_stage),
+                    formats,
+                    include_source_position_panel=True,
+                )
             )
-        )
     if parameter_set in {"all", "both"}:
         plot_paths.extend(
             _save_multipage_seed_recovery_plot(
@@ -1332,10 +1723,21 @@ def write_aggregate_plots(
             fractional_truth_floor=fractional_truth_floor,
         )
     )
+    if not magnification_df.empty:
+        for stage in tuple(str(value) for value in stages):
+            stage_magnification_df = magnification_df[magnification_df["stage"].astype(str) == stage].copy()
+            plot_paths.extend(
+                plot_aggregate_magnification_recovery(
+                    stage_magnification_df,
+                    _magnification_recovery_output_base(output_path, stage, paper_stage),
+                    formats,
+                )
+            )
     shmf_seed_table, shmf_summary_table, shmf_plot_paths = write_subhalo_shmf_outputs(
         campaign_root,
         output_path,
         run_name=run_name,
+        stages=stages,
         variants=variants,
         formats=formats,
         strict=strict,
@@ -1346,6 +1748,7 @@ def write_aggregate_plots(
         parameter_table=parameter_table_path,
         aggregate_parameter_table=aggregate_parameter_table_path,
         inventory_table=inventory_path,
+        magnification_table=magnification_table_path if not magnification_df.empty else None,
         subhalo_shmf_seed_table=shmf_seed_table,
         subhalo_shmf_summary_table=shmf_summary_table,
         plot_paths=tuple(plot_paths),
@@ -1388,6 +1791,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Wrote parameter table: {outputs.parameter_table}")
     print(f"Wrote aggregate parameter table: {outputs.aggregate_parameter_table}")
     print(f"Wrote inventory table: {outputs.inventory_table}")
+    if outputs.magnification_table is not None:
+        print(f"Wrote magnification table: {outputs.magnification_table}")
     if outputs.subhalo_shmf_seed_table is not None:
         print(f"Wrote SHMF seed table: {outputs.subhalo_shmf_seed_table}")
     if outputs.subhalo_shmf_summary_table is not None:

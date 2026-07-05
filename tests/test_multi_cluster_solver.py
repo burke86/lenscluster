@@ -171,7 +171,7 @@ def test_parse_args_accepts_repeated_cluster_triples_and_cosmology_init() -> Non
     assert args.image_plane_scatter_prior_log_sigma == pytest.approx(0.4)
     assert args.fix_image_sigma_int_arcsec == pytest.approx(0.35)
     assert args.sampling_engine == "refreshing_surrogate_flat"
-    assert args.dense_mass == "structured"
+    assert args.dense_mass == "full"
     assert not hasattr(args, "validate_top_k_families")
     assert not hasattr(args, "validation_approx")
 
@@ -208,10 +208,11 @@ def test_parse_args_dense_mass_choices() -> None:
         "runs/m0416",
     ]
 
-    assert multi._parse_args(base).dense_mass == "structured"
-    assert multi._parse_args([*base, "--dense-mass", "structured"]).dense_mass == "structured"
+    assert multi._parse_args(base).dense_mass == "full"
     assert multi._parse_args([*base, "--dense-mass", "full"]).dense_mass == "full"
     assert multi._parse_args([*base, "--dense-mass", "diagonal"]).dense_mass == "diagonal"
+    with pytest.raises(SystemExit):
+        multi._parse_args([*base, "--dense-mass", "structured"])
 
     for invalid_args in (
         ["--no-dense-mass"],

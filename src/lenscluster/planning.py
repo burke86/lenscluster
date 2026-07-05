@@ -421,17 +421,14 @@ def _runtime_payload(config: LensClusterSolverConfig) -> dict[str, Any]:
     }
     payload.update(
         {
-            "perturbation_discovery_alpha_tol_arcsec": config.perturbation.perturbation_discovery_alpha_tol_arcsec,
-            "perturbation_discovery_jacobian_tol": config.perturbation.perturbation_discovery_jacobian_tol,
             "perturbation_discovery_jacobian_weight": config.perturbation.perturbation_discovery_jacobian_weight,
             "perturbation_discovery_top_k": config.perturbation.perturbation_discovery_top_k,
-            "independent_scaling_free_log_sigma_tau_prior_median": (
-                config.scaling.independent_scaling_free_log_sigma_tau_prior_median
+            "independent_scaling_free_log_sigma_offset_width": (
+                config.scaling.independent_scaling_free_log_sigma_offset_width
             ),
-            "independent_scaling_free_log_mass_tau_prior_median": (
-                config.scaling.independent_scaling_free_log_mass_tau_prior_median
+            "independent_scaling_free_log_mass_offset_width": (
+                config.scaling.independent_scaling_free_log_mass_offset_width
             ),
-            "independent_scaling_free_log_tau_prior_sigma": config.scaling.independent_scaling_free_log_tau_prior_sigma,
             "scaling_relation_mode": config.scaling.scaling_relation_mode,
             "potfile_alpha_sigma_prior_mean": config.scaling.potfile_alpha_sigma_prior_mean,
             "potfile_alpha_sigma_prior_std": config.scaling.potfile_alpha_sigma_prior_std,

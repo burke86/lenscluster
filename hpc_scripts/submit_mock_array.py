@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SEEDS,
         help="Comma-separated seed list. Default: 12345,12346,...,12354.",
     )
+    parser.add_argument(
+        "--scatter-ln",
+        type=float,
+        default=0.0,
+        help="Injected member scatter in ln(sigma) units passed to run_mock.xsh (0 disables).",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Write the sbatch script but do not submit it.")
     return parser.parse_args()
 
@@ -89,6 +95,8 @@ def build_run_command(covariance: str, args: argparse.Namespace) -> str:
         covariance,
         "--output-dir",
         args.output_dir,
+        "--scatter-ln",
+        str(float(args.scatter_ln)),
     ]
     return " ".join(part if part in {'"$PYTHON"', "${SEED}"} else shlex.quote(part) for part in command)
 

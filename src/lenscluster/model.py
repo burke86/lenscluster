@@ -82,8 +82,6 @@ class PackedLensSpec:
     independent_magnitude_feature: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=float))
     independent_free_log_sigma_delta_unit_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
     independent_free_log_mass_delta_unit_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
-    independent_free_log_sigma_tau_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
-    independent_free_log_mass_tau_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
     active_gate_intercept_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
     active_gate_mag_slope_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
     active_gate_logit_offset_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
@@ -347,9 +345,8 @@ class BuildState:
     active_scaling_freeze_threshold: float = 0.5
     independent_scaling_model: str = "log_displacement"
     scaling_relation_mode: str = "direct-exponents"
-    independent_scaling_free_log_sigma_tau_prior_median: float = 0.10
-    independent_scaling_free_log_mass_tau_prior_median: float = 0.20
-    independent_scaling_free_log_tau_prior_sigma: float = 0.25
+    independent_scaling_free_log_sigma_offset_width: float = 0.10
+    independent_scaling_free_log_mass_offset_width: float = 0.20
     potfile_alpha_sigma_prior_mean: float = 0.25
     potfile_alpha_sigma_prior_std: float = 0.04
     potfile_alpha_sigma_prior_lower: float = 0.10

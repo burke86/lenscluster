@@ -47,17 +47,19 @@ def _usage() -> str:
     return (
         "Usage: xonsh run_mock.xsh --campaign NAME "
         "[--preset smoke|production] [--seed INT] "
-        "[--covariance anisotropic|isotropic] [--output-dir PATH]"
+        "[--covariance anisotropic|isotropic] [--output-dir PATH] "
+        "[--scatter-ln FLOAT]"
     )
 
 
-def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
+def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str, float]:
     values = {
         "campaign": None,
         "preset": "smoke",
         "seed": str(seed_default),
         "covariance": "anisotropic",
         "output_dir": output_dir_default,
+        "scatter_ln": "0.0",
     }
     flag_to_key = {
         "--campaign": "campaign",
@@ -65,6 +67,7 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
         "--seed": "seed",
         "--covariance": "covariance",
         "--output-dir": "output_dir",
+        "--scatter-ln": "scatter_ln",
     }
     index = 1
     while index < len(argv):
@@ -99,17 +102,31 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
     if covariance_mode not in VALID_COVARIANCE_MODES:
         print(f"Covariance mode must be 'anisotropic' or 'isotropic'; got {values['covariance']!r}.\n{_usage()}")
         raise SystemExit(2)
+    try:
+        scatter_ln = float(str(values["scatter_ln"]))
+    except ValueError:
+        print(f"--scatter-ln must be a float; got {values['scatter_ln']!r}.\n{_usage()}")
+        raise SystemExit(2)
+    if not (scatter_ln >= 0.0):
+        print(f"--scatter-ln must be nonnegative; got {scatter_ln}.\n{_usage()}")
+        raise SystemExit(2)
     campaign = str(values["campaign"]).strip()
     output_dir = str(values["output_dir"])
-    return preset, seed, covariance_mode, campaign, output_dir
+    return preset, seed, covariance_mode, campaign, output_dir, scatter_ln
 
 
-def _solver_template(*, production: bool, seed: int, critical_arc_anisotropic_covariance: bool) -> LensClusterSolverConfig:
+def _solver_template(
+    *,
+    production: bool,
+    seed: int,
+    critical_arc_anisotropic_covariance: bool,
+    scatter_ln: float,
+) -> LensClusterSolverConfig:
     if production:
         svi_steps = 10_000, 20_000, 20_000
         warmup = 10000, 10000
-        samples = 500, 500
-        max_tree_depth = 9, 9
+        samples = 1000, 1000
+        max_tree_depth = 8, 8
     else:
         svi_steps = 500, 20_000, 20_000
         warmup = 100, 100
@@ -125,7 +142,7 @@ def _solver_template(*, production: bool, seed: int, critical_arc_anisotropic_co
             debug_sampler_diagnostics=True,
             numpyro_print_summary=True,
             nuts_chain_method="parallel",
-            dense_mass="structured",
+            dense_mass="full",
             jax_clear_caches_after_svi_refresh=False,
         ),
         workflow=WorkflowConfig(
@@ -133,8 +150,8 @@ def _solver_template(*, production: bool, seed: int, critical_arc_anisotropic_co
             stage0_likelihood="source",
             stage1_likelihood="source",
             stage2_forward_mode="critical-arc-anisotropic",
-            stage1_sampling_engine="refreshing_surrogate_flat",
-            stage2_sampling_engine="refreshing_surrogate_flat",
+            stage1_sampling_engine="full_flat",
+            stage2_sampling_engine="full_flat",
             stage2_fresh_process=True,
             exact_image_diagnostics_stage2=True,
             best_value="maximum-likelihood",
@@ -150,7 +167,7 @@ def _solver_template(*, production: bool, seed: int, critical_arc_anisotropic_co
             samples=samples,
             sampling_refresh_runs=(1, 1),
             max_tree_depth=max_tree_depth,
-            target_accept=0.9,
+            target_accept=0.75,
             z_bin_efficiency_tol=0.0,
             svi_learning_rate=0.0005,
         ),
@@ -174,13 +191,15 @@ def _solver_template(*, production: bool, seed: int, critical_arc_anisotropic_co
             caustic_plot_grid_scale_arcsec=0.2,
         ),
         perturbation=PerturbationDiscoveryConfig(
-            perturbation_discovery_alpha_tol_arcsec=0.001,
-            perturbation_discovery_jacobian_tol=0.001,
             perturbation_discovery_jacobian_weight=1.0,
-            perturbation_discovery_top_k=20,
+            # Promote no members: the mock truth follows the scaling relation exactly,
+            # and population scatter is inferred via the linearized covariance term.
+            perturbation_discovery_top_k=0,
         ),
         scaling=ScalingModelConfig(
-            scaling_scatter=True,
+            # Sample the linearized population-scatter amplitudes only when the mock
+            # actually injects scatter; otherwise the model matches the truth exactly.
+            scaling_scatter=scatter_ln > 0.0,
         ),
     )
 
@@ -191,14 +210,19 @@ def build_config(
     covariance_mode: str,
     campaign_name: str,
     output_dir: str,
+    scatter_ln: float,
 ) -> MockValidationConfig:
     production = preset == "production"
     critical_arc_anisotropic_covariance = covariance_mode == "anisotropic"
+    n_primary_families = 10 if production else 5
+    n_subhalo_families = 5 if production else 0
     mock = SingleBCGMockConfig(
         seed=seed,
-        n_primary_families=25 if production else 5,
-        n_subhalo_families=5 if production else 0,
-        n_subhalos=100 if production else 0,
+        n_primary_families=n_primary_families,
+        n_subhalo_families=n_subhalo_families,
+        # Smoke needs a member population when scatter is injected so the linearized
+        # scatter likelihood path is actually exercised.
+        n_subhalos=25 if production else (10 if scatter_ln > 0.0 else 0),
         subhalo_spatial_distribution="dpie",
         subhalo_spatial_core_radius_arcsec=25.0,
         subhalo_spatial_cut_radius_arcsec=180.0,
@@ -206,12 +230,12 @@ def build_config(
         subhalo_force_core_count=0,
         subhalo_alpha_sigma=0.25,
         subhalo_gamma_ml=0.0,
-        subhalo_sigma_scatter_dex=0.0,
+        subhalo_sigma_scatter_dex=float(scatter_ln) / np.log(10.0),
         subhalo_cut_scatter_dex=0.0,
         min_images_per_family=3,
         max_images_per_family=None,
-        primary_source_redshifts=np.linspace(1.5, 9.0, 25) if production else np.linspace(1.5, 9.0, 3),
-        subhalo_source_redshifts=np.linspace(1.5, 9.0, 5) if production else np.linspace(1.5, 9.0, 3),
+        primary_source_redshifts=np.linspace(1.5, 9.0, n_primary_families),
+        subhalo_source_redshifts=np.linspace(1.5, 9.0, n_subhalo_families),
         pos_sigma_arcsec=0.0,
         mock_caustic_grid_chunk_memory_gb=mock_caustic_grid_chunk_memory_gb,
         # Production caustics and image finding are the expensive generation
@@ -227,7 +251,7 @@ def build_config(
         mock=mock,
         paths=MockValidationPathsConfig(
             output_dir=output_dir,
-            run_name=f"single_bcg_{preset}_source",
+            run_name=f"single_bcg_{preset}",
             campaign_name=campaign_name,
             variant_name=covariance_mode,
         ),
@@ -242,6 +266,7 @@ def build_config(
                 production=production,
                 seed=seed,
                 critical_arc_anisotropic_covariance=critical_arc_anisotropic_covariance,
+                scatter_ln=scatter_ln,
             ),
             run_name="solver",
             recovery_stages=("stage1", "stage2"),
@@ -249,18 +274,21 @@ def build_config(
     )
 
 
-preset, seed, covariance_mode, campaign_name, output_dir = _parse_args(sys.argv)
+preset, seed, covariance_mode, campaign_name, output_dir, scatter_ln = _parse_args(sys.argv)
 config = build_config(
     preset,
     seed=seed,
     covariance_mode=covariance_mode,
     campaign_name=campaign_name,
     output_dir=output_dir,
+    scatter_ln=scatter_ln,
 ).validate()
 
 print(
     f"[config] preset={preset} seed={seed} "
     f"covariance={covariance_mode} "
+    f"scatter_ln={scatter_ln} scaling_scatter={config.solver.template.scaling.scaling_scatter} "
+    f"subhalo_sigma_scatter_dex={config.mock.subhalo_sigma_scatter_dex:.6f} "
     f"critical_arc_anisotropic_covariance={config.solver.template.likelihood.critical_arc_anisotropic_covariance} "
     f"mock_caustic_grid_chunk_memory_gb={config.mock.mock_caustic_grid_chunk_memory_gb} "
     f"mock_generation_workers={config.mock.mock_generation_workers} "

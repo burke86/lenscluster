@@ -858,12 +858,6 @@ def _scaling_results_summary_table(
         "mass_log_scatter_median",
         "mass_log_scatter_p16",
         "mass_log_scatter_p84",
-        "free_log_sigma_tau_median",
-        "free_log_sigma_tau_p16",
-        "free_log_sigma_tau_p84",
-        "free_log_mass_tau_median",
-        "free_log_mass_tau_p16",
-        "free_log_mass_tau_p84",
         "m_star_definition",
     ]
     sample_array = np.asarray(samples, dtype=float)
@@ -967,8 +961,6 @@ def _scaling_results_summary_table(
         for prefix, field in (
             ("sigma_log_scatter", "sigma_log_scatter"),
             ("mass_log_scatter", "mass_log_scatter"),
-            ("free_log_sigma_tau", "independent_free_log_sigma_tau"),
-            ("free_log_mass_tau", "independent_free_log_mass_tau"),
         ):
             _add_summary(row, prefix, _values(field_index.get(field)))
         rows.append(row)
@@ -1003,8 +995,6 @@ def _build_scaling_results_rich_table(summary_df: pd.DataFrame) -> Any:
         ("gamma_ml", "gamma_ml"),
         ("sigma scatter", "sigma_log_scatter"),
         ("mass scatter", "mass_log_scatter"),
-        ("tau_sigma", "free_log_sigma_tau"),
-        ("tau_mass", "free_log_mass_tau"),
     ]
     for header, _prefix in columns:
         table.add_column(header)
@@ -1025,8 +1015,6 @@ def _build_scaling_results_rich_table(summary_df: pd.DataFrame) -> Any:
             _interval_text(row_series, "gamma_ml"),
             _interval_text(row_series, "sigma_log_scatter"),
             _interval_text(row_series, "mass_log_scatter"),
-            _interval_text(row_series, "free_log_sigma_tau"),
-            _interval_text(row_series, "free_log_mass_tau"),
         )
     return table
 
@@ -2161,6 +2149,8 @@ def _independent_scaling_diagnostics_table(
     scaling_rank_df: pd.DataFrame,
     packed_lens_spec: Any,
     sample_weights: np.ndarray | None = None,
+    log_sigma_offset_width: float = 0.10,
+    log_mass_offset_width: float = 0.20,
 ) -> pd.DataFrame:
     columns = [
         "potfile_id",
@@ -2202,14 +2192,8 @@ def _independent_scaling_diagnostics_table(
         "delta_log_mass_p16",
         "delta_log_mass_p84",
         "delta_log_mass_map",
-        "tau_sigma_median",
-        "tau_sigma_p16",
-        "tau_sigma_p84",
-        "tau_sigma_map",
-        "tau_mass_median",
-        "tau_mass_p16",
-        "tau_mass_p84",
-        "tau_mass_map",
+        "log_sigma_offset_width",
+        "log_mass_offset_width",
         "sigma_ratio_median",
         "sigma_ratio_p16",
         "sigma_ratio_p84",
@@ -2307,12 +2291,8 @@ def _independent_scaling_diagnostics_table(
     free_mass_delta_indices = _component_array_from_packed(
         packed_lens_spec, "independent_free_log_mass_delta_unit_param_index", n_components, dtype=np.int32, fill_value=-1
     )
-    free_sigma_tau_indices = _component_array_from_packed(
-        packed_lens_spec, "independent_free_log_sigma_tau_param_index", n_components, dtype=np.int32, fill_value=-1
-    )
-    free_mass_tau_indices = _component_array_from_packed(
-        packed_lens_spec, "independent_free_log_mass_tau_param_index", n_components, dtype=np.int32, fill_value=-1
-    )
+    sigma_offset_width = float(log_sigma_offset_width)
+    mass_offset_width = float(log_mass_offset_width)
     weights = _normalized_weights(sample_weights, sample_array.shape[0])
 
     def _values(base_array: np.ndarray, index_array: np.ndarray, component_index: int) -> np.ndarray:
@@ -2375,20 +2355,16 @@ def _independent_scaling_diagnostics_table(
         if log_displacement_free:
             free_sigma_delta_unit = _values(np.zeros(n_components, dtype=float), free_sigma_delta_indices, free_component_index)
             free_mass_delta_unit = _values(np.zeros(n_components, dtype=float), free_mass_delta_indices, free_component_index)
-            free_sigma_tau = _values(np.zeros(n_components, dtype=float), free_sigma_tau_indices, free_component_index)
-            free_mass_tau = _values(np.zeros(n_components, dtype=float), free_mass_tau_indices, free_component_index)
-            delta_log_sigma = free_sigma_tau * free_sigma_delta_unit
-            delta_log_mass = free_mass_tau * free_mass_delta_unit
+            delta_log_sigma = sigma_offset_width * free_sigma_delta_unit
+            delta_log_mass = mass_offset_width * free_mass_delta_unit
             delta_log_radius = delta_log_mass - 2.0 * delta_log_sigma
             free_v_disp = scaling_v_disp * np.exp(delta_log_sigma)
             free_core = scaling_core * np.exp(delta_log_radius)
             free_cut = scaling_cut * np.exp(delta_log_radius)
             free_sigma_delta_unit_map = _map_value(np.zeros(n_components, dtype=float), free_sigma_delta_indices, free_component_index)
             free_mass_delta_unit_map = _map_value(np.zeros(n_components, dtype=float), free_mass_delta_indices, free_component_index)
-            free_sigma_tau_map = _map_value(np.zeros(n_components, dtype=float), free_sigma_tau_indices, free_component_index)
-            free_mass_tau_map = _map_value(np.zeros(n_components, dtype=float), free_mass_tau_indices, free_component_index)
-            delta_log_sigma_map = free_sigma_tau_map * free_sigma_delta_unit_map
-            delta_log_mass_map = free_mass_tau_map * free_mass_delta_unit_map
+            delta_log_sigma_map = sigma_offset_width * free_sigma_delta_unit_map
+            delta_log_mass_map = mass_offset_width * free_mass_delta_unit_map
             delta_log_radius_map = delta_log_mass_map - 2.0 * delta_log_sigma_map
             free_v_disp_map = scaling_v_disp_map * float(np.exp(delta_log_sigma_map))
             free_core_map = scaling_core_map * float(np.exp(delta_log_radius_map))
@@ -2403,10 +2379,7 @@ def _independent_scaling_diagnostics_table(
             delta_log_sigma = np.full(sample_array.shape[0], np.nan, dtype=float)
             delta_log_mass = np.full(sample_array.shape[0], np.nan, dtype=float)
             delta_log_radius = np.full(sample_array.shape[0], np.nan, dtype=float)
-            free_sigma_tau = np.full(sample_array.shape[0], np.nan, dtype=float)
-            free_mass_tau = np.full(sample_array.shape[0], np.nan, dtype=float)
             delta_log_sigma_map = delta_log_mass_map = delta_log_radius_map = float("nan")
-            free_sigma_tau_map = free_mass_tau_map = float("nan")
 
         row_dict: dict[str, Any] = {
             "potfile_id": str(getattr(row, "potfile_id")),
@@ -2428,8 +2401,8 @@ def _independent_scaling_diagnostics_table(
         _add_summary(row_dict, "free_cut_radius_kpc", free_cut, free_cut_map)
         _add_summary(row_dict, "delta_log_sigma", delta_log_sigma, delta_log_sigma_map)
         _add_summary(row_dict, "delta_log_mass", delta_log_mass, delta_log_mass_map)
-        _add_summary(row_dict, "tau_sigma", free_sigma_tau, free_sigma_tau_map)
-        _add_summary(row_dict, "tau_mass", free_mass_tau, free_mass_tau_map)
+        row_dict["log_sigma_offset_width"] = sigma_offset_width
+        row_dict["log_mass_offset_width"] = mass_offset_width
         _add_summary(row_dict, "sigma_ratio", free_v_disp / scaling_v_disp, free_v_disp_map / scaling_v_disp_map)
         _add_summary(row_dict, "mass_ratio", np.exp(delta_log_mass), float(np.exp(delta_log_mass_map)))
         _add_summary(row_dict, "radius_ratio", np.exp(delta_log_radius), float(np.exp(delta_log_radius_map)))
@@ -4230,25 +4203,18 @@ def _run_summary(
         "independent_scaling_settings": {
             "candidate_source": "active_scaling_galaxies",
             "free_branch": "bergamini_sigma_mass_log_displacement",
-            "free_log_sigma_tau_prior_median": float(
+            "free_log_sigma_offset_width": float(
                 getattr(
                     state,
-                    "independent_scaling_free_log_sigma_tau_prior_median",
-                    getattr(args, "independent_scaling_free_log_sigma_tau_prior_median", 0.10),
+                    "independent_scaling_free_log_sigma_offset_width",
+                    getattr(args, "independent_scaling_free_log_sigma_offset_width", 0.10),
                 )
             ),
-            "free_log_mass_tau_prior_median": float(
+            "free_log_mass_offset_width": float(
                 getattr(
                     state,
-                    "independent_scaling_free_log_mass_tau_prior_median",
-                    getattr(args, "independent_scaling_free_log_mass_tau_prior_median", 0.20),
-                )
-            ),
-            "free_log_tau_prior_sigma": float(
-                getattr(
-                    state,
-                    "independent_scaling_free_log_tau_prior_sigma",
-                    getattr(args, "independent_scaling_free_log_tau_prior_sigma", 0.40),
+                    "independent_scaling_free_log_mass_offset_width",
+                    getattr(args, "independent_scaling_free_log_mass_offset_width", 0.20),
                 )
             ),
             "solver_defined_scaling_law_priors": {
@@ -5220,10 +5186,7 @@ def _overplot_corner_previous_stage_best_fit(
     )
 
 
-_POTFILE_CORNER_INDEPENDENT_FIELDS = {
-    "independent_free_log_sigma_tau",
-    "independent_free_log_mass_tau",
-}
+_POTFILE_CORNER_INDEPENDENT_FIELDS: set[str] = set()
 
 
 def _potfile_corner_parameter_subset(
@@ -14619,6 +14582,8 @@ def _generate_plots_and_tables(
                     evaluator.scaling_rank_df,
                     getattr(state, "packed_lens_spec", None),
                     sample_weights=results.sample_weights,
+                    log_sigma_offset_width=float(getattr(state, "independent_scaling_free_log_sigma_offset_width", 0.10)),
+                    log_mass_offset_width=float(getattr(state, "independent_scaling_free_log_mass_offset_width", 0.20)),
                 ),
             ),
         ),
@@ -15338,6 +15303,8 @@ def _generate_stage0_minimal_plots_and_tables(
             evaluator.scaling_rank_df,
             getattr(state, "packed_lens_spec", None),
             sample_weights=results.sample_weights,
+            log_sigma_offset_width=float(getattr(state, "independent_scaling_free_log_sigma_offset_width", 0.10)),
+            log_mass_offset_width=float(getattr(state, "independent_scaling_free_log_mass_offset_width", 0.20)),
         ),
     )
     best_value_selected = str((results.init_diagnostics or {}).get("best_value_selected", "") or "")

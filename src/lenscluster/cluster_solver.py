@@ -35,10 +35,11 @@ import pandas as pd
 import h5py
 from astropy.cosmology import FlatLambdaCDM, FlatwCDM, LambdaCDM, wCDM
 from jax import config as jax_config
+from jax.flatten_util import ravel_pytree
 from numpyro.infer import MCMC, NUTS, SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoNormal
 from numpyro.infer.initialization import init_to_value
-from numpyro.infer.util import unconstrain_fn
+from numpyro.infer.util import potential_energy, unconstrain_fn
 try:
     from rich.progress import (
         BarColumn,
@@ -244,15 +245,19 @@ DEFAULT_JAX_CLEAR_CACHES_AFTER_SVI_REFRESH = True
 DEFAULT_NUMPYRO_PRINT_SUMMARY = False
 DEFAULT_NUTS_CHAIN_METHOD = "parallel"
 NUTS_CHAIN_METHOD_CHOICES = ("parallel", "sequential")
-NUTS_DENSE_MASS_STRUCTURED = "structured"
 NUTS_DENSE_MASS_FULL = "full"
 NUTS_DENSE_MASS_DIAGONAL = "diagonal"
 NUTS_DENSE_MASS_CHOICES = (
-    NUTS_DENSE_MASS_STRUCTURED,
     NUTS_DENSE_MASS_FULL,
     NUTS_DENSE_MASS_DIAGONAL,
 )
-DEFAULT_NUTS_DENSE_MASS = NUTS_DENSE_MASS_STRUCTURED
+DEFAULT_NUTS_DENSE_MASS = NUTS_DENSE_MASS_FULL
+# Hessian-seeded dense inverse mass for full-flat NUTS runs. The eigenvalue floor is the
+# prior curvature scale in numpyro's unconstrained space, so flat or negatively curved
+# directions fall back to unit mass instead of exploding when the Hessian is inverted.
+NUTS_MASS_SEED_EIG_FLOOR = 1.0
+NUTS_MASS_SEED_MAX_DIM = 2000
+NUTS_MASS_SEED_FD_STEP = 1.0e-4
 DEFAULT_NUTS_INIT_BOUNDARY_FRAC = 0.02
 DEFAULT_NUTS_INIT_JITTER_FRAC = 0.02
 DEFAULT_SVI_STEPS = 2000
@@ -319,9 +324,10 @@ DEFAULT_IMAGE_PLANE_SCATTER_PRIOR_MEDIAN_ARCSEC = 0.3
 DEFAULT_IMAGE_PLANE_SCATTER_PRIOR_LOG_SIGMA = 0.5
 DEFAULT_SCALING_SCATTER_PRIOR_MEDIAN = 0.02
 DEFAULT_SCALING_SCATTER_PRIOR_LOG_SIGMA = 0.5
-DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN = 0.10
-DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN = 0.20
-DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA = 0.25
+# Fixed per-member log-offset widths for promoted (independent) members: the physical
+# offset is width x delta_unit with delta_unit ~ N(0,1). No population tau is sampled.
+DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH = 0.10
+DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH = 0.20
 DEFAULT_INDEPENDENT_SCALING_FREE_E_STD = 0.25
 DEFAULT_INDEPENDENT_SCALING_FREE_E_CENTER_CLIP = 0.30
 DEFAULT_INDEPENDENT_SCALING_FREE_E_LOWER = -0.35
@@ -354,10 +360,50 @@ DEFAULT_SOLVER_POTFILE_GAMMA_ML_STD = 0.12
 DEFAULT_SOLVER_POTFILE_GAMMA_ML_LOWER = -0.40
 DEFAULT_SOLVER_POTFILE_GAMMA_ML_UPPER = 0.40
 SOLVER_POTFILE_POSITIVE_PRIOR_COORDINATE = "log_positive_latent"
-DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC = 0.01
-DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL = 0.01
+# Promotion is detection-referenced: a member is a candidate when a plausible offset of
+# `width` in ln(sigma) (alpha ~ sigma^2 -> image shift ~ ALPHA_LOG_SLOPE * width * |alpha|)
+# would move an image by DETECTION_SIGMA positional sigmas. The Jacobian term uses a
+# lever arm to convert local Jacobian perturbations into an equivalent positional effect.
+PERTURBATION_DISCOVERY_DETECTION_SIGMA = 1.0
+PERTURBATION_DISCOVERY_ALPHA_LOG_SLOPE = 2.0
+PERTURBATION_DISCOVERY_JACOBIAN_LEVER_ARCSEC = 1.0
+PERTURBATION_DISCOVERY_SCORE_DRAWS = 16
 DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT = 1.0
 DEFAULT_PERTURBATION_DISCOVERY_TOP_K = None
+
+
+def _perturbation_discovery_calibrated_tolerances(
+    pos_sigma_arcsec: float,
+    log_sigma_offset_width: float,
+) -> tuple[float, float]:
+    """Detection-referenced score tolerances (alpha_tol_arcsec, jacobian_tol)."""
+    pos_sigma = float(pos_sigma_arcsec)
+    width = float(log_sigma_offset_width)
+    if not np.isfinite(pos_sigma) or pos_sigma <= 0.0:
+        raise ValueError("perturbation discovery calibration requires a positive positional sigma.")
+    if not np.isfinite(width) or width <= 0.0:
+        raise ValueError("perturbation discovery calibration requires a positive log-sigma offset width.")
+    alpha_tol = (
+        float(PERTURBATION_DISCOVERY_DETECTION_SIGMA)
+        * pos_sigma
+        / (float(PERTURBATION_DISCOVERY_ALPHA_LOG_SLOPE) * width)
+    )
+    jacobian_tol = alpha_tol / float(PERTURBATION_DISCOVERY_JACOBIAN_LEVER_ARCSEC)
+    return alpha_tol, jacobian_tol
+
+
+def _perturbation_discovery_tolerances_from_evaluator(evaluator: Any) -> tuple[float, float]:
+    state = getattr(evaluator, "state", None)
+    return _perturbation_discovery_calibrated_tolerances(
+        float(getattr(state, "sigma_arcsec", 0.0)),
+        float(
+            getattr(
+                state,
+                "independent_scaling_free_log_sigma_offset_width",
+                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
+            )
+        ),
+    )
 DEFAULT_LINEARIZED_BETA_PRIOR_SIGMA_ARCSEC = 2.0
 DEFAULT_SOURCE_PLANE_OUTLIER_SIGMA_ARCSEC = 10.0
 DEFAULT_IMAGE_PRESENCE_STAGE4_PENALTY_WEIGHT = 2.0
@@ -1546,8 +1592,8 @@ def _solver_active_approximation_items(evaluator: Any) -> list[str]:
         if perturbation_stage0:
             items.append(
                 "sampling_engine=full_flat purpose=stage0_perturbation_discovery "
-                f"alpha_tol_arcsec={float(getattr(evaluator, 'perturbation_discovery_alpha_tol_arcsec', DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC)):.4g} "
-                f"jacobian_tol={float(getattr(evaluator, 'perturbation_discovery_jacobian_tol', DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL)):.4g}"
+                f"alpha_tol_arcsec={_perturbation_discovery_tolerances_from_evaluator(evaluator)[0]:.4g} "
+                f"jacobian_tol={_perturbation_discovery_tolerances_from_evaluator(evaluator)[1]:.4g}"
             )
         elif sample_likelihood_mode == SAMPLE_LIKELIHOOD_SOURCE:
             items.append("sampling_engine=full_flat exact flattened source-plane likelihood")
@@ -1888,14 +1934,14 @@ def _active_approximation_rows(evaluator: Any) -> list[ApproximationRow]:
         rows.append(
             (
                 "perturbation_discovery_alpha_tol_arcsec",
-                _format_approximation_value(getattr(evaluator, "perturbation_discovery_alpha_tol_arcsec", DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC)),
+                _format_approximation_value(_perturbation_discovery_tolerances_from_evaluator(evaluator)[0]),
                 "selection",
             )
         )
         rows.append(
             (
                 "perturbation_discovery_jacobian_tol",
-                _format_approximation_value(getattr(evaluator, "perturbation_discovery_jacobian_tol", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL)),
+                _format_approximation_value(_perturbation_discovery_tolerances_from_evaluator(evaluator)[1]),
                 "selection",
             )
         )
@@ -9298,7 +9344,14 @@ def _perturbation_discovery_image_rank_positions(score: np.ndarray) -> np.ndarra
 def _perturbation_discovery_top_k_selected(
     score: np.ndarray,
     top_k: int,
+    threshold_score: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Threshold decides, top_k bounds dimensionality.
+
+    A (candidate, image) pair is selected only when it BOTH passes the detection
+    threshold and ranks within the top_k most important candidates at that image;
+    top_k is a pure cap and never admits undetectable members.
+    """
     score = np.asarray(score, dtype=float)
     rank_score, rank_position = _perturbation_discovery_rank_scores(score)
     if score.ndim != 2:
@@ -9308,7 +9361,11 @@ def _perturbation_discovery_top_k_selected(
     selected_pair = np.zeros(score.shape, dtype=bool)
     if score.size:
         finite = np.isfinite(score)
-        selected_pair = finite & (image_rank_position <= min(int(top_k), score.shape[0]))
+        selected_pair = (
+            finite
+            & (image_rank_position <= min(int(top_k), score.shape[0]))
+            & (score > float(threshold_score))
+        )
     selected = np.any(selected_pair, axis=1) if selected_pair.ndim == 2 else np.zeros(rank_score.size, dtype=bool)
     return selected, selected_pair, rank_score, rank_position, image_rank_position
 
@@ -9318,10 +9375,10 @@ def _perturbation_discovery_top_k_from_evaluator(evaluator: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, Integral):
-        raise ValueError("perturbation_discovery_top_k must be a positive integer or None.")
+        raise ValueError("perturbation_discovery_top_k must be a nonnegative integer or None.")
     top_k = int(value)
-    if top_k <= 0:
-        raise ValueError("perturbation_discovery_top_k must be a positive integer or None.")
+    if top_k < 0:
+        raise ValueError("perturbation_discovery_top_k must be a nonnegative integer or None.")
     return top_k
 
 
@@ -9453,12 +9510,51 @@ def _perturbation_discovery_identity_and_evaluation_components(
     )
 
 
+def _perturbation_discovery_reference_draws(
+    posterior: Any,
+    reference: np.ndarray,
+    *,
+    max_draws: int = PERTURBATION_DISCOVERY_SCORE_DRAWS,
+) -> np.ndarray | None:
+    """Evenly spaced posterior draws (latent space) for draw-median discovery scoring.
+
+    Returns None when the posterior is unavailable or too small, so the caller falls
+    back to the single reference point with a loud log line.
+    """
+    samples = getattr(posterior, "samples", None)
+    if samples is None:
+        return None
+    sample_array = np.asarray(samples, dtype=float)
+    if sample_array.ndim != 2 or sample_array.shape[0] < 2 or sample_array.shape[1] != reference.shape[0]:
+        return None
+    n_draws = min(int(max_draws), int(sample_array.shape[0]))
+    indices = np.unique(np.linspace(0, sample_array.shape[0] - 1, n_draws).astype(int))
+    draws = sample_array[indices]
+    if not np.all(np.isfinite(draws)):
+        finite_rows = draws[np.all(np.isfinite(draws), axis=1)]
+        if finite_rows.shape[0] < 2:
+            return None
+        draws = finite_rows
+    return draws
+
+
 def _perturbation_discovery_union_from_evaluator(
     state: BuildState,
     evaluator: ClusterJAXEvaluator,
     reference_params: np.ndarray,
+    reference_draws: np.ndarray | None = None,
 ) -> tuple[list[set[int]], dict[str, Any], pd.DataFrame]:
     selected_by_potfile = _empty_selected_by_potfile(state)
+    alpha_tol, jacobian_tol = _perturbation_discovery_calibrated_tolerances(
+        float(getattr(state, "sigma_arcsec", 0.0)),
+        float(
+            getattr(
+                state,
+                "independent_scaling_free_log_sigma_offset_width",
+                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
+            )
+        ),
+    )
     top_k = _perturbation_discovery_top_k_from_evaluator(evaluator)
     selection_mode = "top_k" if top_k is not None else "threshold"
     candidates, evaluation_candidates, free_evaluation_count = _perturbation_discovery_identity_and_evaluation_components(
@@ -9477,8 +9573,8 @@ def _perturbation_discovery_union_from_evaluator(
             "candidate_galaxies": int(candidates.size),
             "evaluated_free_branch_galaxies": int(free_evaluation_count),
             "n_images": int(n_images),
-            "alpha_tol_arcsec": float(getattr(evaluator, "perturbation_discovery_alpha_tol_arcsec", DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC)),
-            "jacobian_tol": float(getattr(evaluator, "perturbation_discovery_jacobian_tol", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL)),
+            "alpha_tol_arcsec": alpha_tol,
+            "jacobian_tol": jacobian_tol,
             "jacobian_weight": float(getattr(evaluator, "perturbation_discovery_jacobian_weight", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT)),
             "selection_mode": selection_mode,
             "top_k_requested": top_k,
@@ -9486,69 +9582,90 @@ def _perturbation_discovery_union_from_evaluator(
             "max_unselected_score": 0.0,
         }, _empty_perturbation_discovery_diagnostics_table()
     reference = np.asarray(reference_params, dtype=float)
-    reference_jax = jnp.asarray(reference, dtype=jnp.float64)
-    physical_params = evaluator._physical_parameter_vector(reference_jax)
-    packed_state, validity = evaluator._build_flat_packed_lens_state_with_validity_from_physical(
-        physical_params,
-        flat_data,
-        stop_gradient=False,
-    )
-    if not bool(np.asarray(validity.is_valid, dtype=bool)):
-        evaluator._record_invalid_state_host(np.asarray(validity.reason_flags, dtype=bool))
-        return selected_by_potfile, {
-            "count": 0,
-            "exact_unique": 0,
-            "pairs": 0,
-            "source": "full_scaling",
-            "refresh_failed": True,
-            "score_fraction": 0.0,
-            "candidate_galaxies": int(candidates.size),
-            "evaluated_free_branch_galaxies": int(free_evaluation_count),
-            "n_images": int(n_images),
-            "alpha_tol_arcsec": float(getattr(evaluator, "perturbation_discovery_alpha_tol_arcsec", DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC)),
-            "jacobian_tol": float(getattr(evaluator, "perturbation_discovery_jacobian_tol", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL)),
-            "jacobian_weight": float(getattr(evaluator, "perturbation_discovery_jacobian_weight", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT)),
-            "selection_mode": selection_mode,
-            "top_k_requested": top_k,
-            "max_selected_score": 0.0,
-            "max_unselected_score": 0.0,
-        }, _empty_perturbation_discovery_diagnostics_table()
-    rows = evaluator._flat_component_alpha_and_jacobian_delta_rows_for_components(
-        flat_data.x_obs,
-        flat_data.y_obs,
-        packed_state,
-        evaluation_candidates,
-    )
-    arrays = [np.asarray(value, dtype=float) for value in rows]
-    if not all(np.isfinite(array).all() for array in arrays):
-        return selected_by_potfile, {
-            "count": 0,
-            "exact_unique": 0,
-            "pairs": 0,
-            "source": "full_scaling",
-            "refresh_failed": True,
-            "score_fraction": 0.0,
-            "candidate_galaxies": int(candidates.size),
-            "evaluated_free_branch_galaxies": int(free_evaluation_count),
-            "n_images": int(n_images),
-            "alpha_tol_arcsec": float(getattr(evaluator, "perturbation_discovery_alpha_tol_arcsec", DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC)),
-            "jacobian_tol": float(getattr(evaluator, "perturbation_discovery_jacobian_tol", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL)),
-            "jacobian_weight": float(getattr(evaluator, "perturbation_discovery_jacobian_weight", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT)),
-            "selection_mode": selection_mode,
-            "top_k_requested": top_k,
-            "max_selected_score": 0.0,
-            "max_unselected_score": 0.0,
-        }, _empty_perturbation_discovery_diagnostics_table()
-    alpha_x, alpha_y, jac00, jac01, jac10, jac11 = arrays
-    alpha_tol = float(getattr(evaluator, "perturbation_discovery_alpha_tol_arcsec", DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC))
-    jacobian_tol = float(getattr(evaluator, "perturbation_discovery_jacobian_tol", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL))
+    evaluation_thetas: list[np.ndarray] = []
+    if reference_draws is not None:
+        draw_array = np.asarray(reference_draws, dtype=float)
+        if draw_array.ndim == 2 and draw_array.shape[0] >= 1 and draw_array.shape[1] == reference.shape[0]:
+            evaluation_thetas = [draw_array[index] for index in range(draw_array.shape[0])]
+    if not evaluation_thetas:
+        evaluation_thetas = [reference]
     jacobian_weight = float(getattr(evaluator, "perturbation_discovery_jacobian_weight", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT))
-    if not np.isfinite(alpha_tol) or alpha_tol <= 0.0:
-        raise ValueError("perturbation_discovery_alpha_tol_arcsec must be finite and positive.")
-    if not np.isfinite(jacobian_tol) or jacobian_tol <= 0.0:
-        raise ValueError("perturbation_discovery_jacobian_tol must be finite and positive.")
     if not np.isfinite(jacobian_weight) or jacobian_weight < 0.0:
         raise ValueError("perturbation_discovery_jacobian_weight must be finite and non-negative.")
+    alpha_mag_draws: list[np.ndarray] = []
+    jac_frob_draws: list[np.ndarray] = []
+    invalid_evaluations = 0
+    for theta in evaluation_thetas:
+        theta_jax = jnp.asarray(np.asarray(theta, dtype=float), dtype=jnp.float64)
+        physical_params = evaluator._physical_parameter_vector(theta_jax)
+        packed_state, validity = evaluator._build_flat_packed_lens_state_with_validity_from_physical(
+            physical_params,
+            flat_data,
+            stop_gradient=False,
+        )
+        if not bool(np.asarray(validity.is_valid, dtype=bool)):
+            invalid_evaluations += 1
+            continue
+        rows = evaluator._flat_component_alpha_and_jacobian_delta_rows_for_components(
+            flat_data.x_obs,
+            flat_data.y_obs,
+            packed_state,
+            evaluation_candidates,
+        )
+        arrays = [np.asarray(value, dtype=float) for value in rows]
+        if not all(np.isfinite(array).all() for array in arrays):
+            invalid_evaluations += 1
+            continue
+        draw_ax, draw_ay, draw_j00, draw_j01, draw_j10, draw_j11 = arrays
+        alpha_mag_draws.append(np.sqrt(np.square(draw_ax) + np.square(draw_ay)))
+        jac_frob_draws.append(
+            np.sqrt(np.square(draw_j00) + np.square(draw_j01) + np.square(draw_j10) + np.square(draw_j11))
+        )
+    if not alpha_mag_draws:
+        return selected_by_potfile, {
+            "count": 0,
+            "exact_unique": 0,
+            "pairs": 0,
+            "source": "full_scaling",
+            "refresh_failed": True,
+            "score_fraction": 0.0,
+            "candidate_galaxies": int(candidates.size),
+            "evaluated_free_branch_galaxies": int(free_evaluation_count),
+            "n_images": int(n_images),
+            "alpha_tol_arcsec": alpha_tol,
+            "jacobian_tol": jacobian_tol,
+            "jacobian_weight": jacobian_weight,
+            "selection_mode": selection_mode,
+            "top_k_requested": top_k,
+            "score_draws_requested": int(len(evaluation_thetas)),
+            "score_draws_valid": 0,
+            "score_draws_invalid": int(invalid_evaluations),
+            "max_selected_score": 0.0,
+            "max_unselected_score": 0.0,
+        }, _empty_perturbation_discovery_diagnostics_table()
+    # Draw-median magnitudes: robust to the SVI/refresh state wobble of any single iterate.
+    # The score only consumes |alpha| and |J|_F, so the medians are packed into the x / 00
+    # slots with the remaining components zeroed.
+    alpha_mag = np.median(np.stack(alpha_mag_draws, axis=0), axis=0)
+    jac_frob = np.median(np.stack(jac_frob_draws, axis=0), axis=0)
+    draw_scores = np.stack(
+        [
+            np.sqrt(
+                np.square(mag / alpha_tol) + jacobian_weight * np.square(frob / jacobian_tol)
+            )
+            for mag, frob in zip(alpha_mag_draws, jac_frob_draws)
+        ],
+        axis=0,
+    )
+    score_draw_q16 = np.quantile(draw_scores, 0.16, axis=0)
+    score_draw_q84 = np.quantile(draw_scores, 0.84, axis=0)
+    zeros_like_rows = np.zeros_like(alpha_mag)
+    alpha_x = alpha_mag
+    alpha_y = zeros_like_rows
+    jac00 = jac_frob
+    jac01 = zeros_like_rows
+    jac10 = zeros_like_rows
+    jac11 = zeros_like_rows
     detail_df, score, above_threshold, selected_per_candidate = _perturbation_discovery_score_table(
         state,
         flat_data,
@@ -9566,6 +9683,7 @@ def _perturbation_discovery_union_from_evaluator(
         threshold_score=1.0,
     )
     selected_pair_for_summary = above_threshold
+    threshold_selected_galaxies = int(np.count_nonzero(selected_per_candidate))
     if top_k is not None:
         (
             selected_per_candidate,
@@ -9623,6 +9741,23 @@ def _perturbation_discovery_union_from_evaluator(
         unselected_scores = score[~selected_per_candidate, :] if np.any(~selected_per_candidate) else np.asarray([], dtype=float)
         selected_pair_count = int(np.count_nonzero(above_threshold))
     score_fraction = score_selected / score_total if score_total > 0.0 else 0.0
+    if not detail_df.empty:
+        detail_df = detail_df.copy()
+        detail_df["score_q16"] = score_draw_q16.reshape(-1)
+        detail_df["score_q84"] = score_draw_q84.reshape(-1)
+        detail_df["score_draws_valid"] = int(len(alpha_mag_draws))
+    # Selection margin compares per-candidate PEAK scores (a selected galaxy's weak images
+    # must not drag the margin down): min peak among selected minus max peak among unselected.
+    candidate_peak_scores = np.max(score, axis=1) if score.size else np.asarray([], dtype=float)
+    selected_peaks = candidate_peak_scores[selected_per_candidate] if np.any(selected_per_candidate) else np.asarray([], dtype=float)
+    unselected_peaks = candidate_peak_scores[~selected_per_candidate] if np.any(~selected_per_candidate) else np.asarray([], dtype=float)
+    min_selected_score = float(np.min(selected_peaks)) if selected_peaks.size else float("nan")
+    max_unselected_score_value = float(np.max(unselected_peaks)) if unselected_peaks.size else float("nan")
+    selection_margin = (
+        min_selected_score - max_unselected_score_value
+        if np.isfinite(min_selected_score) and np.isfinite(max_unselected_score_value)
+        else float("nan")
+    )
     return selected_by_potfile, {
         "count": int(sum(len(values) for values in selected_by_potfile)),
         "exact_unique": int(len(valid_components)),
@@ -9638,8 +9773,15 @@ def _perturbation_discovery_union_from_evaluator(
         "jacobian_weight": float(jacobian_weight),
         "selection_mode": selection_mode,
         "top_k_requested": top_k,
+        "threshold_selected_galaxies": threshold_selected_galaxies,
+        "top_k_selected_galaxies": int(np.count_nonzero(selected_per_candidate)) if top_k is not None else None,
         "max_selected_score": float(np.max(selected_scores)) if selected_scores.size else 0.0,
         "max_unselected_score": float(np.max(unselected_scores)) if unselected_scores.size else 0.0,
+        "min_selected_score": min_selected_score,
+        "selection_margin": selection_margin,
+        "score_draws_requested": int(len(evaluation_thetas)),
+        "score_draws_valid": int(len(alpha_mag_draws)),
+        "score_draws_invalid": int(invalid_evaluations),
         "threshold_score": 1.0,
     }, detail_df
 
@@ -9661,6 +9803,8 @@ def _perturbation_discovery_svi_final_log_message(
         f"jacobian_weight={float(final_union_diag.get('jacobian_weight', 0.0)):.4g} "
         f"selection_mode={final_union_diag.get('selection_mode', 'threshold')} "
         f"top_k_requested={final_union_diag.get('top_k_requested', None)} "
+        f"threshold_selected_galaxies={final_union_diag.get('threshold_selected_galaxies', None)} "
+        f"top_k_selected_galaxies={final_union_diag.get('top_k_selected_galaxies', None)} "
         f"max_selected_score={float(final_union_diag.get('max_selected_score', 0.0)):.4g} "
         f"max_unselected_score={float(final_union_diag.get('max_unselected_score', 0.0)):.4g} "
         f"score_fraction={float(final_union_diag.get('score_fraction', 0.0)):.4g} "
@@ -11525,6 +11669,105 @@ def _clip_theta_matrix_to_support(
     return clipped
 
 
+def _hessian_seeded_inverse_mass(
+    args: argparse.Namespace | None,
+    sample_model,
+    parameter_specs: list[ParameterSpec],
+    reference_theta: np.ndarray,
+) -> tuple[jnp.ndarray, dict[str, Any]]:
+    """Full dense inverse mass seeded from the local Hessian of the run's potential.
+
+    Evaluated at the run's latent init center in numpyro's unconstrained space. The
+    returned matrix is layout-compatible with ``dense_mass=True`` because both sides
+    ravel the unconstrained site dict with the same pytree ordering. This is the only
+    mass-matrix initialization for full-flat NUTS: failures raise instead of silently
+    reverting to un-seeded adaptation.
+    """
+    start = time.perf_counter()
+    diagnostics: dict[str, Any] = {"used": False}
+    if not parameter_specs:
+        raise RuntimeError("Hessian mass seeding requires at least one sampled parameter.")
+    sites = _parameter_sample_sites(parameter_specs)
+    theta = jnp.asarray(np.asarray(reference_theta, dtype=float), dtype=jnp.float64)
+    params_constrained = {site.name: _site_value_from_theta(theta, site) for site in sites}
+    unconstrained = unconstrain_fn(
+        _sample_site_model(parameter_specs),
+        model_args=(),
+        model_kwargs={},
+        params=params_constrained,
+    )
+    u_flat, unravel = ravel_pytree(
+        {site.name: jnp.asarray(unconstrained[site.name], dtype=jnp.float64) for site in sites}
+    )
+    dim = int(u_flat.size)
+    diagnostics["dim"] = dim
+    if dim > int(NUTS_MASS_SEED_MAX_DIM):
+        _log(
+            args,
+            f"[nuts] mass_seed dim={dim} exceeds {int(NUTS_MASS_SEED_MAX_DIM)}; "
+            "Hessian computation may be slow",
+        )
+
+    def _negative_log_density(u: jnp.ndarray) -> jnp.ndarray:
+        return potential_energy(sample_model, model_args=(), model_kwargs={}, params=unravel(u))
+
+    try:
+        hessian = np.asarray(jax.jacfwd(jax.grad(_negative_log_density))(u_flat), dtype=float)
+    except Exception as error:
+        # Forward-over-reverse can fail on likelihood paths that only support reverse
+        # mode; fall back to central differences of the gradient.
+        _log(args, f"[nuts] mass_seed hessian jacfwd failed ({error!r}); using finite differences")
+        try:
+            grad_fn = jax.jit(jax.grad(_negative_log_density))
+            step = float(NUTS_MASS_SEED_FD_STEP)
+            u_np = np.asarray(u_flat, dtype=float)
+            columns = []
+            for index in range(dim):
+                offset = np.zeros(dim, dtype=float)
+                offset[index] = step
+                g_plus = np.asarray(grad_fn(jnp.asarray(u_np + offset)), dtype=float)
+                g_minus = np.asarray(grad_fn(jnp.asarray(u_np - offset)), dtype=float)
+                columns.append((g_plus - g_minus) / (2.0 * step))
+            hessian = np.stack(columns, axis=1)
+            diagnostics["finite_difference"] = True
+        except Exception as fd_error:
+            raise RuntimeError(
+                f"Hessian mass seeding failed in both jacfwd and finite-difference modes: {fd_error!r}"
+            ) from fd_error
+    if not np.all(np.isfinite(hessian)):
+        raise RuntimeError(
+            "Hessian mass seeding produced a non-finite Hessian at the NUTS init point; "
+            "the potential or its gradient is invalid there."
+        )
+    hessian = 0.5 * (hessian + hessian.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(hessian)
+    floored = np.clip(eigenvalues, float(NUTS_MASS_SEED_EIG_FLOOR), None)
+    inverse_mass = (eigenvectors * (1.0 / floored)) @ eigenvectors.T
+    inverse_mass = 0.5 * (inverse_mass + inverse_mass.T)
+    positive = eigenvalues[eigenvalues > 0.0]
+    diagnostics.update(
+        {
+            "used": True,
+            "seconds": float(time.perf_counter() - start),
+            "n_negative_eigenvalues": int(np.sum(eigenvalues < 0.0)),
+            "condition_raw": float(positive.max() / positive.min()) if positive.size else float("nan"),
+            "condition_floored": float(floored.max() / floored.min()),
+        }
+    )
+    _log(
+        args,
+        (
+            f"[nuts] mass_seed=ok dim={dim} "
+            f"cond_raw={diagnostics['condition_raw']:.3e} "
+            f"cond_floored={diagnostics['condition_floored']:.3e} "
+            f"neg_eigs={diagnostics['n_negative_eigenvalues']} "
+            f"fd={bool(diagnostics.get('finite_difference', False))} "
+            f"seconds={diagnostics['seconds']:.1f}"
+        ),
+    )
+    return jnp.asarray(inverse_mass, dtype=jnp.float64), diagnostics
+
+
 def _run_numpyro_nuts_sampler(
     args: argparse.Namespace,
     state: BuildState,
@@ -11543,14 +11786,20 @@ def _run_numpyro_nuts_sampler(
             "or pass --nuts-chain-method sequential."
         )
     max_tree_depth = _max_tree_depth_for_args(args)
-    dense_mass = _nuts_dense_mass_argument(args, state)
-    dense_mass_structure = _resolved_nuts_dense_mass_structure(args, state)
+    # Full-flat NUTS always runs with a full dense inverse mass seeded from the local
+    # Hessian of this run's potential; there is no un-seeded fallback.
+    dense_mass = True
+    seed_inverse_mass, mass_seed_diagnostics = _hessian_seeded_inverse_mass(
+        args,
+        sample_model,
+        state.parameter_specs,
+        nuts_init.reference_theta,
+    )
+    nuts_init.diagnostics["nuts_mass_seed"] = mass_seed_diagnostics
     print_summary = bool(getattr(args, "numpyro_print_summary", DEFAULT_NUMPYRO_PRINT_SUMMARY))
-    nuts_init.diagnostics["dense_mass"] = dense_mass is not False
-    nuts_init.diagnostics["nuts_dense_mass"] = _nuts_dense_mass_diagnostic_value(dense_mass)
-    nuts_init.diagnostics["nuts_dense_mass_structure"] = dense_mass_structure
-    if not isinstance(dense_mass, bool):
-        nuts_init.diagnostics["nuts_dense_mass_blocks"] = _nuts_dense_mass_diagnostic_value(dense_mass)
+    nuts_init.diagnostics["dense_mass"] = True
+    nuts_init.diagnostics["nuts_dense_mass"] = True
+    nuts_init.diagnostics["nuts_dense_mass_structure"] = NUTS_DENSE_MASS_FULL
     nuts_init.diagnostics["nuts_chain_method"] = chain_method
     nuts_init.diagnostics["nuts_chain_method_requested"] = requested_chain_method
     nuts_init.diagnostics["numpyro_print_summary"] = print_summary
@@ -11571,12 +11820,14 @@ def _run_numpyro_nuts_sampler(
             f"[nuts] preparing sampler chains={args.chains} chain_method={chain_method} "
             f"warmup={args.warmup} samples={args.samples} thin={args.thin} "
             f"target_accept={args.target_accept:.2f} max_tree_depth={max_tree_depth} "
-            f"dense_mass={_format_nuts_dense_mass_for_log(dense_mass)} "
-            f"dense_mass_structure={dense_mass_structure} print_summary={print_summary} "
+            f"dense_mass=full "
+            f"dense_mass_structure={NUTS_DENSE_MASS_FULL} print_summary={print_summary} "
             f"image_sigma_int_sampled={bool(getattr(evaluator, 'image_sigma_int_sampled', False))} "
             f"fixed_image_sigma_int_arcsec={getattr(evaluator, 'fixed_image_sigma_int_arcsec', None)} "
             f"initial_step_size={float(args.initial_step_size):.3g} "
-            f"init={nuts_init.diagnostics['strategy_used']} distinct_seeds={nuts_init.diagnostics['distinct_chain_seeds']}"
+            f"init={nuts_init.diagnostics['strategy_used']} distinct_seeds={nuts_init.diagnostics['distinct_chain_seeds']} "
+            f"mass_seed=ok dim={mass_seed_diagnostics.get('dim')} "
+            f"cond_raw={mass_seed_diagnostics.get('condition_raw', float('nan')):.3e}"
         ),
     )
     nuts = NUTS(
@@ -11585,6 +11836,7 @@ def _run_numpyro_nuts_sampler(
         max_tree_depth=max_tree_depth,
         step_size=float(args.initial_step_size),
         dense_mass=dense_mass,
+        inverse_mass_matrix=seed_inverse_mass,
     )
     mcmc = MCMC(
         nuts,
@@ -14793,55 +15045,6 @@ def _unique_sample_site_names(parameter_specs: Iterable[ParameterSpec]) -> tuple
     return tuple(names)
 
 
-def _source_position_dense_mass_blocks(parameter_specs: list[ParameterSpec]) -> tuple[tuple[str, ...], ...]:
-    grouped: dict[str, list[tuple[int, ParameterSpec]]] = {}
-    group_order: list[str] = []
-    for idx, spec in enumerate(parameter_specs):
-        if str(getattr(spec, "component_family", "")) != "source_position":
-            continue
-        group_name = str(getattr(spec, "potential_id", "") or getattr(spec, "sample_site_name", "") or spec.sample_name)
-        if group_name not in grouped:
-            grouped[group_name] = []
-            group_order.append(group_name)
-        grouped[group_name].append((idx, spec))
-
-    field_rank = {
-        "beta_x": 0,
-        "x": 0,
-        "source_x": 0,
-        "beta_y": 1,
-        "y": 1,
-        "source_y": 1,
-    }
-    blocks: list[tuple[str, ...]] = []
-    emitted_sites: set[str] = set()
-    for group_name in group_order:
-        ordered_specs = [
-            spec
-            for _idx, spec in sorted(
-                grouped[group_name],
-                key=lambda item: (field_rank.get(str(getattr(item[1], "field", "")), 10), item[0]),
-            )
-        ]
-        site_names = _unique_sample_site_names(ordered_specs)
-        site_names = tuple(name for name in site_names if name not in emitted_sites)
-        if site_names:
-            blocks.append(site_names)
-            emitted_sites.update(site_names)
-    return tuple(blocks)
-
-
-def _structured_nuts_dense_mass_blocks(parameter_specs: list[ParameterSpec]) -> tuple[tuple[str, ...], ...]:
-    non_source_sites = _unique_sample_site_names(
-        spec for spec in parameter_specs if str(getattr(spec, "component_family", "")) != "source_position"
-    )
-    blocks: list[tuple[str, ...]] = []
-    if non_source_sites:
-        blocks.append(non_source_sites)
-    blocks.extend(_source_position_dense_mass_blocks(parameter_specs))
-    return tuple(blocks)
-
-
 def _resolved_nuts_dense_mass_structure(args: argparse.Namespace, state: BuildState | None = None) -> str:
     requested = str(getattr(args, "dense_mass", DEFAULT_NUTS_DENSE_MASS))
     if requested not in NUTS_DENSE_MASS_CHOICES:
@@ -14849,36 +15052,10 @@ def _resolved_nuts_dense_mass_structure(args: argparse.Namespace, state: BuildSt
     return requested
 
 
-def _nuts_dense_mass_argument(args: argparse.Namespace, state: BuildState) -> bool | list[tuple[str, ...]]:
-    structure = _resolved_nuts_dense_mass_structure(args, state)
-    if structure == NUTS_DENSE_MASS_DIAGONAL:
-        return False
-    if structure == NUTS_DENSE_MASS_FULL:
-        return True
-    has_source_positions = any(
-        str(getattr(spec, "component_family", "")) == "source_position"
-        for spec in getattr(state, "parameter_specs", [])
-    )
-    if not has_source_positions:
-        return True
-    blocks = _structured_nuts_dense_mass_blocks(list(getattr(state, "parameter_specs", [])))
-    return list(blocks) if blocks else False
-
-
 def _blocked_nuts_dense_mass_argument(args: argparse.Namespace) -> bool:
     return _resolved_nuts_dense_mass_structure(args) != NUTS_DENSE_MASS_DIAGONAL
 
 
-def _nuts_dense_mass_diagnostic_value(dense_mass: bool | list[tuple[str, ...]]) -> bool | list[list[str]]:
-    if isinstance(dense_mass, bool):
-        return dense_mass
-    return [list(block) for block in dense_mass]
-
-
-def _format_nuts_dense_mass_for_log(dense_mass: bool | list[tuple[str, ...]]) -> str:
-    if isinstance(dense_mass, bool):
-        return str(dense_mass)
-    return f"structured[{len(dense_mass)} blocks]"
 
 
 def _site_value_from_theta(theta: np.ndarray | jnp.ndarray, site: _SampleSiteSpec) -> jnp.ndarray:
@@ -15648,6 +15825,33 @@ def _build_scaling_parameter_specs(
     return specs, param_index_by_potfile, lens_model_list
 
 
+def _ensure_scaling_scatter_has_cached_members(
+    potfiles: list[dict[str, Any]],
+    active_selected_by_potfile: list[set[int]],
+) -> None:
+    """Fail fast when the linearized scatter parameters could not affect the likelihood.
+
+    The sigma/mass_log_scatter amplitudes act only on members that stay on the cached
+    scaling relation; if every member of a potfile is promoted to independent, sampling
+    them would silently add dead dimensions.
+    """
+    for potfile_order, potfile in enumerate(potfiles):
+        n_members = int(len(potfile["catalog_df"]))
+        n_selected = (
+            len(active_selected_by_potfile[potfile_order])
+            if potfile_order < len(active_selected_by_potfile)
+            else 0
+        )
+        if n_members > 0 and n_selected >= n_members:
+            raise ValueError(
+                f"scaling_scatter=True but all {n_members} members of potfile "
+                f"{potfile['id']!r} are promoted to independent: sigma_log_scatter/"
+                "mass_log_scatter would be sampled but cannot affect the likelihood. "
+                "Lower perturbation_discovery_top_k (0 = promote no members) or "
+                "disable scaling_scatter."
+            )
+
+
 def _build_scaling_scatter_parameter_specs(
     potfiles: list[dict[str, Any]],
     *,
@@ -15695,16 +15899,13 @@ def _build_independent_scaling_parameter_specs(
     start_index: int,
     shape_selected_by_potfile: list[set[int]] | None = None,
     member_shape_values_by_potfile: list[dict[int, tuple[float, float]]] | None = None,
-    log_sigma_tau_prior_median: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN,
-    log_mass_tau_prior_median: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN,
-    log_tau_prior_sigma: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA,
+    log_sigma_offset_width: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
+    log_mass_offset_width: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
 ) -> tuple[list[ParameterSpec], list[dict[int, dict[str, int]]]]:
-    tau_medians = _validate_independent_scaling_log_displacement_hyperparameters(
-        log_sigma_tau_prior_median=log_sigma_tau_prior_median,
-        log_mass_tau_prior_median=log_mass_tau_prior_median,
-        log_tau_prior_sigma=log_tau_prior_sigma,
+    _validate_independent_scaling_log_displacement_hyperparameters(
+        log_sigma_offset_width=log_sigma_offset_width,
+        log_mass_offset_width=log_mass_offset_width,
     )
-    tau_prior_sigma = float(log_tau_prior_sigma)
     specs: list[ParameterSpec] = []
     indices_by_potfile: list[dict[int, dict[str, int]]] = []
     if shape_selected_by_potfile is None:
@@ -15751,25 +15952,6 @@ def _build_independent_scaling_parameter_specs(
             sample_site_index=int(site_index),
         )
 
-    def _tau_spec(*, potfile_id: str, field_name: str, median: float) -> ParameterSpec:
-        return ParameterSpec(
-            name=f"{potfile_id}.{field_name}",
-            sample_name=_sample_name(potfile_id, field_name),
-            potential_id=potfile_id,
-            profile_type=DP_IE_PROFILE,
-            field=field_name,
-            prior_kind="normal",
-            lower=float("-inf"),
-            upper=float("inf"),
-            step=0.1,
-            mean=float(np.log(median)),
-            std=tau_prior_sigma,
-            component_family="independent_scaling",
-            transform_kind="log_positive",
-            physical_lower=0.0,
-            physical_mean=float(median),
-        )
-
     for potfile_order, potfile in enumerate(potfiles):
         selected_rows = sorted(selected_by_potfile[potfile_order]) if potfile_order < len(selected_by_potfile) else []
         shape_rows = (
@@ -15789,18 +15971,9 @@ def _build_independent_scaling_parameter_specs(
             "independent_free_log_sigma_delta_unit": _sample_name(potfile_id, "independent_free_log_sigma_delta_unit"),
             "independent_free_log_mass_delta_unit": _sample_name(potfile_id, "independent_free_log_mass_delta_unit"),
         }
-        tau_indices: dict[str, int] = {}
-        if selected_rows:
-            for field_name, median in (
-                ("independent_free_log_sigma_tau", tau_medians[0]),
-                ("independent_free_log_mass_tau", tau_medians[1]),
-            ):
-                tau_indices[field_name] = start_index + len(specs)
-                specs.append(_tau_spec(potfile_id=potfile_id, field_name=field_name, median=float(median)))
         for site_index, row_index in enumerate(selected_rows):
             catalog_id = str(catalog_ids[int(row_index)])
             row_lookup = row_indices.setdefault(int(row_index), {})
-            row_lookup.update(tau_indices)
             for field_name in (
                 "independent_free_log_sigma_delta_unit",
                 "independent_free_log_mass_delta_unit",
@@ -16593,8 +16766,6 @@ def _build_packed_lens_spec(
     independent_magnitude_feature = np.zeros(n_components, dtype=float)
     independent_free_log_sigma_delta_unit_param_index = np.full(n_components, -1, dtype=np.int32)
     independent_free_log_mass_delta_unit_param_index = np.full(n_components, -1, dtype=np.int32)
-    independent_free_log_sigma_tau_param_index = np.full(n_components, -1, dtype=np.int32)
-    independent_free_log_mass_tau_param_index = np.full(n_components, -1, dtype=np.int32)
 
     for idx, (component, assignments) in enumerate(zip(base_components, component_param_assignments)):
         profile_type[idx] = int(component["profil"])
@@ -16649,8 +16820,6 @@ def _build_packed_lens_spec(
         independent_magnitude_feature[idx] = float(item.get("independent_magnitude_feature", 0.0))
         independent_free_log_sigma_delta_unit_param_index[idx] = int(item.get("independent_free_log_sigma_delta_unit_param_index", -1))
         independent_free_log_mass_delta_unit_param_index[idx] = int(item.get("independent_free_log_mass_delta_unit_param_index", -1))
-        independent_free_log_sigma_tau_param_index[idx] = int(item.get("independent_free_log_sigma_tau_param_index", -1))
-        independent_free_log_mass_tau_param_index[idx] = int(item.get("independent_free_log_mass_tau_param_index", -1))
 
     for idx, component in enumerate(base_components):
         if int(component.get("component_family_code", COMPONENT_FAMILY_LARGE)) != COMPONENT_FAMILY_INDEPENDENT_FREE:
@@ -16670,8 +16839,6 @@ def _build_packed_lens_spec(
         gamma_ml_param_index[idx] = int(component.get("gamma_ml_param_index", -1))
         independent_free_log_sigma_delta_unit_param_index[idx] = int(component.get("independent_free_log_sigma_delta_unit_param_index", -1))
         independent_free_log_mass_delta_unit_param_index[idx] = int(component.get("independent_free_log_mass_delta_unit_param_index", -1))
-        independent_free_log_sigma_tau_param_index[idx] = int(component.get("independent_free_log_sigma_tau_param_index", -1))
-        independent_free_log_mass_tau_param_index[idx] = int(component.get("independent_free_log_mass_tau_param_index", -1))
 
     cut_radius_excess_above_effective_core = (
         (profile_type == DP_IE_PROFILE)
@@ -16718,8 +16885,6 @@ def _build_packed_lens_spec(
         independent_magnitude_feature=independent_magnitude_feature,
         independent_free_log_sigma_delta_unit_param_index=independent_free_log_sigma_delta_unit_param_index,
         independent_free_log_mass_delta_unit_param_index=independent_free_log_mass_delta_unit_param_index,
-        independent_free_log_sigma_tau_param_index=independent_free_log_sigma_tau_param_index,
-        independent_free_log_mass_tau_param_index=independent_free_log_mass_tau_param_index,
     )
 
 
@@ -16908,8 +17073,6 @@ def _build_scaling_components(
                         "gamma_ml_param_index": int(param_index_lookup.get("gamma_ml", -1)),
                         "independent_free_log_sigma_delta_unit_param_index": int(independent_lookup.get("independent_free_log_sigma_delta_unit", -1)),
                         "independent_free_log_mass_delta_unit_param_index": int(independent_lookup.get("independent_free_log_mass_delta_unit", -1)),
-                        "independent_free_log_sigma_tau_param_index": int(independent_lookup.get("independent_free_log_sigma_tau", -1)),
-                        "independent_free_log_mass_tau_param_index": int(independent_lookup.get("independent_free_log_mass_tau", -1)),
                         **direct_shape_payload,
                     }
                 )
@@ -17022,20 +17185,16 @@ def _logit_probability(probability: float, *, context: str) -> float:
 
 def _validate_independent_scaling_log_displacement_hyperparameters(
     *,
-    log_sigma_tau_prior_median: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN,
-    log_mass_tau_prior_median: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN,
-    log_tau_prior_sigma: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA,
+    log_sigma_offset_width: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
+    log_mass_offset_width: float = DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
 ) -> tuple[float, float]:
-    tau_sigma_value = float(log_sigma_tau_prior_median)
-    tau_mass_value = float(log_mass_tau_prior_median)
-    tau_sigma = float(log_tau_prior_sigma)
-    if not np.isfinite(tau_sigma_value) or tau_sigma_value <= 0.0:
-        raise ValueError("--independent-scaling-free-log-sigma-tau-prior-median must be finite and positive.")
-    if not np.isfinite(tau_mass_value) or tau_mass_value <= 0.0:
-        raise ValueError("--independent-scaling-free-log-mass-tau-prior-median must be finite and positive.")
-    if not np.isfinite(tau_sigma) or tau_sigma <= 0.0:
-        raise ValueError("--independent-scaling-free-log-tau-prior-sigma must be finite and positive.")
-    return tau_sigma_value, tau_mass_value
+    sigma_width = float(log_sigma_offset_width)
+    mass_width = float(log_mass_offset_width)
+    if not np.isfinite(sigma_width) or sigma_width <= 0.0:
+        raise ValueError("independent_scaling_free_log_sigma_offset_width must be finite and positive.")
+    if not np.isfinite(mass_width) or mass_width <= 0.0:
+        raise ValueError("independent_scaling_free_log_mass_offset_width must be finite and positive.")
+    return sigma_width, mass_width
 
 
 def _validate_truncated_normal_prior_controls(
@@ -17522,8 +17681,6 @@ class ClusterJAXEvaluator:
         active_scaling_selection: str = "adaptive",
         active_scaling_cumulative_fraction: float = DEFAULT_ACTIVE_SCALING_CUMULATIVE_FRACTION,
         active_scaling_min: int = DEFAULT_ACTIVE_SCALING_MIN,
-        perturbation_discovery_alpha_tol_arcsec: float = DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC,
-        perturbation_discovery_jacobian_tol: float = DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL,
         perturbation_discovery_jacobian_weight: float = DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT,
         perturbation_discovery_top_k: int | None = DEFAULT_PERTURBATION_DISCOVERY_TOP_K,
         refresh_every: int | None = DEFAULT_REFRESH_EVERY,
@@ -17634,23 +17791,17 @@ class ClusterJAXEvaluator:
         self.active_scaling_selection = str(active_scaling_selection)
         self.active_scaling_cumulative_fraction = float(active_scaling_cumulative_fraction)
         self.active_scaling_min = max(1, int(active_scaling_min))
-        self.perturbation_discovery_alpha_tol_arcsec = float(perturbation_discovery_alpha_tol_arcsec)
-        if not np.isfinite(self.perturbation_discovery_alpha_tol_arcsec) or self.perturbation_discovery_alpha_tol_arcsec <= 0.0:
-            raise ValueError("perturbation_discovery_alpha_tol_arcsec must be finite and positive.")
-        self.perturbation_discovery_jacobian_tol = float(perturbation_discovery_jacobian_tol)
-        if not np.isfinite(self.perturbation_discovery_jacobian_tol) or self.perturbation_discovery_jacobian_tol <= 0.0:
-            raise ValueError("perturbation_discovery_jacobian_tol must be finite and positive.")
         self.perturbation_discovery_jacobian_weight = float(perturbation_discovery_jacobian_weight)
         if not np.isfinite(self.perturbation_discovery_jacobian_weight) or self.perturbation_discovery_jacobian_weight < 0.0:
             raise ValueError("perturbation_discovery_jacobian_weight must be finite and non-negative.")
         if perturbation_discovery_top_k is None:
             self.perturbation_discovery_top_k = None
         elif isinstance(perturbation_discovery_top_k, bool) or not isinstance(perturbation_discovery_top_k, Integral):
-            raise ValueError("perturbation_discovery_top_k must be a positive integer or None.")
+            raise ValueError("perturbation_discovery_top_k must be a nonnegative integer or None.")
         else:
             self.perturbation_discovery_top_k = int(perturbation_discovery_top_k)
-        if self.perturbation_discovery_top_k is not None and self.perturbation_discovery_top_k <= 0:
-            raise ValueError("perturbation_discovery_top_k must be a positive integer or None.")
+        if self.perturbation_discovery_top_k is not None and self.perturbation_discovery_top_k < 0:
+            raise ValueError("perturbation_discovery_top_k must be a nonnegative integer or None.")
         self.refresh_every = _parse_refresh_every_value(refresh_every)
         self.refresh_param_drift_frac = float(refresh_param_drift_frac)
         self.source_plane_covariance_floor = max(float(source_plane_covariance_floor), 0.0)
@@ -18877,8 +19028,6 @@ class ClusterJAXEvaluator:
             "independent_magnitude_feature": float_component_array("independent_magnitude_feature"),
             "independent_free_log_sigma_delta_unit_param_index": int_component_array("independent_free_log_sigma_delta_unit_param_index"),
             "independent_free_log_mass_delta_unit_param_index": int_component_array("independent_free_log_mass_delta_unit_param_index"),
-            "independent_free_log_sigma_tau_param_index": int_component_array("independent_free_log_sigma_tau_param_index"),
-            "independent_free_log_mass_tau_param_index": int_component_array("independent_free_log_mass_tau_param_index"),
             "active_gate_intercept_param_index": int_component_array("active_gate_intercept_param_index"),
             "active_gate_mag_slope_param_index": int_component_array("active_gate_mag_slope_param_index"),
             "active_gate_logit_offset_param_index": int_component_array("active_gate_logit_offset_param_index"),
@@ -19538,6 +19687,25 @@ class ClusterJAXEvaluator:
         params_array = np.asarray(params, dtype=float)
         physical_params = self.reported_physical_parameter_vector(params_array)
         return float(physical_params[idx_x]), float(physical_params[idx_y])
+
+    def _independent_scaling_offset_widths(self) -> tuple[float, float]:
+        """Fixed log-offset widths for promoted members: offset = width x delta_unit."""
+        return (
+            float(
+                getattr(
+                    self.state,
+                    "independent_scaling_free_log_sigma_offset_width",
+                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
+                )
+            ),
+            float(
+                getattr(
+                    self.state,
+                    "independent_scaling_free_log_mass_offset_width",
+                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
+                )
+            ),
+        )
 
     def _scaling_scatter_field_scales(self, params: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         physical_params = self._physical_parameter_vector(jnp.asarray(params, dtype=jnp.float64))
@@ -21538,18 +21706,9 @@ class ClusterJAXEvaluator:
             spec_jax["independent_free_log_mass_delta_unit_param_index"],
             physical_params,
         )
-        free_sigma_tau = self._apply_param_updates(
-            jnp.zeros_like(spec_jax["luminosity_ratio"]),
-            spec_jax["independent_free_log_sigma_tau_param_index"],
-            physical_params,
-        )
-        free_mass_tau = self._apply_param_updates(
-            jnp.zeros_like(spec_jax["luminosity_ratio"]),
-            spec_jax["independent_free_log_mass_tau_param_index"],
-            physical_params,
-        )
-        free_log_sigma_delta = free_sigma_tau * free_sigma_delta_unit
-        free_log_mass_delta = free_mass_tau * free_mass_delta_unit
+        sigma_offset_width, mass_offset_width = self._independent_scaling_offset_widths()
+        free_log_sigma_delta = sigma_offset_width * free_sigma_delta_unit
+        free_log_mass_delta = mass_offset_width * free_mass_delta_unit
         free_log_radius_delta = free_log_mass_delta - 2.0 * free_log_sigma_delta
         v_disp = jnp.where(
             log_displacement_free,
@@ -21710,18 +21869,9 @@ class ClusterJAXEvaluator:
             spec_arrays["independent_free_log_mass_delta_unit_param_index"],
             physical_params,
         )
-        free_sigma_tau = self._apply_param_updates(
-            zeros,
-            spec_arrays["independent_free_log_sigma_tau_param_index"],
-            physical_params,
-        )
-        free_mass_tau = self._apply_param_updates(
-            zeros,
-            spec_arrays["independent_free_log_mass_tau_param_index"],
-            physical_params,
-        )
-        free_log_sigma_delta = free_sigma_tau * free_sigma_delta_unit
-        free_log_mass_delta = free_mass_tau * free_mass_delta_unit
+        sigma_offset_width, mass_offset_width = self._independent_scaling_offset_widths()
+        free_log_sigma_delta = sigma_offset_width * free_sigma_delta_unit
+        free_log_mass_delta = mass_offset_width * free_mass_delta_unit
         free_log_radius_delta = free_log_mass_delta - 2.0 * free_log_sigma_delta
         v_disp = jnp.where(
             log_displacement_free,
@@ -25040,25 +25190,18 @@ def _save_plot_bundle_h5(
                     "sigma, cutkpc, and corekpc use log-positive latent priors "
                     "matched to solver-defined physical scales, not literal physical-space densities"
                 ),
-                "independent_scaling_free_log_sigma_tau_prior_median": float(
+                "independent_scaling_free_log_sigma_offset_width": float(
                     getattr(
                         state,
-                        "independent_scaling_free_log_sigma_tau_prior_median",
-                        DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN,
+                        "independent_scaling_free_log_sigma_offset_width",
+                        DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
                     )
                 ),
-                "independent_scaling_free_log_mass_tau_prior_median": float(
+                "independent_scaling_free_log_mass_offset_width": float(
                     getattr(
                         state,
-                        "independent_scaling_free_log_mass_tau_prior_median",
-                        DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN,
-                    )
-                ),
-                "independent_scaling_free_log_tau_prior_sigma": float(
-                    getattr(
-                        state,
-                        "independent_scaling_free_log_tau_prior_sigma",
-                        DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA,
+                        "independent_scaling_free_log_mass_offset_width",
+                        DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
                     )
                 ),
                 "potfile_alpha_sigma_prior_mean": float(
@@ -25315,22 +25458,16 @@ def _rebuild_state_from_h5(path: Path) -> tuple[BuildState, dict[str, Any], dict
             ),
             independent_scaling_model=str(meta.get("independent_scaling_model", "log_displacement")),
             scaling_relation_mode=str(meta.get("scaling_relation_mode", DEFAULT_SCALING_RELATION_MODE)),
-            independent_scaling_free_log_sigma_tau_prior_median=float(
+            independent_scaling_free_log_sigma_offset_width=float(
                 meta.get(
-                    "independent_scaling_free_log_sigma_tau_prior_median",
-                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN,
+                    "independent_scaling_free_log_sigma_offset_width",
+                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
                 )
             ),
-            independent_scaling_free_log_mass_tau_prior_median=float(
+            independent_scaling_free_log_mass_offset_width=float(
                 meta.get(
-                    "independent_scaling_free_log_mass_tau_prior_median",
-                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN,
-                )
-            ),
-            independent_scaling_free_log_tau_prior_sigma=float(
-                meta.get(
-                    "independent_scaling_free_log_tau_prior_sigma",
-                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA,
+                    "independent_scaling_free_log_mass_offset_width",
+                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
                 )
             ),
             potfile_alpha_sigma_prior_mean=float(
@@ -25465,6 +25602,84 @@ def _member_shape_values_from_artifacts(artifacts_dir: Path) -> list[dict[int, t
             f"does not match {len(state.parameter_specs)} parameters."
         )
     return _member_shape_values_from_state(state, best_fit, theta_is_physical=True)
+
+
+def _audit_frozen_independent_selection(
+    args: argparse.Namespace,
+    stage1_run_dir: str | Path,
+    frozen_selected_by_potfile: list[set[int]],
+) -> None:
+    """Log-only stability audit of the frozen stage-0 promotion at the stage-1 posterior.
+
+    Re-scores perturbation discovery with draw-median scoring from the stage-1 posterior
+    and warns loudly when the frozen selection would differ. Never changes the selection
+    and never raises: this is a diagnostic for refresh-history sensitivity.
+    """
+    try:
+        artifacts_dir = Path(stage1_run_dir) / "artifacts"
+        state, runtime_args, arrays, init_diagnostics = _load_artifacts(artifacts_dir)
+        arrays, _converted = _maybe_convert_loaded_posterior_arrays_to_physical(
+            arrays, state.parameter_specs, init_diagnostics
+        )
+        audit_args = argparse.Namespace(**runtime_args)
+        evaluator = _build_cluster_evaluator_from_args(audit_args, state)
+        best_physical = np.asarray(arrays["best_fit"], dtype=float)
+        best_latent = np.asarray(evaluator.reported_physical_to_latent_parameter_vector(best_physical), dtype=float)
+        samples_physical = np.asarray(arrays.get("samples", np.empty((0, 0))), dtype=float)
+        draws_latent: np.ndarray | None = None
+        if samples_physical.ndim == 2 and samples_physical.shape[0] >= 2 and samples_physical.shape[1] == best_physical.shape[0]:
+            n_draws = min(int(PERTURBATION_DISCOVERY_SCORE_DRAWS), int(samples_physical.shape[0]))
+            indices = np.unique(np.linspace(0, samples_physical.shape[0] - 1, n_draws).astype(int))
+            draws_latent = np.stack(
+                [
+                    np.asarray(evaluator.reported_physical_to_latent_parameter_vector(samples_physical[index]), dtype=float)
+                    for index in indices
+                ],
+                axis=0,
+            )
+        audit_selected, audit_diag, _audit_detail = _perturbation_discovery_union_from_evaluator(
+            state,
+            evaluator,
+            best_latent,
+            reference_draws=draws_latent,
+        )
+        frozen = [set(int(v) for v in values) for values in frozen_selected_by_potfile]
+        audited = [set(int(v) for v in values) for values in audit_selected]
+        while len(frozen) < len(audited):
+            frozen.append(set())
+        while len(audited) < len(frozen):
+            audited.append(set())
+        if frozen == audited:
+            _log(
+                args,
+                (
+                    "[perturbation-discovery] stage1 audit ok: frozen selection reproduced from the "
+                    f"stage1 posterior (draws={audit_diag.get('score_draws_valid', 1)}, "
+                    f"selected={sum(len(v) for v in audited)})"
+                ),
+            )
+            return
+        added = [sorted(audited[order] - frozen[order]) for order in range(len(audited))]
+        removed = [sorted(frozen[order] - audited[order]) for order in range(len(frozen))]
+        _log(
+            args,
+            (
+                "[perturbation-discovery] WARNING stage1 audit: frozen selection differs from the "
+                f"stage1-posterior selection (would add={added} would remove={removed}). The frozen "
+                "stage0 selection is kept; investigate promotion stability if this repeats."
+            ),
+        )
+        audit_rows: list[dict[str, Any]] = []
+        for order in range(len(audited)):
+            for row_index in added[order]:
+                audit_rows.append({"potfile_order": order, "catalog_row_index": int(row_index), "status": "would_add"})
+            for row_index in removed[order]:
+                audit_rows.append({"potfile_order": order, "catalog_row_index": int(row_index), "status": "would_remove"})
+        audit_tables_dir = Path(stage1_run_dir) / "tables"
+        audit_tables_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(audit_rows).to_csv(audit_tables_dir / "perturbation_discovery_stage1_audit.csv", index=False)
+    except Exception as error:
+        _log(args, f"[perturbation-discovery] stage1 audit skipped ({error!r})")
 
 
 def _selected_independent_by_potfile_from_artifacts(artifacts_dir: Path) -> list[set[int]]:
@@ -26512,13 +26727,17 @@ def _build_state_from_inputs(
             ),
         )
         parameter_specs.extend(scaling_parameter_specs)
+        build_scaling_scatter = bool(getattr(args, "scaling_scatter", False)) and not bool(
+            getattr(args, "perturbation_discovery_stage0", False)
+        )
+        if build_scaling_scatter:
+            _ensure_scaling_scatter_has_cached_members(potfiles, active_selected_by_potfile)
         scaling_scatter_specs, scaling_scatter_indices = (
             _build_scaling_scatter_parameter_specs(
                 potfiles,
                 start_index=len(parameter_specs),
             )
-            if bool(getattr(args, "scaling_scatter", False))
-            and not bool(getattr(args, "perturbation_discovery_stage0", False))
+            if build_scaling_scatter
             else ([], [{} for _ in potfiles])
         )
         parameter_specs.extend(scaling_scatter_specs)
@@ -26528,25 +26747,18 @@ def _build_state_from_inputs(
             start_index=len(parameter_specs),
             shape_selected_by_potfile=shape_selected_by_potfile,
             member_shape_values_by_potfile=inherited_member_shape_values,
-            log_sigma_tau_prior_median=float(
+            log_sigma_offset_width=float(
                 getattr(
                     args,
-                    "independent_scaling_free_log_sigma_tau_prior_median",
-                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN,
+                    "independent_scaling_free_log_sigma_offset_width",
+                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
                 )
             ),
-            log_mass_tau_prior_median=float(
+            log_mass_offset_width=float(
                 getattr(
                     args,
-                    "independent_scaling_free_log_mass_tau_prior_median",
-                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN,
-                )
-            ),
-            log_tau_prior_sigma=float(
-                getattr(
-                    args,
-                    "independent_scaling_free_log_tau_prior_sigma",
-                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA,
+                    "independent_scaling_free_log_mass_offset_width",
+                    DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
                 )
             ),
         )
@@ -26968,25 +27180,18 @@ def _build_state_from_inputs(
         ),
         independent_scaling_model="log_displacement",
         scaling_relation_mode=str(getattr(args, "scaling_relation_mode", DEFAULT_SCALING_RELATION_MODE)),
-        independent_scaling_free_log_sigma_tau_prior_median=float(
+        independent_scaling_free_log_sigma_offset_width=float(
             getattr(
                 args,
-                "independent_scaling_free_log_sigma_tau_prior_median",
-                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_TAU_PRIOR_MEDIAN,
+                "independent_scaling_free_log_sigma_offset_width",
+                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH,
             )
         ),
-        independent_scaling_free_log_mass_tau_prior_median=float(
+        independent_scaling_free_log_mass_offset_width=float(
             getattr(
                 args,
-                "independent_scaling_free_log_mass_tau_prior_median",
-                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_TAU_PRIOR_MEDIAN,
-            )
-        ),
-        independent_scaling_free_log_tau_prior_sigma=float(
-            getattr(
-                args,
-                "independent_scaling_free_log_tau_prior_sigma",
-                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_TAU_PRIOR_SIGMA,
+                "independent_scaling_free_log_mass_offset_width",
+                DEFAULT_INDEPENDENT_SCALING_FREE_LOG_MASS_OFFSET_WIDTH,
             )
         ),
         potfile_alpha_sigma_prior_mean=float(
@@ -27287,12 +27492,6 @@ def _build_cluster_evaluator_from_args(
         active_scaling_selection="fixed",
         active_scaling_cumulative_fraction=1.0,
         active_scaling_min=0,
-        perturbation_discovery_alpha_tol_arcsec=float(
-            getattr(args, "perturbation_discovery_alpha_tol_arcsec", DEFAULT_PERTURBATION_DISCOVERY_ALPHA_TOL_ARCSEC)
-        ),
-        perturbation_discovery_jacobian_tol=float(
-            getattr(args, "perturbation_discovery_jacobian_tol", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_TOL)
-        ),
         perturbation_discovery_jacobian_weight=float(
             getattr(args, "perturbation_discovery_jacobian_weight", DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT)
         ),
@@ -28494,10 +28693,21 @@ def _run_inference(args: argparse.Namespace, state: BuildState, run_dir: Path) -
                 stage1_engine = str(
                     getattr(args, "stage1_sampling_engine", SAMPLING_ENGINE_REFRESHING_SURROGATE_FLAT)
                 )
+                discovery_draws = _perturbation_discovery_reference_draws(
+                    svi_posterior,
+                    np.asarray(best_fit, dtype=float),
+                )
+                if discovery_draws is None:
+                    _log(
+                        args,
+                        "[perturbation-discovery] score_draws=1 reason=svi_posterior_unavailable "
+                        "(falling back to the reference point estimate)",
+                    )
                 final_union, final_union_diag, final_union_detail_df = _perturbation_discovery_union_from_evaluator(
                     state,
                     evaluator,
                     best_fit,
+                    reference_draws=discovery_draws,
                 )
                 if not final_union_detail_df.empty:
                     discovery_tables_dir = run_dir / "tables"
@@ -28523,6 +28733,16 @@ def _run_inference(args: argparse.Namespace, state: BuildState, run_dir: Path) -
                         stage1_engine=stage1_engine,
                     ),
                 )
+                if final_union_diag.get("selection_mode") == "top_k":
+                    _log(
+                        args,
+                        (
+                            "[perturbation-discovery] threshold alone would select "
+                            f"{final_union_diag.get('threshold_selected_galaxies')} member(s) as independent; "
+                            f"top_k={final_union_diag.get('top_k_requested')} keeps "
+                            f"{final_union_diag.get('top_k_selected_galaxies')}"
+                        ),
+                    )
                 state, evaluator, sample_model, best_fit, final_rebuild_diag = (
                     _rebuild_perturbation_discovery_state_from_union(
                         final_args,
@@ -29989,6 +30209,7 @@ def _run_sequential_v2(args: argparse.Namespace, stage_fit_controls: dict[str, S
         stage2_init_artifacts = stage1_run_dir / "artifacts"
         stage2_init_values = _physical_best_fit_values_from_artifacts(stage2_init_artifacts)
         stage2_selected_by_potfile = _selected_independent_by_potfile_from_artifacts(stage2_init_artifacts)
+        _audit_frozen_independent_selection(args, stage1_run_dir, stage2_selected_by_potfile)
         stage2_member_shape_values = _member_shape_values_from_artifacts(stage2_init_artifacts)
         source_position_priors = _source_position_prior_values_from_artifacts(stage2_init_artifacts)
         stage2_runs_fresh = bool(getattr(args, "stage2_fresh_process", True)) and not fast_resume

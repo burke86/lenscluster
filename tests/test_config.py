@@ -582,12 +582,16 @@ def test_config_validation_accepts_perturbation_discovery_top_k() -> None:
     assert plan.runtime_args.perturbation_discovery_top_k == 5
 
 
-def test_config_validation_rejects_nonpositive_perturbation_discovery_top_k() -> None:
-    for value in (0, -1, 1.5, True):
+def test_config_validation_rejects_negative_perturbation_discovery_top_k() -> None:
+    for value in (-1, 1.5, True):
         with pytest.raises(ValueError, match="perturbation_discovery_top_k"):
             _minimal_sequential_config().with_updates(
                 perturbation=PerturbationDiscoveryConfig(perturbation_discovery_top_k=value),
             ).validate()
+    # top_k=0 means "promote no members" and must be accepted.
+    _minimal_sequential_config().with_updates(
+        perturbation=PerturbationDiscoveryConfig(perturbation_discovery_top_k=0),
+    ).validate()
 
 
 def test_critical_arc_source_position_specs_follow_stage_policy() -> None:
