@@ -12,6 +12,13 @@ cores = 4  # Fixed to match JAX CPU devices and NUTS chains.
 seed_default = 12345
 output_dir_default = "validation_runs/mock_recovery"
 mock_caustic_grid_chunk_memory_gb = 8.0
+# Single source of truth for the astrometric noise: the mock generation injects Gaussian
+# position scatter of this size AND the likelihood assumes the same catalog sigma, so the
+# 68% coverage test is meaningful.
+pos_sigma_arcsec = 0.05
+# Injected member scaling-relation scatter in ln(sigma) units (recovered by the linearized
+# sigma_log_scatter mechanism). Pass --scatter-ln 0 for the no-scatter A/B campaign.
+scatter_ln_default = 0.05
 
 $JAX_NUM_CPU_DEVICES = str(cores)
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster-mock"
@@ -59,7 +66,7 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str, float]:
         "seed": str(seed_default),
         "covariance": "anisotropic",
         "output_dir": output_dir_default,
-        "scatter_ln": "0.0",
+        "scatter_ln": str(scatter_ln_default),
     }
     flag_to_key = {
         "--campaign": "campaign",
@@ -172,7 +179,7 @@ def _solver_template(
             svi_learning_rate=0.0005,
         ),
         likelihood=LikelihoodConfig(
-            pos_sigma_arcsec=0.05,
+            pos_sigma_arcsec=pos_sigma_arcsec,
             critical_arc_anisotropic_covariance=critical_arc_anisotropic_covariance,
         ),
         image_diagnostics=ImageDiagnosticsConfig(
@@ -236,7 +243,7 @@ def build_config(
         max_images_per_family=None,
         primary_source_redshifts=np.linspace(1.5, 9.0, n_primary_families),
         subhalo_source_redshifts=np.linspace(1.5, 9.0, n_subhalo_families),
-        pos_sigma_arcsec=0.0,
+        pos_sigma_arcsec=pos_sigma_arcsec,
         mock_caustic_grid_chunk_memory_gb=mock_caustic_grid_chunk_memory_gb,
         # Production caustics and image finding are the expensive generation
         # step; denser seeds avoid high-redshift family failures with 0 images.
@@ -289,6 +296,7 @@ print(
     f"covariance={covariance_mode} "
     f"scatter_ln={scatter_ln} scaling_scatter={config.solver.template.scaling.scaling_scatter} "
     f"subhalo_sigma_scatter_dex={config.mock.subhalo_sigma_scatter_dex:.6f} "
+    f"pos_sigma_arcsec={config.mock.pos_sigma_arcsec} "
     f"critical_arc_anisotropic_covariance={config.solver.template.likelihood.critical_arc_anisotropic_covariance} "
     f"mock_caustic_grid_chunk_memory_gb={config.mock.mock_caustic_grid_chunk_memory_gb} "
     f"mock_generation_workers={config.mock.mock_generation_workers} "

@@ -299,8 +299,10 @@ def test_generate_single_bcg_mock_parses_and_has_finite_magnifications(tmp_path:
     assert truth["config"]["subhalo_source_redshifts"] == [1.5, 2.0, 3.0]
     assert "source_redshifts" not in truth["config"]
     assert np.isfinite(images["magnification_true"].to_numpy(dtype=float)).all()
-    assert set(truth["parameter_truth"]) >= {"halo.v_disp", "bcg.v_disp", "source.sigma_int"}
-    assert truth["parameter_truth"]["source.sigma_int"] == config.source_sigma_int_arcsec
+    assert set(truth["parameter_truth"]) >= {"halo.v_disp", "bcg.v_disp"}
+    # source.sigma_int has no truth entry: the mock never injects intrinsic source-plane
+    # scatter, so recording one produced a spurious -1 fractional bias in recovery tables.
+    assert "source.sigma_int" not in truth["parameter_truth"]
     first_source = truth["sources"][0]
     assert truth["parameter_truth"]["source.1.beta_x"] == pytest.approx(first_source["beta_x"])
     assert truth["parameter_truth"]["source.1.beta_y"] == pytest.approx(first_source["beta_y"])

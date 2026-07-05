@@ -723,7 +723,11 @@ def _truth_parameter_values(config: SingleBCGMockConfig, kpc_per_arcsec: float) 
         truth[f"{prefix}.core_radius_kpc"] = float(component.core_radius_arcsec) * float(kpc_per_arcsec)
         truth[f"{prefix}.cut_radius_kpc"] = float(component.cut_radius_arcsec) * float(kpc_per_arcsec)
         truth[f"{prefix}.v_disp"] = float(component.v_disp)
-    truth["source.sigma_int"] = float(config.source_sigma_int_arcsec)
+    # No truth entry for source.sigma_int: the mock never injects intrinsic source-plane
+    # scatter (astrometric noise is injected via pos_sigma_arcsec and is already accounted
+    # for by the likelihood's catalog sigma), so the sampled image.sigma_int has no finite
+    # truth to score against. Recording config.source_sigma_int_arcsec here previously
+    # produced a spurious fractional bias of -1 in the recovery tables.
     if config.n_subhalos > 0:
         truth["potfile.sigma"] = float(config.subhalo_sigma_ref)
         truth["potfile.cutkpc"] = float(config.subhalo_cut_radius_arcsec) * float(kpc_per_arcsec)
