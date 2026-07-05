@@ -163,7 +163,10 @@ def _solver_template(
             samples=samples,
             sampling_refresh_runs=(1, 1),
             max_tree_depth=max_tree_depth,
-            target_accept=0.75,
+            # 0.65 measured optimal on the real stage-2 posterior: at full tree-depth
+            # saturation the target only sets trajectory length, and lower targets give
+            # ~1.3-1.6x ESS per gradient with zero divergences (see target_accept A/B).
+            target_accept=0.65,
             z_bin_efficiency_tol=0.0,
             svi_learning_rate=0.0005,
         ),
