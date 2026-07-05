@@ -17,8 +17,8 @@ mock_caustic_grid_chunk_memory_gb = 8.0
 # 68% coverage test is meaningful.
 pos_sigma_arcsec = 0.05
 # Injected member scaling-relation scatter in ln(sigma) units (recovered by the linearized
-# sigma_log_scatter mechanism). Pass --scatter-ln 0 for the no-scatter A/B campaign.
-scatter_ln_default = 0.05
+# sigma_log_scatter mechanism). Set to 0 for the no-scatter A/B campaign.
+scatter_ln = 0.05
 
 $JAX_NUM_CPU_DEVICES = str(cores)
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster-mock"
@@ -54,19 +54,17 @@ def _usage() -> str:
     return (
         "Usage: xonsh run_mock.xsh --campaign NAME "
         "[--preset smoke|production] [--seed INT] "
-        "[--covariance anisotropic|isotropic] [--output-dir PATH] "
-        "[--scatter-ln FLOAT]"
+        "[--covariance anisotropic|isotropic] [--output-dir PATH]"
     )
 
 
-def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str, float]:
+def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
     values = {
         "campaign": None,
         "preset": "smoke",
         "seed": str(seed_default),
         "covariance": "anisotropic",
         "output_dir": output_dir_default,
-        "scatter_ln": str(scatter_ln_default),
     }
     flag_to_key = {
         "--campaign": "campaign",
@@ -74,7 +72,6 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str, float]:
         "--seed": "seed",
         "--covariance": "covariance",
         "--output-dir": "output_dir",
-        "--scatter-ln": "scatter_ln",
     }
     index = 1
     while index < len(argv):
@@ -109,17 +106,9 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str, float]:
     if covariance_mode not in VALID_COVARIANCE_MODES:
         print(f"Covariance mode must be 'anisotropic' or 'isotropic'; got {values['covariance']!r}.\n{_usage()}")
         raise SystemExit(2)
-    try:
-        scatter_ln = float(str(values["scatter_ln"]))
-    except ValueError:
-        print(f"--scatter-ln must be a float; got {values['scatter_ln']!r}.\n{_usage()}")
-        raise SystemExit(2)
-    if not (scatter_ln >= 0.0):
-        print(f"--scatter-ln must be nonnegative; got {scatter_ln}.\n{_usage()}")
-        raise SystemExit(2)
     campaign = str(values["campaign"]).strip()
     output_dir = str(values["output_dir"])
-    return preset, seed, covariance_mode, campaign, output_dir, scatter_ln
+    return preset, seed, covariance_mode, campaign, output_dir
 
 
 def _solver_template(
@@ -283,7 +272,7 @@ def build_config(
     )
 
 
-preset, seed, covariance_mode, campaign_name, output_dir, scatter_ln = _parse_args(sys.argv)
+preset, seed, covariance_mode, campaign_name, output_dir = _parse_args(sys.argv)
 config = build_config(
     preset,
     seed=seed,

@@ -7640,7 +7640,7 @@ def test_scaling_scatter_specs_use_plain_lognormal_prior() -> None:
         assert spec.lower == float("-inf")
         assert spec.upper == float("inf")
         assert spec.mean == pytest.approx(np.log(0.02))
-        assert spec.std == pytest.approx(0.5)
+        assert spec.std == pytest.approx(1.0)
         assert spec.transform_kind == "log_positive"
         assert spec.physical_lower == 0.0
         assert spec.physical_upper is None

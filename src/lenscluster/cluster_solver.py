@@ -323,7 +323,10 @@ DEFAULT_IMAGE_PLANE_SCATTER_PRIOR = IMAGE_PLANE_SCATTER_PRIOR_LOG_UNIFORM
 DEFAULT_IMAGE_PLANE_SCATTER_PRIOR_MEDIAN_ARCSEC = 0.3
 DEFAULT_IMAGE_PLANE_SCATTER_PRIOR_LOG_SIGMA = 0.5
 DEFAULT_SCALING_SCATTER_PRIOR_MEDIAN = 0.02
-DEFAULT_SCALING_SCATTER_PRIOR_LOG_SIGMA = 0.5
+# Weakly informative width: +-2 sigma spans ~0.003-0.15 in ln(sigma), so realistic member
+# scatter amplitudes (a few percent up to ~0.1 dex) sit in the prior bulk instead of the
+# tail, and the recovered amplitude is not shrunk toward the median.
+DEFAULT_SCALING_SCATTER_PRIOR_LOG_SIGMA = 1.0
 # Fixed per-member log-offset widths for promoted (independent) members: the physical
 # offset is width x delta_unit with delta_unit ~ N(0,1). No population tau is sampled.
 DEFAULT_INDEPENDENT_SCALING_FREE_LOG_SIGMA_OFFSET_WIDTH = 0.10
