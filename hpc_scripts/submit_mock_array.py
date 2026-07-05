@@ -6,8 +6,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/dutra/dev/burkelenscluster")
-PYTHON = Path("/home/dutra/.conda/envs/lenstronomy/bin/python")
+PROJECT_ROOT = Path("/home/id255/scratch_pi_pn38/id255/lenscluster")
+PYTHON = Path("/home/id255/.conda/envs/lenstronomy/bin/python")
 
 SCRIPT_DIR = PROJECT_ROOT / "hpc_scripts/mock_validation/jobs"
 LOG_DIR = PROJECT_ROOT / "hpc_scripts/mock_validation/logs"

@@ -199,9 +199,9 @@ def _solver_template(
         ),
         perturbation=PerturbationDiscoveryConfig(
             perturbation_discovery_jacobian_weight=1.0,
-            # Promote no members: the mock truth follows the scaling relation exactly,
-            # and population scatter is inferred via the linearized covariance term.
-            perturbation_discovery_top_k=0,
+            # The detection-referenced threshold decides which members are promoted to
+            # independent; top_k=None applies no cap on the threshold passers.
+            perturbation_discovery_top_k=None,
         ),
         scaling=ScalingModelConfig(
             # Sample the linearized population-scatter amplitudes only when the mock
@@ -247,10 +247,12 @@ def build_config(
         mock_caustic_grid_chunk_memory_gb=mock_caustic_grid_chunk_memory_gb,
         # Production caustics and image finding are the expensive generation
         # step; denser seeds avoid high-redshift family failures with 0 images.
-        mock_image_candidate_batch_size=1024 if production else 256,
-        mock_image_seed_cap=64 if production else 32,
-        mock_image_search_window_arcsec=80.0 if production else 80.0,
-        primary_image_min_distance_arcsec=2.0 if production else 3.0,
+        mock_image_candidate_batch_size=1024,
+        mock_image_seed_cap=64,
+        mock_image_search_window_arcsec=80.0,
+        # 1" resolves merging image pairs near critical curves (the high-mu images).
+        primary_seed_grid_pixel_arcsec=1.0,
+        subhalo_seed_grid_pixel_arcsec=1.0,
         max_sources_to_try=400,
         mock_generation_workers=min(cores, 16) if production else 1,
     )
@@ -303,7 +305,7 @@ print(
     f"mock_image_candidate_batch_size={config.mock.mock_image_candidate_batch_size} "
     f"mock_image_seed_cap={config.mock.mock_image_seed_cap} "
     f"mock_image_search_window_arcsec={config.mock.mock_image_search_window_arcsec} "
-    f"primary_image_min_distance_arcsec={config.mock.primary_image_min_distance_arcsec} "
+    f"primary_seed_grid_pixel_arcsec={config.mock.primary_seed_grid_pixel_arcsec} "
     f"max_sources_to_try={config.mock.max_sources_to_try} "
     f"output_dir={config.paths.output_dir} campaign={config.paths.campaign_name} "
     f"run_name={config.paths.run_name} variant={config.paths.variant_name} chains=4"

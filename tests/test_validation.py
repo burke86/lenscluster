@@ -373,16 +373,31 @@ def test_caustic_config_from_truth_restores_mock_image_grid_settings() -> None:
     restored_config = validation._caustic_config_from_truth(
         {
             "config": {
-                "primary_image_min_distance_arcsec": 2.5,
-                "subhalo_image_min_distance_arcsec": 0.75,
+                "primary_seed_grid_pixel_arcsec": 2.5,
+                "subhalo_seed_grid_pixel_arcsec": 0.75,
                 "mock_image_search_window_arcsec": 123.0,
             }
         }
     )
 
-    assert restored_config.primary_image_min_distance_arcsec == pytest.approx(2.5)
-    assert restored_config.subhalo_image_min_distance_arcsec == pytest.approx(0.75)
+    assert restored_config.primary_seed_grid_pixel_arcsec == pytest.approx(2.5)
+    assert restored_config.subhalo_seed_grid_pixel_arcsec == pytest.approx(0.75)
     assert restored_config.mock_image_search_window_arcsec == pytest.approx(123.0)
+
+
+def test_caustic_config_from_truth_reads_legacy_min_distance_keys() -> None:
+    # truth.json files written before the seed-grid rename carry the old key names.
+    restored_config = validation._caustic_config_from_truth(
+        {
+            "config": {
+                "primary_image_min_distance_arcsec": 2.0,
+                "subhalo_image_min_distance_arcsec": 1.0,
+            }
+        }
+    )
+
+    assert restored_config.primary_seed_grid_pixel_arcsec == pytest.approx(2.0)
+    assert restored_config.subhalo_seed_grid_pixel_arcsec == pytest.approx(1.0)
 
 
 
@@ -531,7 +546,7 @@ def test_compute_tangential_caustics_stable_across_memory_budgets() -> None:
     )
 
 
-def test_generate_single_bcg_mock_uses_family_class_image_min_distances(tmp_path: Path) -> None:
+def test_generate_single_bcg_mock_uses_family_class_seed_grid_pixels(tmp_path: Path) -> None:
     config = _jax_mock_test_config(
         seed=11,
         n_primary_families=1,
@@ -541,8 +556,8 @@ def test_generate_single_bcg_mock_uses_family_class_image_min_distances(tmp_path
         subhalo_cut_radius_arcsec=45.0,
         primary_source_redshifts=(2.0,),
         subhalo_source_redshifts=(2.0,),
-        primary_image_min_distance_arcsec=2.5,
-        subhalo_image_min_distance_arcsec=0.75,
+        primary_seed_grid_pixel_arcsec=2.5,
+        subhalo_seed_grid_pixel_arcsec=0.75,
         mock_image_search_window_arcsec=90.0,
         max_sources_to_try=100,
         caustic_compute_window_arcsec=80.0,
@@ -553,8 +568,8 @@ def test_generate_single_bcg_mock_uses_family_class_image_min_distances(tmp_path
 
     family_sizes = images.groupby("family_id").size().to_dict()
     assert family_sizes == {source["family_id"]: source["n_images"] for source in truth["sources"]}
-    assert truth["config"]["primary_image_min_distance_arcsec"] == pytest.approx(2.5)
-    assert truth["config"]["subhalo_image_min_distance_arcsec"] == pytest.approx(0.75)
+    assert truth["config"]["primary_seed_grid_pixel_arcsec"] == pytest.approx(2.5)
+    assert truth["config"]["subhalo_seed_grid_pixel_arcsec"] == pytest.approx(0.75)
     assert truth["config"]["mock_image_search_window_arcsec"] == pytest.approx(90.0)
     assert {source["caustic_class"] for source in truth["sources"]} == {"primary", "subhalo"}
 
@@ -610,6 +625,42 @@ def test_generate_single_bcg_mock_raises_when_family_exhausts_attempts(tmp_path:
 
     with pytest.raises(RuntimeError, match="Failed to generate a primary source"):
         generate_single_bcg_mock(tmp_path, config)
+
+
+def test_generate_single_bcg_mock_drops_exhausted_subhalo_family(tmp_path: Path) -> None:
+    # A subhalo image-separation requirement no subhalo caustic can satisfy exhausts the
+    # subhalo family; the seed must survive with the family dropped and recorded.
+    config = _jax_mock_test_config(
+        n_subhalos=6,
+        n_primary_families=1,
+        n_subhalo_families=1,
+        subhalo_source_redshifts=(2.0,),
+        subhalo_seed_grid_pixel_arcsec=60.0,
+        max_sources_to_try=20,
+        caustic_compute_window_arcsec=80.0,
+        caustic_grid_scale_arcsec=2.0,
+    )
+
+    _paths, _images, truth = generate_single_bcg_mock(tmp_path, config)
+
+    dropped = truth.get("dropped_families", [])
+    assert len(dropped) == 1
+    assert dropped[0]["caustic_class"] == "subhalo"
+    assert dropped[0]["z_source"] == pytest.approx(2.0)
+    assert dropped[0]["reason"] in {"attempts_exhausted", "no_usable_caustics"}
+    accepted_classes = [str(source["caustic_class"]) for source in truth["sources"]]
+    assert accepted_classes == ["primary"]
+    stats = truth["generation_stats"]
+    assert stats["dropped_family_count"] == 1
+    by_class = {row["caustic_class"]: row for row in stats["families"]}
+    assert by_class["primary"]["accepted"] is True
+    assert by_class["primary"]["accepted_attempt"] == by_class["primary"]["attempts_used"] or by_class["primary"]["attempts_used"] >= 1
+    assert by_class["subhalo"]["accepted"] is False
+    assert by_class["subhalo"]["drop_reason"] in {"attempts_exhausted", "no_usable_caustics"}
+    # Every image row carries the truth magnification at the observed position.
+    images_payload = truth["images"]
+    assert all("magnification_true_at_obs" in row for row in images_payload)
+    assert all(np.isfinite(float(row["magnification_true_at_obs"])) for row in images_payload)
 
 
 def test_mock_generation_has_no_lenstronomy_image_solver_surface() -> None:
@@ -18356,7 +18407,7 @@ def _write_aggregate_result(
     stage_alias = aggregate_plots.stage_alias(stage)
     path = (
         root
-        / "single_bcg_production_source"
+        / aggregate_plots.DEFAULT_RUN_NAME
         / f"seed_{seed:08d}"
         / variant
         / "recovery"
@@ -18464,7 +18515,9 @@ def _write_aggregate_combined_recovery(
     recovered_log_masses: list[float],
     stages: tuple[str, ...] = ("stage2_free_source_forward_fit",),
 ) -> Path:
-    path = root / "single_bcg_production_source" / f"seed_{seed:08d}" / variant / "recovery" / "results.json"
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    path = root / aggregate_plots.DEFAULT_RUN_NAME / f"seed_{seed:08d}" / variant / "recovery" / "results.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "mock_cluster": {

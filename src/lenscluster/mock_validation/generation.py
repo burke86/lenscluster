@@ -34,8 +34,15 @@ DEFAULT_CAUSTIC_COMPUTE_WINDOW_ARCSEC = 160.0
 DEFAULT_CAUSTIC_GRID_SCALE_ARCSEC = 0.2
 DEFAULT_CAUSTIC_MIN_AREA_ARCSEC2 = 1.0e-5
 DEFAULT_CAUSTIC_BOUNDARY_MARGIN_ARCSEC = 0.5
-DEFAULT_PRIMARY_IMAGE_MIN_DISTANCE_ARCSEC = 3.0
-DEFAULT_SUBHALO_IMAGE_MIN_DISTANCE_ARCSEC = 1.0
+# 1" resolves merging image pairs near critical curves down to mu ~ 50; coarser grids
+# silently drop exactly the high-magnification pairs the validation is most sensitive to.
+DEFAULT_PRIMARY_SEED_GRID_PIXEL_ARCSEC = 1.0
+# Fine seed grid overlaid on each subhalo contour's critical curve so image multiplets
+# split below the global seed-grid pixel (seed_grid_pixel_arcsec) are still resolved.
+MOCK_LOCAL_SEED_GRID_POINTS = 24
+MOCK_LOCAL_SEED_GRID_MARGIN = 1.5
+MOCK_LOCAL_SEED_GRID_MIN_HALF_ARCSEC = 0.25
+DEFAULT_SUBHALO_SEED_GRID_PIXEL_ARCSEC = 1.0
 DEFAULT_BCG_POSITION_PRIOR_HALF_WIDTH_ARCSEC = 8.0
 SUBHALO_SELECTION_MAX_ATTEMPTS = 5
 MockProgressCallback = Callable[[str, dict[str, Any]], None]
@@ -97,8 +104,8 @@ class SingleBCGMockConfig:
     n_subhalo_families: int = 0
     min_images_per_family: int = 3
     max_images_per_family: int | None = None
-    primary_image_min_distance_arcsec: float = DEFAULT_PRIMARY_IMAGE_MIN_DISTANCE_ARCSEC
-    subhalo_image_min_distance_arcsec: float = DEFAULT_SUBHALO_IMAGE_MIN_DISTANCE_ARCSEC
+    primary_seed_grid_pixel_arcsec: float = DEFAULT_PRIMARY_SEED_GRID_PIXEL_ARCSEC
+    subhalo_seed_grid_pixel_arcsec: float = DEFAULT_SUBHALO_SEED_GRID_PIXEL_ARCSEC
     bcg_position_prior_half_width_arcsec: float = DEFAULT_BCG_POSITION_PRIOR_HALF_WIDTH_ARCSEC
     max_sources_to_try: int = 400
     caustic_compute_window_arcsec: float = DEFAULT_CAUSTIC_COMPUTE_WINDOW_ARCSEC
@@ -210,8 +217,8 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
     for name in (
         "source_redshift",
         "source_sigma_int_arcsec",
-        "primary_image_min_distance_arcsec",
-        "subhalo_image_min_distance_arcsec",
+        "primary_seed_grid_pixel_arcsec",
+        "subhalo_seed_grid_pixel_arcsec",
         "bcg_position_prior_half_width_arcsec",
         "caustic_compute_window_arcsec",
         "caustic_grid_scale_arcsec",
@@ -1163,12 +1170,12 @@ def _family_source_redshifts(config: SingleBCGMockConfig, caustic_class: str) ->
     return _valid_source_redshifts(raw_values, config)
 
 
-def _mock_image_min_distance_arcsec(config: SingleBCGMockConfig, caustic_class: str) -> float:
+def _mock_seed_grid_pixel_arcsec(config: SingleBCGMockConfig, caustic_class: str) -> float:
     caustic_class = str(caustic_class)
     if caustic_class == "primary":
-        value = float(config.primary_image_min_distance_arcsec)
+        value = float(config.primary_seed_grid_pixel_arcsec)
     elif caustic_class == "subhalo":
-        value = float(config.subhalo_image_min_distance_arcsec)
+        value = float(config.subhalo_seed_grid_pixel_arcsec)
     else:
         raise ValueError(f"Unknown mock caustic class {caustic_class!r}.")
     if not np.isfinite(value) or value <= 0.0:
@@ -1260,11 +1267,11 @@ def _mock_mapped_grid(
     lens_state: jax_lensing.StaticLensState,
     *,
     search_window_arcsec: float,
-    min_distance_arcsec: float,
+    seed_grid_pixel_arcsec: float,
     x_center: float = 0.0,
     y_center: float = 0.0,
 ) -> MockMappedGrid:
-    num_pix = int(search_window_arcsec / min_distance_arcsec) + 1
+    num_pix = int(search_window_arcsec / seed_grid_pixel_arcsec) + 1
     x_axis = np.linspace(
         -0.5 * float(search_window_arcsec) + float(x_center),
         0.5 * float(search_window_arcsec) + float(x_center),
@@ -1584,21 +1591,21 @@ def generate_single_bcg_mock(
             )
         return caustic_cache[z_key]
 
-    def get_mapped_grid(z_source: float, image_min_distance_arcsec: float) -> MockMappedGrid:
-        key = (float(z_source), float(image_min_distance_arcsec))
+    def get_mapped_grid(z_source: float, seed_grid_pixel_arcsec: float) -> MockMappedGrid:
+        key = (float(z_source), float(seed_grid_pixel_arcsec))
         if key not in mapped_grid_cache:
             start_time = time.perf_counter()
             mapped_grid_cache[key] = _mock_mapped_grid(
                 get_lens_state(float(z_source)),
                 search_window_arcsec=float(config.mock_image_search_window_arcsec),
-                min_distance_arcsec=float(image_min_distance_arcsec),
+                seed_grid_pixel_arcsec=float(seed_grid_pixel_arcsec),
             )
             _emit_mock_progress(
                 progress_callback,
                 "mapped_grid_complete",
                 z_source=float(z_source),
                 mock_image_search_window_arcsec=float(config.mock_image_search_window_arcsec),
-                image_min_distance_arcsec=float(image_min_distance_arcsec),
+                seed_grid_pixel_arcsec=float(seed_grid_pixel_arcsec),
                 mapped_grid_pixels=int(mapped_grid_cache[key].num_pix),
                 mapped_grid_points=int(mapped_grid_cache[key].x_grid.size),
                 elapsed_s=float(time.perf_counter() - start_time),
@@ -1618,13 +1625,17 @@ def generate_single_bcg_mock(
         caustic_class: str
         z_source: float
         contours: list[CausticContour]
-        image_min_distance_arcsec: float
+        seed_grid_pixel_arcsec: float
         max_attempts: int
         inside_caustic: bool
         candidate_rng: np.random.Generator
         observation_rng: np.random.Generator
         next_attempt_index: int = 1
         accepted: tuple[float, float, CausticContour, np.ndarray, np.ndarray] | None = None
+        accepted_attempt: int | None = None
+        seed_cap_saturations: int = 0
+        focused_retry: bool = False
+        drop_reason: str | None = None
 
     caustic_workers = max(1, min(int(config.mock_generation_workers), len(needed_source_redshifts)))
     if caustic_workers > 1:
@@ -1668,7 +1679,7 @@ def generate_single_bcg_mock(
             caustic_class=str(caustic_class),
             z_source=float(z_source),
             contours=contours,
-            image_min_distance_arcsec=_mock_image_min_distance_arcsec(config, str(caustic_class)),
+            seed_grid_pixel_arcsec=_mock_seed_grid_pixel_arcsec(config, str(caustic_class)),
             max_attempts=max_attempts,
             inside_caustic=inside_caustic,
             candidate_rng=np.random.default_rng(int(family_seed_values[family_index - 1, 0])),
@@ -1682,19 +1693,19 @@ def generate_single_bcg_mock(
             caustic_class=str(caustic_class),
             z_source=float(z_source),
             max_attempts=int(max_attempts),
-            image_min_distance_arcsec=float(family_state.image_min_distance_arcsec),
+            seed_grid_pixel_arcsec=float(family_state.seed_grid_pixel_arcsec),
             mock_image_search_window_arcsec=float(config.mock_image_search_window_arcsec),
             image_candidate_batch_size=int(config.mock_image_candidate_batch_size),
             mock_image_seed_cap=int(config.mock_image_seed_cap),
         )
 
-    for z_source, image_min_distance_arcsec in sorted(
+    for z_source, seed_grid_pixel_arcsec in sorted(
         {
-            (float(state.z_source), float(state.image_min_distance_arcsec))
+            (float(state.z_source), float(state.seed_grid_pixel_arcsec))
             for state in family_states
         }
     ):
-        get_mapped_grid(z_source, image_min_distance_arcsec)
+        get_mapped_grid(z_source, seed_grid_pixel_arcsec)
 
     family_workers = max(1, min(int(config.mock_generation_workers), len(family_states)))
 
@@ -1728,7 +1739,7 @@ def generate_single_bcg_mock(
             caustic_class=str(state.caustic_class),
             z_source=float(state.z_source),
             max_attempts=int(state.max_attempts),
-            image_min_distance_arcsec=float(state.image_min_distance_arcsec),
+            seed_grid_pixel_arcsec=float(state.seed_grid_pixel_arcsec),
             mock_image_search_window_arcsec=float(config.mock_image_search_window_arcsec),
             image_candidate_batch_size=int(config.mock_image_candidate_batch_size),
             mock_image_seed_cap=int(config.mock_image_seed_cap),
@@ -1741,13 +1752,76 @@ def generate_single_bcg_mock(
             f"{config.max_sources_to_try} attempts."
         )
 
+    # Subhalo image multiplets are split by ~2 theta_E (often well below the global seed-grid
+    # pixel of seed_grid_pixel_arcsec), so subhalo candidates get an additional fine seed
+    # grid centred on their contour's critical curve; without it the global grid cannot place
+    # seeds in the distinct image basins and families exhaust their attempts spuriously.
+    local_seed_grid_cache: dict[tuple[float, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]] = {}
+    local_seed_grid_lock = threading.Lock()
+
+    def get_local_seed_grid(
+        z_source: float,
+        contour: CausticContour,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+        key = (float(z_source), int(contour.caustic_index))
+        with local_seed_grid_lock:
+            cached = local_seed_grid_cache.get(key)
+        if cached is not None:
+            return cached
+        critical_x = np.asarray(contour.critical_x, dtype=float)
+        critical_y = np.asarray(contour.critical_y, dtype=float)
+        center_x = 0.5 * (float(critical_x.min()) + float(critical_x.max()))
+        center_y = 0.5 * (float(critical_y.min()) + float(critical_y.max()))
+        extent = max(
+            float(critical_x.max()) - float(critical_x.min()),
+            float(critical_y.max()) - float(critical_y.min()),
+            2.0 * MOCK_LOCAL_SEED_GRID_MIN_HALF_ARCSEC,
+        )
+        half = 0.5 * float(MOCK_LOCAL_SEED_GRID_MARGIN) * extent
+        n = int(MOCK_LOCAL_SEED_GRID_POINTS)
+        axis_x = np.linspace(center_x - half, center_x + half, n)
+        axis_y = np.linspace(center_y - half, center_y + half, n)
+        grid_x, grid_y = np.meshgrid(axis_x, axis_y)
+        grid_x = grid_x.reshape(-1)
+        grid_y = grid_y.reshape(-1)
+        lens_state = get_lens_state(float(z_source))
+        beta_x_grid, beta_y_grid = jax_lensing.ray_shooting(
+            jnp.asarray(grid_x, dtype=jnp.float64),
+            jnp.asarray(grid_y, dtype=jnp.float64),
+            lens_state,
+        )
+        entry = (
+            grid_x,
+            grid_y,
+            np.asarray(beta_x_grid, dtype=float),
+            np.asarray(beta_y_grid, dtype=float),
+            2.0 * half / max(n - 1, 1),
+        )
+        with local_seed_grid_lock:
+            local_seed_grid_cache[key] = entry
+        return entry
+
+    def local_seed_points(
+        state: FamilySearchState,
+        contour: CausticContour,
+        beta_x: float,
+        beta_y: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        grid_x, grid_y, beta_x_grid, beta_y_grid, pixel = get_local_seed_grid(state.z_source, contour)
+        dist2 = np.square(beta_x_grid - float(beta_x)) + np.square(beta_y_grid - float(beta_y))
+        selected = dist2 <= (2.0 * pixel) ** 2
+        if not np.any(selected):
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        order = np.argsort(dist2[selected])[: int(config.mock_image_seed_cap)]
+        return grid_x[selected][order], grid_y[selected][order]
+
     def evaluate_candidate_batch(
         state: FamilySearchState,
         candidates: list[tuple[int, float, float, CausticContour]],
     ) -> list[MockImageCandidateResult]:
         if not candidates:
             return []
-        mapped = get_mapped_grid(state.z_source, state.image_min_distance_arcsec)
+        mapped = get_mapped_grid(state.z_source, state.seed_grid_pixel_arcsec)
         source_x = np.asarray([candidate[1] for candidate in candidates], dtype=float)
         source_y = np.asarray([candidate[2] for candidate in candidates], dtype=float)
         seed_indices, _seed_values, valid_seeds = _mock_candidate_seed_grid(
@@ -1766,12 +1840,27 @@ def generate_single_bcg_mock(
         for row_index, candidate in enumerate(candidates):
             attempt_index, beta_x, beta_y, contour = candidate
             valid = valid_seeds_np[row_index]
-            if not np.any(valid):
-                results.append(MockImageCandidateResult(attempt_index, beta_x, beta_y, contour, np.asarray([]), np.asarray([])))
-                continue
+            if int(np.count_nonzero(valid)) >= int(config.mock_image_seed_cap):
+                if state.seed_cap_saturations == 0:
+                    emit_mock_progress(
+                        "family_seed_cap_saturated",
+                        family_index=int(state.family_index),
+                        caustic_class=str(state.caustic_class),
+                        z_source=float(state.z_source),
+                        seed_cap=int(config.mock_image_seed_cap),
+                    )
+                state.seed_cap_saturations += 1
             indices = seed_indices_np[row_index][valid]
             start_x = mapped.x_grid[indices]
             start_y = mapped.y_grid[indices]
+            if str(state.caustic_class) == "subhalo":
+                local_x, local_y = local_seed_points(state, contour, float(beta_x), float(beta_y))
+                if local_x.size:
+                    start_x = np.concatenate([start_x, local_x])
+                    start_y = np.concatenate([start_y, local_y])
+            if start_x.size == 0:
+                results.append(MockImageCandidateResult(attempt_index, beta_x, beta_y, contour, np.asarray([]), np.asarray([])))
+                continue
             refined_x, refined_y, ok = _refine_mock_image_seeds_jax(
                 lens_state,
                 beta_x,
@@ -1785,12 +1874,20 @@ def generate_single_bcg_mock(
             results.append(MockImageCandidateResult(attempt_index, beta_x, beta_y, contour, x_arr, y_arr))
         return results
 
-    def search_family(state: FamilySearchState) -> FamilySearchState:
+    def run_attempt_loop(state: FamilySearchState) -> None:
         nonlocal accepted_family_count
         while state.accepted is None and state.next_attempt_index <= state.max_attempts:
             batch: list[tuple[int, float, float, CausticContour]] = []
-            while state.next_attempt_index <= state.max_attempts and len(batch) < int(config.mock_image_candidate_batch_size):
-                batch.append(sample_candidate_attempt(state))
+            try:
+                while state.next_attempt_index <= state.max_attempts and len(batch) < int(config.mock_image_candidate_batch_size):
+                    batch.append(sample_candidate_attempt(state))
+            except RuntimeError:
+                # No caustics of this class exist at this source redshift; a subhalo
+                # family is then dropped below instead of failing the whole seed.
+                if str(state.caustic_class) == "subhalo":
+                    state.drop_reason = "no_usable_caustics"
+                    break
+                raise
             for result in evaluate_candidate_batch(state, batch):
                 accepted_attempt = _image_count_within_requirement(
                     len(result.x_img),
@@ -1809,7 +1906,7 @@ def generate_single_bcg_mock(
                     max_attempts=int(state.max_attempts),
                     image_count=int(len(result.x_img)),
                     accepted=bool(accepted_attempt),
-                    image_min_distance_arcsec=float(state.image_min_distance_arcsec),
+                    seed_grid_pixel_arcsec=float(state.seed_grid_pixel_arcsec),
                     mock_image_search_window_arcsec=float(config.mock_image_search_window_arcsec),
                     image_candidate_batch_size=int(config.mock_image_candidate_batch_size),
                     mock_image_seed_cap=int(config.mock_image_seed_cap),
@@ -1824,6 +1921,7 @@ def generate_single_bcg_mock(
                         result.x_img,
                         result.y_img,
                     )
+                    state.accepted_attempt = int(result.attempt_index)
                     with accepted_family_lock:
                         accepted_family_count += 1
                         current_accepted_family_count = int(accepted_family_count)
@@ -1836,7 +1934,7 @@ def generate_single_bcg_mock(
                         attempt=int(result.attempt_index),
                         max_attempts=int(state.max_attempts),
                         image_count=int(len(result.x_img)),
-                        image_min_distance_arcsec=float(state.image_min_distance_arcsec),
+                        seed_grid_pixel_arcsec=float(state.seed_grid_pixel_arcsec),
                         mock_image_search_window_arcsec=float(config.mock_image_search_window_arcsec),
                         caustic_index=int(result.contour.caustic_index),
                         caustic_area_arcsec2=float(result.contour.caustic_area_arcsec2),
@@ -1846,7 +1944,49 @@ def generate_single_bcg_mock(
                         accepted_families=int(current_accepted_family_count),
                     )
                     break
+
+    def search_family(state: FamilySearchState) -> FamilySearchState:
+        class_contours = [contour for contour in state.contours if contour.caustic_class == state.caustic_class]
+        if str(state.caustic_class) == "subhalo":
+            max_area = max((float(contour.caustic_area_arcsec2) for contour in class_contours), default=0.0)
+            if max_area < float(config.caustic_min_area_arcsec2):
+                # No subhalo caustic can plausibly host a multiply imaged source; skip
+                # the attempt budget entirely and drop the family.
+                state.drop_reason = "no_usable_caustics"
+                fail_family(state)
+                return state
+        run_attempt_loop(state)
+        if (
+            state.accepted is None
+            and state.drop_reason is None
+            and str(state.caustic_class) == "subhalo"
+            and class_contours
+        ):
+            # Focused retry: area-weighted sampling spreads attempts across all subhalo
+            # caustics; concentrate one more budget round on the largest before dropping.
+            largest = max(class_contours, key=lambda contour: float(contour.caustic_area_arcsec2))
+            state.contours = [largest]
+            state.focused_retry = True
+            state.max_attempts = int(state.max_attempts) + int(max_attempts)
+            emit_mock_progress(
+                "family_focused_retry",
+                family_index=int(state.family_index),
+                caustic_class=str(state.caustic_class),
+                z_source=float(state.z_source),
+                caustic_index=int(largest.caustic_index),
+                caustic_area_arcsec2=float(largest.caustic_area_arcsec2),
+                max_attempts=int(state.max_attempts),
+            )
+            run_attempt_loop(state)
         if state.accepted is None:
+            if str(state.caustic_class) == "subhalo":
+                # Subhalo caustics can be too small to multiply-image any source within
+                # the attempt budget. Dropping the family (loudly) is preferable to
+                # failing the whole seed; primary families remain fatal.
+                if state.drop_reason is None:
+                    state.drop_reason = "attempts_exhausted"
+                fail_family(state)
+                return state
             raise fail_family(state)
         return state
 
@@ -1867,11 +2007,26 @@ def generate_single_bcg_mock(
         for state in family_states:
             search_family(state)
 
+    dropped_families: list[dict[str, Any]] = []
     for state in sorted(family_states, key=lambda item: item.family_index):
         if state.accepted is None:
-            raise RuntimeError(
-                f"Generated {len(source_rows)} multiply imaged families, fewer than requested {config.n_families}."
+            if str(state.caustic_class) != "subhalo":
+                raise RuntimeError(
+                    f"Primary family {state.family_id} at z_source={state.z_source:.6g} "
+                    "was not generated; primary families are required."
+                )
+            dropped_families.append(
+                {
+                    "family_id": str(state.family_id),
+                    "caustic_class": str(state.caustic_class),
+                    "z_source": float(state.z_source),
+                    "max_attempts": int(state.max_attempts),
+                    "attempts_used": int(state.next_attempt_index) - 1,
+                    "focused_retry": bool(state.focused_retry),
+                    "reason": str(state.drop_reason or "attempts_exhausted"),
+                }
             )
+            continue
         beta_x, beta_y, contour, x_arr, y_arr = state.accepted
         family_id = state.family_id
         source_rows.append(
@@ -1887,10 +2042,16 @@ def generate_single_bcg_mock(
                 "critical_area_arcsec2": float(contour.critical_area_arcsec2),
             }
         )
-        magnification = _mock_magnification(get_lens_state(state.z_source), x_arr, y_arr)
-        for image_index, (x_true, y_true, mu_true) in enumerate(zip(x_arr, y_arr, magnification), start=1):
-            x_obs = float(x_true + state.observation_rng.normal(0.0, config.pos_sigma_arcsec))
-            y_obs = float(y_true + state.observation_rng.normal(0.0, config.pos_sigma_arcsec))
+        family_lens_state = get_lens_state(state.z_source)
+        magnification = _mock_magnification(family_lens_state, x_arr, y_arr)
+        x_obs_arr = x_arr + state.observation_rng.normal(0.0, config.pos_sigma_arcsec, size=x_arr.shape)
+        y_obs_arr = y_arr + state.observation_rng.normal(0.0, config.pos_sigma_arcsec, size=y_arr.shape)
+        # The recovery metric evaluates the model magnification at the OBSERVED positions,
+        # so record the truth magnification there too; near critical curves the two differ.
+        magnification_at_obs = _mock_magnification(family_lens_state, x_obs_arr, y_obs_arr)
+        for image_index, (x_true, y_true, x_obs, y_obs, mu_true, mu_obs) in enumerate(
+            zip(x_arr, y_arr, x_obs_arr, y_obs_arr, magnification, magnification_at_obs), start=1
+        ):
             image_id = _lowercase_image_suffix(image_index)
             image_rows.append(
                 {
@@ -1900,17 +2061,24 @@ def generate_single_bcg_mock(
                     "z_source": float(state.z_source),
                     "x_true_arcsec": float(x_true),
                     "y_true_arcsec": float(y_true),
-                    "x_obs_arcsec": x_obs,
-                    "y_obs_arcsec": y_obs,
+                    "x_obs_arcsec": float(x_obs),
+                    "y_obs_arcsec": float(y_obs),
                     "magnification_true": float(mu_true),
+                    "magnification_true_at_obs": float(mu_obs),
                     "caustic_class": str(contour.caustic_class),
                     "caustic_index": int(contour.caustic_index),
                 }
             )
 
-    if len(source_rows) < config.n_families:
+    if len(source_rows) + len(dropped_families) < config.n_families:
         raise RuntimeError(
-            f"Generated {len(source_rows)} multiply imaged families, fewer than requested {config.n_families}."
+            f"Generated {len(source_rows)} multiply imaged families "
+            f"(+{len(dropped_families)} dropped subhalo families), fewer than requested {config.n_families}."
+        )
+    if len(source_rows) < int(config.n_primary_families):
+        raise RuntimeError(
+            f"Generated {len(source_rows)} families, fewer than the {config.n_primary_families} "
+            "required primary families."
         )
 
     images = pd.DataFrame(image_rows)
@@ -1987,6 +2155,26 @@ def generate_single_bcg_mock(
     }
     if subhalo_selection is not None:
         truth_payload["subhalo_selection"] = subhalo_selection
+    if dropped_families:
+        truth_payload["dropped_families"] = dropped_families
+    truth_payload["generation_stats"] = {
+        "families": [
+            {
+                "family_id": str(state.family_id),
+                "caustic_class": str(state.caustic_class),
+                "z_source": float(state.z_source),
+                "accepted": state.accepted is not None,
+                "accepted_attempt": state.accepted_attempt,
+                "attempts_used": int(state.next_attempt_index) - 1,
+                "focused_retry": bool(state.focused_retry),
+                "seed_cap_saturations": int(state.seed_cap_saturations),
+                "drop_reason": state.drop_reason,
+            }
+            for state in sorted(family_states, key=lambda item: item.family_index)
+        ],
+        "dropped_family_count": int(len(dropped_families)),
+        "seed_cap_saturation_total": int(sum(state.seed_cap_saturations for state in family_states)),
+    }
     truth_path.write_text(json.dumps(truth_payload, indent=2), encoding="utf-8")
     mock_images_path.write_text(json.dumps(image_rows, indent=2), encoding="utf-8")
     _emit_mock_progress(
@@ -2042,11 +2230,17 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         n_subhalo_families=int(config.get("n_subhalo_families", defaults.n_subhalo_families)),
         min_images_per_family=int(config.get("min_images_per_family", defaults.min_images_per_family)),
         max_images_per_family=max_images_per_family,
-        primary_image_min_distance_arcsec=float(
-            config.get("primary_image_min_distance_arcsec", defaults.primary_image_min_distance_arcsec)
+        primary_seed_grid_pixel_arcsec=float(
+            config.get(
+                "primary_seed_grid_pixel_arcsec",
+                config.get("primary_image_min_distance_arcsec", defaults.primary_seed_grid_pixel_arcsec),
+            )
         ),
-        subhalo_image_min_distance_arcsec=float(
-            config.get("subhalo_image_min_distance_arcsec", defaults.subhalo_image_min_distance_arcsec)
+        subhalo_seed_grid_pixel_arcsec=float(
+            config.get(
+                "subhalo_seed_grid_pixel_arcsec",
+                config.get("subhalo_image_min_distance_arcsec", defaults.subhalo_seed_grid_pixel_arcsec),
+            )
         ),
         bcg_position_prior_half_width_arcsec=float(
             config.get("bcg_position_prior_half_width_arcsec", defaults.bcg_position_prior_half_width_arcsec)

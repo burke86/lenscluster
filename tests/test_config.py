@@ -882,10 +882,11 @@ def test_run_xsh_is_self_contained_ff_sims_runner() -> None:
 def test_run_mock_xsh_has_production_generation_controls() -> None:
     text = Path("run_mock.xsh").read_text(encoding="utf-8")
 
-    assert "mock_image_candidate_batch_size=1024 if production else 256" in text
-    assert "mock_image_seed_cap=64 if production else 32" in text
-    assert "mock_image_search_window_arcsec=80.0 if production else 80.0" in text
-    assert "primary_image_min_distance_arcsec=2.0 if production else 3.0" in text
+    assert "mock_image_candidate_batch_size=1024" in text
+    assert "mock_image_seed_cap=64" in text
+    assert "mock_image_search_window_arcsec=80.0" in text
+    assert "primary_seed_grid_pixel_arcsec=1.0" in text
+    assert "subhalo_seed_grid_pixel_arcsec=1.0" in text
     assert "max_sources_to_try=400" in text
     assert "mock_generation_workers=min(cores, 16) if production else 1" in text
 

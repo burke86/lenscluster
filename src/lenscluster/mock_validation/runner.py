@@ -658,7 +658,13 @@ def magnification_recovery_table(
     epsilon: float = 1.0e-8,
 ) -> pd.DataFrame:
     merged = truth_images.merge(recovered, on="image_label", how="left", suffixes=("_truth", "_recovered"))
-    mu_true = pd.to_numeric(merged["magnification_true"], errors="coerce")
+    # The recovered magnification is evaluated at the OBSERVED (noise-perturbed) image
+    # positions, so compare against the truth magnification at those same positions when
+    # the mock provides it; older mocks only carry the truth at the true positions.
+    truth_column = (
+        "magnification_true_at_obs" if "magnification_true_at_obs" in merged else "magnification_true"
+    )
+    mu_true = pd.to_numeric(merged[truth_column], errors="coerce")
     mu_rec = pd.to_numeric(merged["magnification_recovered"], errors="coerce")
     merged["magnification_bias"] = mu_rec - mu_true
     denom = np.maximum(np.abs(mu_true.to_numpy(dtype=float)), float(epsilon))
@@ -3681,7 +3687,12 @@ def _plot_surface_density_recovery(profile_df: pd.DataFrame, path: Path) -> None
 
 def _plot_magnification_recovery(magnification_df: pd.DataFrame, path: Path) -> None:
     fig, ax = plt.subplots(figsize=(5, 5))
-    truth = magnification_df["magnification_true"].to_numpy(dtype=float)
+    truth_column = (
+        "magnification_true_at_obs"
+        if "magnification_true_at_obs" in magnification_df.columns
+        else "magnification_true"
+    )
+    truth = magnification_df[truth_column].to_numpy(dtype=float)
     recovered = magnification_df["magnification_recovered"].to_numpy(dtype=float)
     plotted = recovered
     if {"magnification_q16", "magnification_q50", "magnification_q84"}.issubset(magnification_df.columns):
@@ -5641,6 +5652,22 @@ def _log_validation_runtime_summary(config: MockValidationConfig) -> None:
             f"posterior_image_diagnostic_mode={config.solver.template.image_diagnostics.posterior_image_diagnostic_mode}"
         ),
     )
+    # Self-documenting run configuration: these settings changed campaign semantics in the
+    # past without being visible in the run directory, so echo them into the debug log.
+    _log(
+        config,
+        (
+            f"[validation-config] subhalo_sigma_scatter_dex={config.mock.subhalo_sigma_scatter_dex:.6g} "
+            f"subhalo_cut_scatter_dex={config.mock.subhalo_cut_scatter_dex:.6g} "
+            f"scaling_scatter={config.solver.template.scaling.scaling_scatter} "
+            f"perturbation_discovery_top_k={config.solver.template.perturbation.perturbation_discovery_top_k} "
+            f"pos_sigma_likelihood={config.solver.template.likelihood.pos_sigma_arcsec} "
+            f"critical_arc_anisotropic_covariance={config.solver.template.likelihood.critical_arc_anisotropic_covariance} "
+            f"dense_mass={config.solver.template.runtime.dense_mass} "
+            f"log_sigma_offset_width={config.solver.template.scaling.independent_scaling_free_log_sigma_offset_width} "
+            f"log_mass_offset_width={config.solver.template.scaling.independent_scaling_free_log_mass_offset_width}"
+        ),
+    )
 
 
 def run_single_bcg_validation(
@@ -5678,8 +5705,8 @@ def run_single_bcg_validation(
                 f"[load] generating mock primary_families={mock_config.n_primary_families} "
                 f"subhalo_families={mock_config.n_subhalo_families} subhalos={mock_config.n_subhalos} "
                 f"image_count={_image_count_requirement_text(mock_config.min_images_per_family, mock_config.max_images_per_family)} "
-                f"primary_image_min_distance={mock_config.primary_image_min_distance_arcsec:.4g} "
-                f"subhalo_image_min_distance={mock_config.subhalo_image_min_distance_arcsec:.4g} "
+                f"primary_seed_grid_pixel={mock_config.primary_seed_grid_pixel_arcsec:.4g} "
+                f"subhalo_seed_grid_pixel={mock_config.subhalo_seed_grid_pixel_arcsec:.4g} "
                 f"bcg_position_prior_half_width={mock_config.bcg_position_prior_half_width_arcsec:.4g}"
             ),
         )

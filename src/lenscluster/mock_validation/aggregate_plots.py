@@ -17,7 +17,7 @@ from matplotlib.lines import Line2D
 
 from lenscluster.plot_style import apply_lenscluster_plot_style
 
-DEFAULT_RUN_NAME = "single_bcg_production_source"
+DEFAULT_RUN_NAME = "single_bcg_production"
 DEFAULT_STAGES = ("stage1_backprojected_centroid_fit", "stage2_free_source_forward_fit")
 DEFAULT_VARIANTS = ("anisotropic", "isotropic")
 DEFAULT_FORMATS = ("pdf",)
