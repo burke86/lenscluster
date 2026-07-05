@@ -889,6 +889,42 @@ def test_run_mock_xsh_has_production_generation_controls() -> None:
     assert "subhalo_seed_grid_pixel_arcsec=1.0" in text
     assert "max_sources_to_try=400" in text
     assert "mock_generation_workers=min(cores, 16) if production else 1" in text
+    assert "source_magnitude_min = 24.0" in text
+    assert "source_magnitude_max = 27.0" in text
+    assert "image_magnitude_sigma_mag = 0.10" in text
+    assert "image_magnitude_mu_floor = 1.0e-3" in text
+    assert "source_magnitude_min=source_magnitude_min" in text
+    assert "source_magnitude_max=source_magnitude_max" in text
+    assert "image_magnitude_sigma_mag=image_magnitude_sigma_mag" in text
+    assert "image_magnitude_mu_floor=image_magnitude_mu_floor" in text
+    assert "source_magnitude_range=({config.mock.source_magnitude_min}, {config.mock.source_magnitude_max})" in text
+    assert "image_magnitude_sigma_mag={config.mock.image_magnitude_sigma_mag}" in text
+    assert "--magnitude-likelihood" in text
+    assert "use_magnitude_likelihood=use_magnitude_likelihood" in text
+    assert 'variant_name=f"{covariance_mode}_maglikelihood" if use_magnitude_likelihood else covariance_mode' in text
+    assert "use_magnitude_likelihood={config.solver.template.likelihood.use_magnitude_likelihood}" in text
+
+
+def test_submit_mock_array_runs_anisotropic_position_and_magnitude_likelihood() -> None:
+    import argparse
+    import hpc_scripts.submit_mock_array as submit_mock_array
+
+    args = argparse.Namespace(
+        campaign="dryrun_magcompare",
+        output_dir="validation_runs/mock_recovery",
+        preset="production",
+        seeds=(12345,),
+    )
+
+    script = submit_mock_array.build_sbatch_script("dryrun_magcompare", args)
+
+    assert script.count("run_mock.xsh") == 2
+    assert script.count("--covariance anisotropic") == 2
+    assert "--covariance isotropic" not in script
+    assert "--magnitude-likelihood off" in script
+    assert "--magnitude-likelihood on" in script
+    assert "Running anisotropic position-only fit" in script
+    assert "Running anisotropic magnitude-likelihood fit" in script
 
 
 def test_ff_sims_notebook_is_self_contained_and_config_native() -> None:

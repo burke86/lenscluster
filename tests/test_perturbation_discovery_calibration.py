@@ -10,12 +10,13 @@ from lenscluster import cluster_solver as cs
 
 
 def test_calibrated_tolerances_reference_values() -> None:
+    # DETECTION_SIGMA=2: alpha_tol = 2 * pos_sigma / (2 * width)
     alpha_tol, jacobian_tol = cs._perturbation_discovery_calibrated_tolerances(0.05, 0.10)
-    assert alpha_tol == pytest.approx(0.25)
-    assert jacobian_tol == pytest.approx(0.25)
+    assert alpha_tol == pytest.approx(0.5)
+    assert jacobian_tol == pytest.approx(0.5)
     # alpha_tol scales linearly with pos sigma and inversely with the offset width.
-    assert cs._perturbation_discovery_calibrated_tolerances(0.10, 0.10)[0] == pytest.approx(0.5)
-    assert cs._perturbation_discovery_calibrated_tolerances(0.05, 0.20)[0] == pytest.approx(0.125)
+    assert cs._perturbation_discovery_calibrated_tolerances(0.10, 0.10)[0] == pytest.approx(1.0)
+    assert cs._perturbation_discovery_calibrated_tolerances(0.05, 0.20)[0] == pytest.approx(0.25)
 
 
 @pytest.mark.parametrize("pos_sigma, width", [(0.0, 0.1), (-1.0, 0.1), (0.05, 0.0), (np.nan, 0.1), (0.05, np.inf)])
@@ -38,9 +39,9 @@ def test_reference_draws_even_spacing_and_fallbacks() -> None:
 
 
 def _union_state() -> SimpleNamespace:
-    # sigma_arcsec=0.02, width=0.10 -> alpha_tol = jacobian_tol = 0.1
+    # sigma_arcsec=0.01, width=0.10, DETECTION_SIGMA=2 -> alpha_tol = jacobian_tol = 0.1
     return SimpleNamespace(
-        sigma_arcsec=0.02,
+        sigma_arcsec=0.01,
         independent_scaling_free_log_sigma_offset_width=0.10,
         potfiles=[{"id": "members"}],
         scaling_component_records=[

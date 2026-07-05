@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import to_rgb
+from matplotlib.patches import Ellipse
 from matplotlib.lines import Line2D
 
 from lenscluster.plot_style import apply_lenscluster_plot_style
@@ -63,6 +64,32 @@ VARIANT_MARKERS = {
     "anisotropic": "D",
     "isotropic": "o",
 }
+JOINT_SIGMA_RCUT_SPECS = {
+    "potfile": {
+        "sigma_parameter": "potfile.sigma",
+        "rcut_parameter": "potfile.cutkpc",
+        "filename": "sigma_rcut_recovery",
+        "label": "Potfile",
+    },
+    "halo": {
+        "sigma_parameter": "halo.v_disp",
+        "rcut_parameter": "halo.cut_radius_kpc",
+        "filename": "halo_sigma_rcut_recovery",
+        "label": "Halo",
+    },
+    "bcg": {
+        "sigma_parameter": "bcg.v_disp",
+        "rcut_parameter": "bcg.cut_radius_kpc",
+        "filename": "bcg_sigma_rcut_recovery",
+        "label": "BCG",
+    },
+}
+JOINT_SCALING_PARAMETERS = tuple(
+    parameter
+    for spec in JOINT_SIGMA_RCUT_SPECS.values()
+    for parameter in (spec["sigma_parameter"], spec["rcut_parameter"])
+)
+JOINT_SCALING_LEVELS = (2.30, 5.99)
 METHOD_JITTER = {
     ("stage1_backprojected_centroid_fit", "anisotropic"): -0.018,
     ("stage1_backprojected_centroid_fit", "isotropic"): -0.006,
@@ -1149,6 +1176,223 @@ def _magnification_recovery_output_base(output_path: Path, stage: str, primary_s
     return output_path / f"magnification_recovery_{stage_alias(stage)}"
 
 
+def joint_sigma_rcut_recovery_rows(parameter_df: pd.DataFrame, *, component: str = "potfile") -> pd.DataFrame:
+    if component not in JOINT_SIGMA_RCUT_SPECS:
+        raise ValueError(f"component must be one of {sorted(JOINT_SIGMA_RCUT_SPECS)}.")
+    spec = JOINT_SIGMA_RCUT_SPECS[component]
+    sigma_parameter = str(spec["sigma_parameter"])
+    rcut_parameter = str(spec["rcut_parameter"])
+    required_parameters = (sigma_parameter, rcut_parameter)
+    df = finite_recovery_rows(parameter_df)
+    if df.empty:
+        return pd.DataFrame()
+    parameter_names = df["parameter"].astype(str)
+    df = df.loc[parameter_names.isin(required_parameters)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    key_columns = [
+        column
+        for column in ("campaign", "run_name", "seed", "variant", "stage", "stage_label", "method_label", "result_path")
+        if column in df
+    ]
+    duplicate_mask = df.duplicated([*key_columns, "parameter"], keep=False)
+    if duplicate_mask.any():
+        duplicates = df.loc[duplicate_mask, [*key_columns, "parameter"]].to_dict("records")
+        raise ValueError(f"Duplicate sigma/r_cut recovery rows found: {duplicates[:3]}")
+    rows: list[dict[str, Any]] = []
+    for keys, group in df.groupby(key_columns, sort=False, dropna=False):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        row = dict(zip(key_columns, key_values))
+        by_parameter = {str(record["parameter"]): record for record in group.to_dict("records")}
+        missing = [name for name in required_parameters if name not in by_parameter]
+        if missing:
+            warnings.warn(
+                f"Skipping incomplete {component} sigma/r_cut recovery group {row}: missing {missing}.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        sigma = by_parameter[sigma_parameter]
+        rcut = by_parameter[rcut_parameter]
+        rows.append(
+            {
+                **row,
+                "component": component,
+                "component_label": str(spec["label"]),
+                "sigma_parameter": sigma_parameter,
+                "rcut_parameter": rcut_parameter,
+                "sigma_truth": float(sigma["truth"]),
+                "sigma_median": float(sigma["median"]),
+                "sigma_q16": float(sigma["q16"]),
+                "sigma_q84": float(sigma["q84"]),
+                "rcut_truth": float(rcut["truth"]),
+                "rcut_median": float(rcut["median"]),
+                "rcut_q16": float(rcut["q16"]),
+                "rcut_q84": float(rcut["q84"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _sigma_rcut_recovery_output_base(output_path: Path, stage: str, primary_stage: str, *, component: str = "potfile") -> Path:
+    if component not in JOINT_SIGMA_RCUT_SPECS:
+        raise ValueError(f"component must be one of {sorted(JOINT_SIGMA_RCUT_SPECS)}.")
+    filename = str(JOINT_SIGMA_RCUT_SPECS[component]["filename"])
+    if str(stage) == str(primary_stage):
+        return output_path / filename
+    return output_path / f"{filename}_{stage_alias(stage)}"
+
+
+def _add_covariance_ellipses(
+    ax: plt.Axes,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    color: str,
+    label: str,
+) -> None:
+    points = np.column_stack([x, y])
+    finite = np.isfinite(points).all(axis=1)
+    points = points[finite]
+    if points.shape[0] < 3:
+        warnings.warn(
+            f"Skipping sigma/r_cut covariance contours for {label}: need at least three finite points.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    covariance = np.cov(points, rowvar=False)
+    if covariance.shape != (2, 2) or not np.isfinite(covariance).all():
+        warnings.warn(
+            f"Skipping sigma/r_cut covariance contours for {label}: covariance is not finite.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    if np.any(eigenvalues <= 0.0) or not np.isfinite(eigenvalues).all():
+        warnings.warn(
+            f"Skipping sigma/r_cut covariance contours for {label}: covariance is not full-rank.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    order = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]
+    angle = math.degrees(math.atan2(float(eigenvectors[1, 0]), float(eigenvectors[0, 0])))
+    center = points.mean(axis=0)
+    for level_index, level in enumerate(JOINT_SCALING_LEVELS):
+        width, height = 2.0 * np.sqrt(eigenvalues * float(level))
+        ellipse = Ellipse(
+            xy=(float(center[0]), float(center[1])),
+            width=float(width),
+            height=float(height),
+            angle=angle,
+            facecolor="none",
+            edgecolor=color,
+            linewidth=1.0 if level_index == 0 else 0.75,
+            linestyle="-" if level_index == 0 else "--",
+            alpha=0.55 if level_index == 0 else 0.35,
+            zorder=1.2,
+            label="_nolegend_",
+        )
+        ax.add_patch(ellipse)
+
+
+def plot_joint_sigma_rcut_recovery(
+    joint_df: pd.DataFrame,
+    output_base: Path,
+    formats: tuple[str, ...],
+) -> tuple[Path, ...]:
+    if joint_df.empty:
+        return tuple()
+    required = ["sigma_truth", "sigma_median", "rcut_truth", "rcut_median"]
+    values = joint_df[required].apply(pd.to_numeric, errors="coerce")
+    plot_df = joint_df.loc[np.isfinite(values.to_numpy(dtype=float)).all(axis=1)].copy()
+    if plot_df.empty:
+        return tuple()
+    component_label = "Scaling"
+    if "component_label" in plot_df:
+        labels = plot_df["component_label"].dropna().astype(str).drop_duplicates().tolist()
+        if len(labels) == 1:
+            component_label = labels[0]
+    paths: list[Path] = []
+    for fmt in formats:
+        path = output_base.with_suffix(f".{fmt}")
+        fig, ax = plt.subplots(figsize=(6.2, 5.5))
+        for (stage, variant), group in plot_df.groupby(["stage", "variant"], sort=False):
+            stage = str(stage)
+            variant = str(variant)
+            variant_color = VARIANT_COLORS.get(variant, "0.35")
+            x = group["sigma_median"].to_numpy(dtype=float)
+            y = group["rcut_median"].to_numpy(dtype=float)
+            _add_covariance_ellipses(
+                ax,
+                x,
+                y,
+                color=variant_color,
+                label=method_label(stage, variant),
+            )
+            ax.scatter(
+                x,
+                y,
+                s=28.0,
+                marker=VARIANT_MARKERS.get(variant, "o"),
+                facecolors=_stage_marker_facecolor(stage, variant_color),
+                edgecolors=_stage_marker_edgecolor(stage, variant_color),
+                linewidths=0.8,
+                alpha=0.88,
+                zorder=2,
+                label=variant_label(variant),
+            )
+        truth_points = (
+            plot_df[["sigma_truth", "rcut_truth"]]
+            .drop_duplicates()
+            .apply(pd.to_numeric, errors="coerce")
+            .dropna()
+        )
+        if not truth_points.empty:
+            ax.scatter(
+                truth_points["sigma_truth"].to_numpy(dtype=float),
+                truth_points["rcut_truth"].to_numpy(dtype=float),
+                marker="*",
+                s=95.0,
+                facecolors="black",
+                edgecolors="black",
+                linewidths=0.7,
+                zorder=3,
+                label="Truth",
+            )
+        limits = _axis_limits(
+            plot_df["sigma_median"].to_numpy(dtype=float),
+            plot_df["sigma_truth"].to_numpy(dtype=float),
+        )
+        if limits is not None:
+            ax.set_xlim(limits)
+        limits = _axis_limits(
+            plot_df["rcut_median"].to_numpy(dtype=float),
+            plot_df["rcut_truth"].to_numpy(dtype=float),
+        )
+        if limits is not None:
+            ax.set_ylim(limits)
+        ax.set_xlabel(rf"{component_label} $\sigma$ (fit)")
+        ax.set_ylabel(rf"{component_label} $r_{{\rm cut}}$ (fit)")
+        handles, labels = ax.get_legend_handles_labels()
+        unique: dict[str, Any] = {}
+        for handle, label in zip(handles, labels):
+            if label == "_nolegend_" or label in unique:
+                continue
+            unique[label] = handle
+        if unique:
+            ax.legend(unique.values(), unique.keys(), loc="best", frameon=False)
+        fig.tight_layout()
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
+        paths.append(path)
+    return tuple(paths)
+
+
 def _absolute_magnification_interval(
     q16: np.ndarray,
     q50: np.ndarray,
@@ -1723,6 +1967,19 @@ def write_aggregate_plots(
             fractional_truth_floor=fractional_truth_floor,
         )
     )
+    for component in JOINT_SIGMA_RCUT_SPECS:
+        joint_scaling_df = joint_sigma_rcut_recovery_rows(parameter_df, component=component)
+        if joint_scaling_df.empty:
+            continue
+        for stage in tuple(str(value) for value in stages):
+            stage_joint_scaling_df = joint_scaling_df[joint_scaling_df["stage"].astype(str) == stage].copy()
+            plot_paths.extend(
+                plot_joint_sigma_rcut_recovery(
+                    stage_joint_scaling_df,
+                    _sigma_rcut_recovery_output_base(output_path, stage, paper_stage, component=component),
+                    formats,
+                )
+            )
     if not magnification_df.empty:
         for stage in tuple(str(value) for value in stages):
             stage_magnification_df = magnification_df[magnification_df["stage"].astype(str) == stage].copy()

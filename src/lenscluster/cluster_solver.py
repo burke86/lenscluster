@@ -367,7 +367,10 @@ SOLVER_POTFILE_POSITIVE_PRIOR_COORDINATE = "log_positive_latent"
 # `width` in ln(sigma) (alpha ~ sigma^2 -> image shift ~ ALPHA_LOG_SLOPE * width * |alpha|)
 # would move an image by DETECTION_SIGMA positional sigmas. The Jacobian term uses a
 # lever arm to convert local Jacobian perturbations into an equivalent positional effect.
-PERTURBATION_DISCOVERY_DETECTION_SIGMA = 1.0
+# 2.0: at 1.0 the jul5_1158 mocks promoted a median 12/25 members whose deltas stayed
+# prior-dominated; requiring a 2-sigma detectable shift keeps only members the data can
+# actually constrain individually.
+PERTURBATION_DISCOVERY_DETECTION_SIGMA = 2.0
 PERTURBATION_DISCOVERY_ALPHA_LOG_SLOPE = 2.0
 PERTURBATION_DISCOVERY_JACOBIAN_LEVER_ARCSEC = 1.0
 PERTURBATION_DISCOVERY_SCORE_DRAWS = 16
@@ -15685,6 +15688,68 @@ def _build_parameter_specs(
     return specs, component_param_assignments, lens_model_list
 
 
+def _potfile_scaling_prior_override(entry: Any, *, context: str) -> dict[str, Any] | None:
+    """Decode a potfile sigma/cut limit entry into prior overrides for the scaling specs.
+
+    Entries follow the lenstool limit encoding produced by `_prior_config_to_limit_entry`
+    and the .par parser: [0(,value)] fixed, [1, lower, upper(, step)] uniform,
+    [3, mean, std] normal, [9, mean, std, lower, upper] truncated normal. Returns None
+    for absent entries, bare nominal values, or fixed entries — the baked defaults then
+    apply. Values are physical; the caller's log-positive transform maps them to latent
+    space, so a uniform entry becomes log-uniform in the physical parameter.
+    """
+    if entry is None or not isinstance(entry, (list, tuple)):
+        return None
+    if len(entry) == 0:
+        raise ValueError(f"Empty prior limit entry for {context}.")
+    kind = int(entry[0])
+    values = [float(item) for item in entry[1:]]
+    if kind == 0:
+        return None
+    if kind == 1:
+        if len(values) < 2 or not np.isfinite(values[0]) or not np.isfinite(values[1]) or values[1] <= values[0]:
+            raise ValueError(f"Uniform prior for {context} requires finite upper > lower: {entry!r}.")
+        return {
+            "prior_kind": "uniform",
+            "lower": values[0],
+            "upper": values[1],
+            "mean": None,
+            "std": None,
+            "step": values[2] if len(values) > 2 and values[2] > 0.0 else None,
+        }
+    if kind == 3:
+        if len(values) < 2 or not np.isfinite(values[0]) or values[0] <= 0.0 or not np.isfinite(values[1]) or values[1] <= 0.0:
+            raise ValueError(f"Normal prior for {context} requires positive finite mean and std: {entry!r}.")
+        return {
+            "prior_kind": "normal",
+            "lower": float("-inf"),
+            "upper": float("inf"),
+            "mean": values[0],
+            "std": values[1],
+            "step": None,
+        }
+    if kind == 9:
+        if (
+            len(values) < 4
+            or not all(np.isfinite(values[:4]))
+            or values[0] <= 0.0
+            or values[1] <= 0.0
+            or values[3] <= values[2]
+        ):
+            raise ValueError(
+                f"Truncated-normal prior for {context} requires positive mean/std and upper > lower: {entry!r}."
+            )
+        return {
+            "prior_kind": "truncated_normal",
+            "lower": values[2],
+            "upper": values[3],
+            "mean": values[0],
+            "std": values[1],
+            "step": None,
+        }
+    raise ValueError(f"Unsupported prior limit kind {kind} for {context}: {entry!r}.")
+
+
 def _build_scaling_parameter_specs(
     potfiles: list[dict[str, Any]],
     start_index: int = 0,
@@ -15769,13 +15834,27 @@ def _build_scaling_parameter_specs(
                 f"Unsupported scaling_relation_mode={scaling_relation_mode!r}; "
                 f"expected {SCALING_RELATION_MODE_DIRECT_EXPONENTS!r}."
             )
+        # Honor per-potfile sigma/cut prior limit entries (MemberPopulationConfig priors
+        # or lenstool potfile limit lines). The baked solver_priors above apply only when
+        # a potfile does not configure a prior (absent, bare nominal value, or kind 0).
+        cut_entry = potfile.get("cutkpc")
+        if cut_entry is None and potfile.get("cut") is not None:
+            cut_entry = _scale_potfile_prior_to_kpc(potfile.get("cut"), kpc_per_arcsec)
+        for field_name, entry in (("sigma", potfile.get("sigma")), ("cutkpc", cut_entry)):
+            override = _potfile_scaling_prior_override(entry, context=f"{potfile_id}.{field_name}")
+            if override is None:
+                continue
+            step = override.pop("step")
+            if step is not None:
+                solver_priors[field_name]["step"] = step
+            solver_priors[field_name].update(override)
         scaling_fields = ("sigma", "cutkpc", "corekpc", "alpha_sigma", "gamma_ml")
         for field_name in scaling_fields:
             prior = solver_priors[field_name]
             prior_kind = str(prior["prior_kind"])
             physical_lower = float(prior["lower"])
             physical_upper = float(prior["upper"])
-            physical_mean = float(prior["mean"])
+            physical_mean = None if prior.get("mean") is None else float(prior["mean"])
             physical_std = None if prior.get("std") is None else float(prior["std"])
             lower = physical_lower
             upper = physical_upper

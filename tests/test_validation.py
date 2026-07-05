@@ -292,13 +292,59 @@ def test_generate_single_bcg_mock_parses_and_has_finite_magnifications(tmp_path:
     assert len(potentials_with_priors) == 2
     assert images_df["family_id"].nunique() == 2
     assert sorted(images_df.groupby("family_id")["catalog_z"].first().round(3).tolist()) == [1.5, 2.0]
+    assert np.isfinite(images_df["catalog_mag"].to_numpy(dtype=float)).all()
+    assert np.unique(np.round(images_df["catalog_mag"].to_numpy(dtype=float), 8)).size > 1
+    assert np.isfinite(images_df["catalog_mag_err"].to_numpy(dtype=float)).all()
+    np.testing.assert_allclose(
+        images_df["catalog_mag_err"].to_numpy(dtype=float),
+        np.full(len(images_df), config.image_magnitude_sigma_mag),
+    )
     assert (images.groupby("family_id").size() >= config.min_images_per_family).all()
     assert {source["caustic_class"] for source in truth["sources"]} == {"primary"}
     assert all(int(source["n_images"]) >= 3 for source in truth["sources"])
+    assert all(
+        config.source_magnitude_min <= float(source["source_magnitude_true"]) <= config.source_magnitude_max
+        for source in truth["sources"]
+    )
     assert truth["config"]["primary_source_redshifts"] == [1.5, 2.0, 3.0]
     assert truth["config"]["subhalo_source_redshifts"] == [1.5, 2.0, 3.0]
+    assert truth["config"]["source_magnitude_min"] == pytest.approx(config.source_magnitude_min)
+    assert truth["config"]["source_magnitude_max"] == pytest.approx(config.source_magnitude_max)
+    assert truth["config"]["image_magnitude_sigma_mag"] == pytest.approx(config.image_magnitude_sigma_mag)
+    assert truth["config"]["image_magnitude_mu_floor"] == pytest.approx(config.image_magnitude_mu_floor)
     assert "source_redshifts" not in truth["config"]
     assert np.isfinite(images["magnification_true"].to_numpy(dtype=float)).all()
+    for column in (
+        "source_magnitude_true",
+        "image_magnitude_true",
+        "image_magnitude_obs",
+        "image_magnitude_err",
+    ):
+        assert column in images
+        assert np.isfinite(images[column].to_numpy(dtype=float)).all()
+    expected_image_magnitude_true = images["source_magnitude_true"].to_numpy(dtype=float) - 2.5 * np.log10(
+        np.abs(images["magnification_true_at_obs"].to_numpy(dtype=float)) + config.image_magnitude_mu_floor
+    )
+    np.testing.assert_allclose(
+        images["image_magnitude_true"].to_numpy(dtype=float),
+        expected_image_magnitude_true,
+        rtol=1.0e-10,
+        atol=1.0e-10,
+    )
+    magnitude_residual = images["image_magnitude_obs"].to_numpy(dtype=float) - images[
+        "image_magnitude_true"
+    ].to_numpy(dtype=float)
+    assert np.isfinite(magnitude_residual).all()
+    assert np.max(np.abs(magnitude_residual)) < 6.0 * config.image_magnitude_sigma_mag
+    np.testing.assert_allclose(
+        images["image_magnitude_err"].to_numpy(dtype=float),
+        np.full(len(images), config.image_magnitude_sigma_mag),
+    )
+    image_truth_records = truth["images"]
+    assert all("source_magnitude_true" in row for row in image_truth_records)
+    assert all("image_magnitude_true" in row for row in image_truth_records)
+    assert all("image_magnitude_obs" in row for row in image_truth_records)
+    assert all("image_magnitude_err" in row for row in image_truth_records)
     assert set(truth["parameter_truth"]) >= {"halo.v_disp", "bcg.v_disp"}
     # source.sigma_int has no truth entry: the mock never injects intrinsic source-plane
     # scatter, so recording one produced a spurious -1 fractional bias in recovery tables.
@@ -2307,6 +2353,13 @@ def test_subhalo_spatial_dpie_is_broader_than_compact_gamma() -> None:
         ({"subhalo_alpha_sigma": float("nan")}, "subhalo_alpha_sigma"),
         ({"subhalo_gamma_ml": float("nan")}, "subhalo_gamma_ml"),
         ({"subhalo_alpha_sigma": 0.6, "subhalo_gamma_ml": 0.0}, "Derived subhalo beta_radius"),
+        ({"source_magnitude_min": float("nan")}, "source_magnitude_min/source_magnitude_max"),
+        ({"source_magnitude_max": float("inf")}, "source_magnitude_min/source_magnitude_max"),
+        ({"source_magnitude_min": 27.0, "source_magnitude_max": 27.0}, "source_magnitude_min/source_magnitude_max"),
+        ({"image_magnitude_sigma_mag": 0.0}, "image_magnitude_sigma_mag"),
+        ({"image_magnitude_sigma_mag": float("nan")}, "image_magnitude_sigma_mag"),
+        ({"image_magnitude_mu_floor": 0.0}, "image_magnitude_mu_floor"),
+        ({"image_magnitude_mu_floor": float("inf")}, "image_magnitude_mu_floor"),
     ],
 )
 def test_subhalo_spatial_invalid_config_raises(updates: dict[str, Any], message: str) -> None:
@@ -2328,6 +2381,10 @@ def test_subhalo_spatial_config_round_trips_from_truth() -> None:
             subhalo_spatial_core_radius_arcsec=25.0,
             subhalo_spatial_cut_radius_arcsec=180.0,
             subhalo_force_core_count=0,
+            source_magnitude_min=23.5,
+            source_magnitude_max=26.5,
+            image_magnitude_sigma_mag=0.12,
+            image_magnitude_mu_floor=2.0e-3,
         ).to_json_dict()
     }
 
@@ -2338,6 +2395,10 @@ def test_subhalo_spatial_config_round_trips_from_truth() -> None:
     assert config.subhalo_spatial_core_radius_arcsec == pytest.approx(25.0)
     assert config.subhalo_spatial_cut_radius_arcsec == pytest.approx(180.0)
     assert config.subhalo_force_core_count == 0
+    assert config.source_magnitude_min == pytest.approx(23.5)
+    assert config.source_magnitude_max == pytest.approx(26.5)
+    assert config.image_magnitude_sigma_mag == pytest.approx(0.12)
+    assert config.image_magnitude_mu_floor == pytest.approx(2.0e-3)
 
 
 def test_plot_subhalo_shmf_writes_pdf(tmp_path: Path) -> None:
@@ -10175,38 +10236,37 @@ def test_potfile_mode9_scaling_priors_transform_bounds_to_latent_log_space() -> 
     sigma_spec = specs[param_indices[0]["sigma"]]
     cut_spec = specs[param_indices[0]["cutkpc"]]
     core_spec = specs[param_indices[0]["corekpc"]]
+    # Configured mode-9 entries are honored: sigma in km/s, cut in arcsec * kpc_per_arcsec.
     expected_sigma_mean, expected_sigma_std = cluster_solver._positive_lognormal_parameters(
-        cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_MEAN,
-        cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_STD,
+        245.0, 55.0, floor=cluster_solver.VDISP_TRUNCATION_FLOOR_KM_S
     )
     expected_cut_mean, expected_cut_std = cluster_solver._positive_lognormal_parameters(
-        cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_MEAN_KPC,
-        cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_STD_KPC,
+        52.5, 47.5, floor=cluster_solver.SAFE_RADIUS_MARGIN_KPC
     )
 
     assert cluster_solver.SOLVER_POTFILE_POSITIVE_PRIOR_COORDINATE == "log_positive_latent"
     assert sigma_spec.prior_kind == "truncated_normal"
     assert sigma_spec.transform_kind == "log_positive"
-    assert sigma_spec.lower == pytest.approx(np.log(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_LOWER))
-    assert sigma_spec.upper == pytest.approx(np.log(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_UPPER))
+    assert sigma_spec.lower == pytest.approx(np.log(190.0))
+    assert sigma_spec.upper == pytest.approx(np.log(300.0))
     assert sigma_spec.mean == pytest.approx(expected_sigma_mean)
     assert sigma_spec.std == pytest.approx(expected_sigma_std)
-    assert sigma_spec.physical_lower == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_LOWER)
-    assert sigma_spec.physical_upper == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_UPPER)
-    assert sigma_spec.physical_mean == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_MEAN)
-    assert sigma_spec.physical_std == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_STD)
+    assert sigma_spec.physical_lower == pytest.approx(190.0)
+    assert sigma_spec.physical_upper == pytest.approx(300.0)
+    assert sigma_spec.physical_mean == pytest.approx(245.0)
+    assert sigma_spec.physical_std == pytest.approx(55.0)
 
     assert cut_spec.prior_kind == "truncated_normal"
     assert cut_spec.transform_kind == "log_positive"
     assert cut_spec.transform_offset == pytest.approx(0.0)
-    assert cut_spec.lower == pytest.approx(np.log(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_LOWER_KPC))
-    assert cut_spec.upper == pytest.approx(np.log(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_UPPER_KPC))
+    assert cut_spec.lower == pytest.approx(np.log(5.0))
+    assert cut_spec.upper == pytest.approx(np.log(100.0))
     assert cut_spec.mean == pytest.approx(expected_cut_mean)
     assert cut_spec.std == pytest.approx(expected_cut_std)
-    assert cut_spec.physical_lower == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_LOWER_KPC)
-    assert cut_spec.physical_upper == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_UPPER_KPC)
-    assert cut_spec.physical_mean == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_MEAN_KPC)
-    assert cut_spec.physical_std == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_STD_KPC)
+    assert cut_spec.physical_lower == pytest.approx(5.0)
+    assert cut_spec.physical_upper == pytest.approx(100.0)
+    assert cut_spec.physical_mean == pytest.approx(52.5)
+    assert cut_spec.physical_std == pytest.approx(47.5)
 
     assert core_spec.prior_kind == "truncated_normal"
     assert core_spec.transform_kind == "log_positive"
@@ -10218,6 +10278,91 @@ def test_potfile_mode9_scaling_priors_transform_bounds_to_latent_log_space() -> 
     assert core_spec.physical_upper == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CORE_REF_UPPER_KPC)
     assert core_spec.physical_mean == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CORE_REF_MEDIAN_KPC)
     assert core_spec.physical_std is None
+
+
+def _scaling_prior_potfile(**entries: object) -> dict[str, object]:
+    return {
+        "id": "members",
+        "type": cluster_solver.DP_IE_PROFILE,
+        "catalog_df": pd.DataFrame({"id": ["member"]}),
+        "core_arcsec": 0.1,
+        **entries,
+    }
+
+
+def test_scaling_specs_honor_configured_normal_sigma_and_uniform_cutkpc_priors() -> None:
+    # The mock-validation shapes: sigma ~ Normal(245, 35) km/s, cutkpc ~ uniform in kpc.
+    specs, param_indices, _ = cluster_solver._build_scaling_parameter_specs(
+        [_scaling_prior_potfile(sigma=[3, 245.0, 35.0], cutkpc=[1, 41.3, 413.0, 37.2])],
+        kpc_per_arcsec=5.0,
+    )
+    sigma_spec = specs[param_indices[0]["sigma"]]
+    cut_spec = specs[param_indices[0]["cutkpc"]]
+
+    expected_mean, expected_std = cluster_solver._positive_lognormal_parameters(
+        245.0, 35.0, floor=cluster_solver.VDISP_TRUNCATION_FLOOR_KM_S
+    )
+    assert sigma_spec.prior_kind == "normal"
+    assert sigma_spec.transform_kind == "log_positive"
+    assert sigma_spec.lower == float("-inf") and sigma_spec.upper == float("inf")
+    assert sigma_spec.mean == pytest.approx(expected_mean)
+    assert sigma_spec.std == pytest.approx(expected_std)
+    assert sigma_spec.physical_mean == pytest.approx(245.0)
+    assert sigma_spec.physical_std == pytest.approx(35.0)
+
+    # A uniform entry on a log-positive field samples log-uniform in the physical value.
+    assert cut_spec.prior_kind == "uniform"
+    assert cut_spec.transform_kind == "log_positive"
+    assert cut_spec.lower == pytest.approx(np.log(41.3))
+    assert cut_spec.upper == pytest.approx(np.log(413.0))
+    assert cut_spec.mean is None and cut_spec.std is None
+    assert cut_spec.physical_lower == pytest.approx(41.3)
+    assert cut_spec.physical_upper == pytest.approx(413.0)
+    assert cut_spec.step == pytest.approx(37.2)
+
+
+def test_scaling_specs_scale_cut_arcsec_prior_to_kpc() -> None:
+    specs, param_indices, _ = cluster_solver._build_scaling_parameter_specs(
+        [_scaling_prior_potfile(cut=[1, 8.0, 80.0, 1.0])],
+        kpc_per_arcsec=5.0,
+    )
+    cut_spec = specs[param_indices[0]["cutkpc"]]
+    assert cut_spec.prior_kind == "uniform"
+    assert cut_spec.physical_lower == pytest.approx(40.0)
+    assert cut_spec.physical_upper == pytest.approx(400.0)
+
+
+def test_scaling_specs_fall_back_to_defaults_for_fixed_or_absent_priors() -> None:
+    specs, param_indices, _ = cluster_solver._build_scaling_parameter_specs(
+        [_scaling_prior_potfile(sigma=[0, 245.0])],
+        kpc_per_arcsec=5.0,
+    )
+    sigma_spec = specs[param_indices[0]["sigma"]]
+    cut_spec = specs[param_indices[0]["cutkpc"]]
+    assert sigma_spec.prior_kind == "truncated_normal"
+    assert sigma_spec.physical_mean == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_MEAN)
+    assert sigma_spec.physical_std == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_STD)
+    assert cut_spec.prior_kind == "truncated_normal"
+    assert cut_spec.physical_mean == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_MEAN_KPC)
+    assert cut_spec.physical_std == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_STD_KPC)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        {"sigma": [1, 50.0]},  # uniform without upper
+        {"sigma": [1, 300.0, 200.0]},  # inverted bounds
+        {"sigma": [3, -245.0, 35.0]},  # nonpositive mean on a positive scale field
+        {"cutkpc": [9, 187.0, 50.0, 400.0, 40.0]},  # truncated normal with upper < lower
+        {"sigma": [7, 1.0, 2.0]},  # unknown limit kind
+    ],
+)
+def test_scaling_specs_reject_malformed_prior_entries(entries: dict) -> None:
+    with pytest.raises(ValueError):
+        cluster_solver._build_scaling_parameter_specs(
+            [_scaling_prior_potfile(**entries)],
+            kpc_per_arcsec=5.0,
+        )
 
 
 def test_log_softening_length_parameter_spec_is_disabled_at_zero() -> None:
@@ -18729,6 +18874,174 @@ def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_lab
         plt.close("all")
 
 
+def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    parameter_df = pd.DataFrame(
+        [
+            {
+                "campaign": "campaign",
+                "run_name": "single_bcg_production",
+                "seed": 12345,
+                "variant": "anisotropic",
+                "stage": "stage2_free_source_forward_fit",
+                "stage_label": "Stage 2",
+                "method_label": "Stage 2 Anisotropic",
+                "result_path": "results.json",
+                "parameter": "potfile.sigma",
+                "truth": 245.0,
+                "median": 240.0,
+                "q16": 235.0,
+                "q84": 248.0,
+            },
+            {
+                "campaign": "campaign",
+                "run_name": "single_bcg_production",
+                "seed": 12345,
+                "variant": "anisotropic",
+                "stage": "stage2_free_source_forward_fit",
+                "stage_label": "Stage 2",
+                "method_label": "Stage 2 Anisotropic",
+                "result_path": "results.json",
+                "parameter": "potfile.cutkpc",
+                "truth": 187.0,
+                "median": 210.0,
+                "q16": 180.0,
+                "q84": 260.0,
+            },
+            {
+                "campaign": "campaign",
+                "run_name": "single_bcg_production",
+                "seed": 12345,
+                "variant": "anisotropic",
+                "stage": "stage2_free_source_forward_fit",
+                "stage_label": "Stage 2",
+                "method_label": "Stage 2 Anisotropic",
+                "result_path": "results.json",
+                "parameter": "halo.v_disp",
+                "truth": 760.0,
+                "median": 765.0,
+                "q16": 740.0,
+                "q84": 790.0,
+            },
+            {
+                "campaign": "campaign",
+                "run_name": "single_bcg_production",
+                "seed": 12345,
+                "variant": "anisotropic",
+                "stage": "stage2_free_source_forward_fit",
+                "stage_label": "Stage 2",
+                "method_label": "Stage 2 Anisotropic",
+                "result_path": "results.json",
+                "parameter": "halo.cut_radius_kpc",
+                "truth": 950.0,
+                "median": 980.0,
+                "q16": 920.0,
+                "q84": 1040.0,
+            },
+        ]
+    )
+
+    joint_df = aggregate_plots.joint_sigma_rcut_recovery_rows(parameter_df)
+
+    assert len(joint_df) == 1
+    row = joint_df.iloc[0]
+    assert int(row["seed"]) == 12345
+    assert row["variant"] == "anisotropic"
+    assert row["stage"] == "stage2_free_source_forward_fit"
+    assert float(row["sigma_truth"]) == pytest.approx(245.0)
+    assert float(row["sigma_median"]) == pytest.approx(240.0)
+    assert float(row["sigma_q16"]) == pytest.approx(235.0)
+    assert float(row["sigma_q84"]) == pytest.approx(248.0)
+    assert float(row["rcut_truth"]) == pytest.approx(187.0)
+    assert float(row["rcut_median"]) == pytest.approx(210.0)
+    assert float(row["rcut_q16"]) == pytest.approx(180.0)
+    assert float(row["rcut_q84"]) == pytest.approx(260.0)
+    halo_df = aggregate_plots.joint_sigma_rcut_recovery_rows(parameter_df, component="halo")
+    assert len(halo_df) == 1
+    halo_row = halo_df.iloc[0]
+    assert halo_row["component"] == "halo"
+    assert halo_row["component_label"] == "Halo"
+    assert halo_row["sigma_parameter"] == "halo.v_disp"
+    assert halo_row["rcut_parameter"] == "halo.cut_radius_kpc"
+    assert float(halo_row["sigma_truth"]) == pytest.approx(760.0)
+    assert float(halo_row["rcut_truth"]) == pytest.approx(950.0)
+
+
+def test_joint_sigma_rcut_recovery_plot_draws_truth_points_markers_and_contours(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from matplotlib.axes import Axes
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+    from matplotlib.patches import Ellipse
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    rows: list[dict[str, object]] = []
+    for variant, offsets in {
+        "anisotropic": ((-5.0, -15.0), (0.0, 25.0), (7.0, 5.0)),
+        "isotropic": ((-7.0, 10.0), (4.0, -20.0), (9.0, 18.0)),
+    }.items():
+        for seed_index, (sigma_offset, cut_offset) in enumerate(offsets, start=1):
+            rows.append(
+                {
+                    "stage": "stage2_free_source_forward_fit",
+                    "variant": variant,
+                    "seed": 12340 + seed_index,
+                    "sigma_truth": 245.0,
+                    "sigma_median": 245.0 + sigma_offset,
+                    "rcut_truth": 187.0,
+                    "rcut_median": 187.0 + cut_offset,
+                }
+            )
+    joint_df = pd.DataFrame(rows)
+    joint_df["component_label"] = "Halo"
+    saved_figures: list[Figure] = []
+    scatter_calls: list[dict[str, object]] = []
+    original_scatter = Axes.scatter
+
+    def record_savefig(self: Figure, *_args: object, **_kwargs: object) -> None:
+        saved_figures.append(self)
+
+    def record_scatter(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        scatter_calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "y": np.asarray(y, dtype=float),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", record_scatter)
+    monkeypatch.setattr(Figure, "savefig", record_savefig)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    try:
+        paths = aggregate_plots.plot_joint_sigma_rcut_recovery(
+            joint_df,
+            tmp_path / "sigma_rcut_recovery",
+            ("pdf",),
+        )
+        assert paths == (tmp_path / "sigma_rcut_recovery.pdf",)
+        assert len(saved_figures) == 1
+        ax = saved_figures[0].axes[0]
+        assert ax.get_xlabel() == r"Halo $\sigma$ (fit)"
+        assert ax.get_ylabel() == r"Halo $r_{\rm cut}$ (fit)"
+        assert sum(isinstance(patch, Ellipse) for patch in ax.patches) == 4
+        marker_by_label = {call["kwargs"].get("label"): call["kwargs"].get("marker") for call in scatter_calls}
+        assert marker_by_label["Anisotropic"] == "D"
+        assert marker_by_label["Isotropic"] == "o"
+        truth_call = next(call for call in scatter_calls if call["kwargs"].get("label") == "Truth")
+        assert truth_call["kwargs"]["marker"] == "*"
+        np.testing.assert_allclose(truth_call["x"], [245.0])
+        np.testing.assert_allclose(truth_call["y"], [187.0])
+    finally:
+        plt.close("all")
+
+
 def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     from matplotlib.axes import Axes
     import matplotlib.pyplot as plt
@@ -19018,10 +19331,97 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
     import lenscluster.mock_validation.aggregate_plots as aggregate_plots
 
     campaign = tmp_path / "jul2_2215_mock_validation"
-    for seed in (12345, 12346):
+    for seed_index, seed in enumerate((12345, 12346, 12347)):
         for stage in aggregate_plots.DEFAULT_STAGES:
             for variant in aggregate_plots.DEFAULT_VARIANTS:
-                _write_aggregate_result(campaign, seed=seed, variant=variant, stage=stage)
+                variant_offset = -2.0 if variant == "anisotropic" else 3.0
+                stage_offset = 0.0 if stage == "stage1_backprojected_centroid_fit" else 4.0
+                curve_offset = (0.0, 4.0, -3.0)[seed_index]
+                _write_aggregate_result(
+                    campaign,
+                    seed=seed,
+                    variant=variant,
+                    stage=stage,
+                    records=[
+                        {
+                            "parameter": "halo.x_centre",
+                            "truth": 1.0,
+                            "best_fit": 1.05,
+                            "q16": 0.9,
+                            "median": 1.04,
+                            "q84": 1.2,
+                            "bias": 0.04,
+                            "truth_percentile": 0.4,
+                            "covered_68": True,
+                        },
+                        {
+                            "parameter": "halo.v_disp",
+                            "truth": 760.0,
+                            "best_fit": 770.0 + seed_index + variant_offset,
+                            "q16": 720.0,
+                            "median": 770.0 + seed_index + variant_offset,
+                            "q84": 805.0,
+                            "bias": 10.0 + seed_index + variant_offset,
+                            "truth_percentile": 0.45,
+                            "covered_68": True,
+                        },
+                        {
+                            "parameter": "halo.cut_radius_kpc",
+                            "truth": 950.0,
+                            "best_fit": 970.0 + 4.0 * seed_index + variant_offset + stage_offset + curve_offset,
+                            "q16": 920.0 + 4.0 * seed_index + variant_offset + stage_offset + curve_offset,
+                            "median": 970.0 + 4.0 * seed_index + variant_offset + stage_offset + curve_offset,
+                            "q84": 1030.0 + 4.0 * seed_index + variant_offset + stage_offset + curve_offset,
+                            "bias": 20.0 + 4.0 * seed_index + variant_offset + stage_offset + curve_offset,
+                            "truth_percentile": 0.5,
+                            "covered_68": True,
+                        },
+                        {
+                            "parameter": "bcg.v_disp",
+                            "truth": 285.0,
+                            "best_fit": 280.0 + seed_index - variant_offset + stage_offset,
+                            "q16": 270.0 + seed_index - variant_offset + stage_offset,
+                            "median": 280.0 + seed_index - variant_offset + stage_offset,
+                            "q84": 295.0 + seed_index - variant_offset + stage_offset,
+                            "bias": -5.0 + seed_index - variant_offset + stage_offset,
+                            "truth_percentile": 0.5,
+                            "covered_68": True,
+                        },
+                        {
+                            "parameter": "bcg.cut_radius_kpc",
+                            "truth": 75.0,
+                            "best_fit": 80.0 + 2.0 * seed_index + variant_offset + 0.5 * stage_offset - curve_offset,
+                            "q16": 65.0 + 2.0 * seed_index + variant_offset + 0.5 * stage_offset - curve_offset,
+                            "median": 80.0 + 2.0 * seed_index + variant_offset + 0.5 * stage_offset - curve_offset,
+                            "q84": 95.0 + 2.0 * seed_index + variant_offset + 0.5 * stage_offset - curve_offset,
+                            "bias": 5.0 + 2.0 * seed_index + variant_offset + 0.5 * stage_offset - curve_offset,
+                            "truth_percentile": 0.5,
+                            "covered_68": True,
+                        },
+                        {
+                            "parameter": "potfile.sigma",
+                            "truth": 245.0,
+                            "best_fit": 242.0 + seed_index + variant_offset + stage_offset,
+                            "q16": 236.0 + seed_index + variant_offset + stage_offset,
+                            "median": 242.0 + seed_index + variant_offset + stage_offset,
+                            "q84": 250.0 + seed_index + variant_offset + stage_offset,
+                            "bias": -3.0 + seed_index + variant_offset + stage_offset,
+                            "truth_percentile": 0.5,
+                            "covered_68": True,
+                        },
+                        {
+                            "parameter": "potfile.cutkpc",
+                            "truth": 187.0,
+                            "best_fit": 195.0 + 3.0 * seed_index - variant_offset + 0.5 * stage_offset + curve_offset,
+                            "q16": 170.0 + 3.0 * seed_index - variant_offset + 0.5 * stage_offset + curve_offset,
+                            "median": 195.0 + 3.0 * seed_index - variant_offset + 0.5 * stage_offset + curve_offset,
+                            "q84": 225.0 + 3.0 * seed_index - variant_offset + 0.5 * stage_offset + curve_offset,
+                            "bias": 8.0 + 3.0 * seed_index - variant_offset + 0.5 * stage_offset + curve_offset,
+                            "truth_percentile": 0.5,
+                            "covered_68": True,
+                        },
+                    ],
+                )
         for variant in aggregate_plots.DEFAULT_VARIANTS:
             _write_aggregate_combined_recovery(
                 campaign,
@@ -19048,6 +19448,12 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         "parameter_recovery_paper.pdf",
         "parameter_recovery_all.pdf",
         "parameter_bias_summary.pdf",
+        "sigma_rcut_recovery_stage1.pdf",
+        "sigma_rcut_recovery.pdf",
+        "halo_sigma_rcut_recovery_stage1.pdf",
+        "halo_sigma_rcut_recovery.pdf",
+        "bcg_sigma_rcut_recovery_stage1.pdf",
+        "bcg_sigma_rcut_recovery.pdf",
         "magnification_recovery_stage1.pdf",
         "magnification_recovery.pdf",
         "subhalo_recovery_stage1_shmf.pdf",
@@ -19058,10 +19464,10 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         assert path.stat().st_size > 0
     table = pd.read_csv(outputs.parameter_table)
     aggregate_table = pd.read_csv(outputs.aggregate_parameter_table)
-    assert len(table) == 16
-    assert len(aggregate_table) == 8
+    assert len(table) == 84
+    assert len(aggregate_table) == 28
     magnification_table = pd.read_csv(outputs.magnification_table)
-    assert len(magnification_table) == 16
+    assert len(magnification_table) == 24
     assert {
         "stage",
         "seed",
@@ -19071,7 +19477,15 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         "magnification_q50",
         "magnification_q84",
     } <= set(magnification_table.columns)
-    assert aggregate_table.groupby("parameter").size().to_dict() == {"halo.v_disp": 4, "halo.x_centre": 4}
+    assert aggregate_table.groupby("parameter").size().to_dict() == {
+        "bcg.cut_radius_kpc": 4,
+        "bcg.v_disp": 4,
+        "halo.cut_radius_kpc": 4,
+        "halo.v_disp": 4,
+        "halo.x_centre": 4,
+        "potfile.cutkpc": 4,
+        "potfile.sigma": 4,
+    }
     assert set(table["method_label"]) == {
         "Stage 1 Anisotropic",
         "Stage 1 Isotropic",
@@ -19084,8 +19498,10 @@ def test_write_aggregate_plots_creates_stage1_paper_plot_when_stage1_requested(t
     import lenscluster.mock_validation.aggregate_plots as aggregate_plots
 
     campaign = tmp_path / "jul2_2215_mock_validation"
-    for seed in (12345, 12346):
+    for seed_index, seed in enumerate((12345, 12346, 12347)):
         for variant in aggregate_plots.DEFAULT_VARIANTS:
+            variant_offset = -2.0 if variant == "anisotropic" else 3.0
+            curve_offset = (0.0, 4.0, -3.0)[seed_index]
             _write_aggregate_result(
                 campaign,
                 seed=seed,
@@ -19102,7 +19518,73 @@ def test_write_aggregate_plots_creates_stage1_paper_plot_when_stage1_requested(t
                         "bias": 0.1 if variant == "anisotropic" else -0.1,
                         "truth_percentile": 0.5,
                         "covered_68": True,
-                    }
+                    },
+                    {
+                        "parameter": "potfile.sigma",
+                        "truth": 245.0,
+                        "best_fit": 242.0 + seed_index + variant_offset,
+                        "q16": 236.0 + seed_index + variant_offset,
+                        "median": 242.0 + seed_index + variant_offset,
+                        "q84": 250.0 + seed_index + variant_offset,
+                        "bias": -3.0 + seed_index + variant_offset,
+                        "truth_percentile": 0.5,
+                        "covered_68": True,
+                    },
+                    {
+                        "parameter": "halo.v_disp",
+                        "truth": 760.0,
+                        "best_fit": 770.0 + seed_index + variant_offset,
+                        "q16": 720.0 + seed_index + variant_offset,
+                        "median": 770.0 + seed_index + variant_offset,
+                        "q84": 805.0 + seed_index + variant_offset,
+                        "bias": 10.0 + seed_index + variant_offset,
+                        "truth_percentile": 0.45,
+                        "covered_68": True,
+                    },
+                    {
+                        "parameter": "halo.cut_radius_kpc",
+                        "truth": 950.0,
+                        "best_fit": 970.0 + 4.0 * seed_index + variant_offset + curve_offset,
+                        "q16": 920.0 + 4.0 * seed_index + variant_offset + curve_offset,
+                        "median": 970.0 + 4.0 * seed_index + variant_offset + curve_offset,
+                        "q84": 1030.0 + 4.0 * seed_index + variant_offset + curve_offset,
+                        "bias": 20.0 + 4.0 * seed_index + variant_offset + curve_offset,
+                        "truth_percentile": 0.5,
+                        "covered_68": True,
+                    },
+                    {
+                        "parameter": "bcg.v_disp",
+                        "truth": 285.0,
+                        "best_fit": 280.0 + seed_index - variant_offset,
+                        "q16": 270.0 + seed_index - variant_offset,
+                        "median": 280.0 + seed_index - variant_offset,
+                        "q84": 295.0 + seed_index - variant_offset,
+                        "bias": -5.0 + seed_index - variant_offset,
+                        "truth_percentile": 0.5,
+                        "covered_68": True,
+                    },
+                    {
+                        "parameter": "bcg.cut_radius_kpc",
+                        "truth": 75.0,
+                        "best_fit": 80.0 + 2.0 * seed_index + variant_offset - curve_offset,
+                        "q16": 65.0 + 2.0 * seed_index + variant_offset - curve_offset,
+                        "median": 80.0 + 2.0 * seed_index + variant_offset - curve_offset,
+                        "q84": 95.0 + 2.0 * seed_index + variant_offset - curve_offset,
+                        "bias": 5.0 + 2.0 * seed_index + variant_offset - curve_offset,
+                        "truth_percentile": 0.5,
+                        "covered_68": True,
+                    },
+                    {
+                        "parameter": "potfile.cutkpc",
+                        "truth": 187.0,
+                        "best_fit": 195.0 + 3.0 * seed_index - variant_offset + curve_offset,
+                        "q16": 170.0 + 3.0 * seed_index - variant_offset + curve_offset,
+                        "median": 195.0 + 3.0 * seed_index - variant_offset + curve_offset,
+                        "q84": 225.0 + 3.0 * seed_index - variant_offset + curve_offset,
+                        "bias": 8.0 + 3.0 * seed_index - variant_offset + curve_offset,
+                        "truth_percentile": 0.5,
+                        "covered_68": True,
+                    },
                 ],
             )
 
@@ -19124,6 +19606,18 @@ def test_write_aggregate_plots_creates_stage1_paper_plot_when_stage1_requested(t
     assert magnification_plot.exists()
     assert magnification_plot.stat().st_size > 0
     assert not (outputs.output_dir / "magnification_recovery_stage1.pdf").exists()
+    sigma_rcut_plot = outputs.output_dir / "sigma_rcut_recovery.pdf"
+    assert sigma_rcut_plot.exists()
+    assert sigma_rcut_plot.stat().st_size > 0
+    assert not (outputs.output_dir / "sigma_rcut_recovery_stage1.pdf").exists()
+    halo_sigma_rcut_plot = outputs.output_dir / "halo_sigma_rcut_recovery.pdf"
+    assert halo_sigma_rcut_plot.exists()
+    assert halo_sigma_rcut_plot.stat().st_size > 0
+    assert not (outputs.output_dir / "halo_sigma_rcut_recovery_stage1.pdf").exists()
+    bcg_sigma_rcut_plot = outputs.output_dir / "bcg_sigma_rcut_recovery.pdf"
+    assert bcg_sigma_rcut_plot.exists()
+    assert bcg_sigma_rcut_plot.stat().st_size > 0
+    assert not (outputs.output_dir / "bcg_sigma_rcut_recovery_stage1.pdf").exists()
     table = pd.read_csv(outputs.parameter_table)
     assert set(table["stage"]) == {"stage1_backprojected_centroid_fit"}
 

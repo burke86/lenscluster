@@ -19,6 +19,10 @@ pos_sigma_arcsec = 0.05
 # Injected member scaling-relation scatter in ln(sigma) units (recovered by the linearized
 # sigma_log_scatter mechanism). Set to 0 for the no-scatter A/B campaign.
 scatter_ln = 0.05
+source_magnitude_min = 24.0
+source_magnitude_max = 27.0
+image_magnitude_sigma_mag = 0.10
+image_magnitude_mu_floor = 1.0e-3
 
 $JAX_NUM_CPU_DEVICES = str(cores)
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster-mock"
@@ -48,22 +52,25 @@ from lenscluster.mock_validation import (
 
 VALID_PRESETS = ("smoke", "production")
 VALID_COVARIANCE_MODES = ("anisotropic", "isotropic")
+VALID_MAGNITUDE_LIKELIHOOD_MODES = ("off", "on")
 
 
 def _usage() -> str:
     return (
         "Usage: xonsh run_mock.xsh --campaign NAME "
         "[--preset smoke|production] [--seed INT] "
-        "[--covariance anisotropic|isotropic] [--output-dir PATH]"
+        "[--covariance anisotropic|isotropic] [--magnitude-likelihood on|off] "
+        "[--output-dir PATH]"
     )
 
 
-def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
+def _parse_args(argv: list[str]) -> tuple[str, int, str, bool, str, str]:
     values = {
         "campaign": None,
         "preset": "smoke",
         "seed": str(seed_default),
         "covariance": "anisotropic",
+        "magnitude_likelihood": "off",
         "output_dir": output_dir_default,
     }
     flag_to_key = {
@@ -71,6 +78,7 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
         "--preset": "preset",
         "--seed": "seed",
         "--covariance": "covariance",
+        "--magnitude-likelihood": "magnitude_likelihood",
         "--output-dir": "output_dir",
     }
     index = 1
@@ -106,9 +114,20 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, str, str]:
     if covariance_mode not in VALID_COVARIANCE_MODES:
         print(f"Covariance mode must be 'anisotropic' or 'isotropic'; got {values['covariance']!r}.\n{_usage()}")
         raise SystemExit(2)
+    magnitude_likelihood_mode = str(values["magnitude_likelihood"]).strip().lower()
+    if magnitude_likelihood_mode not in VALID_MAGNITUDE_LIKELIHOOD_MODES:
+        print(
+            "Magnitude likelihood must be 'on' or 'off'; "
+            f"got {values['magnitude_likelihood']!r}.\n{_usage()}"
+        )
+        raise SystemExit(2)
+    use_magnitude_likelihood = magnitude_likelihood_mode == "on"
+    if use_magnitude_likelihood and covariance_mode != "anisotropic":
+        print("--magnitude-likelihood on is only supported with --covariance anisotropic.")
+        raise SystemExit(2)
     campaign = str(values["campaign"]).strip()
     output_dir = str(values["output_dir"])
-    return preset, seed, covariance_mode, campaign, output_dir
+    return preset, seed, covariance_mode, use_magnitude_likelihood, campaign, output_dir
 
 
 def _solver_template(
@@ -116,6 +135,7 @@ def _solver_template(
     production: bool,
     seed: int,
     critical_arc_anisotropic_covariance: bool,
+    use_magnitude_likelihood: bool,
     scatter_ln: float,
 ) -> LensClusterSolverConfig:
     if production:
@@ -173,6 +193,7 @@ def _solver_template(
         likelihood=LikelihoodConfig(
             pos_sigma_arcsec=pos_sigma_arcsec,
             critical_arc_anisotropic_covariance=critical_arc_anisotropic_covariance,
+            use_magnitude_likelihood=use_magnitude_likelihood,
         ),
         image_diagnostics=ImageDiagnosticsConfig(
             posterior_image_diagnostic_draws=64,
@@ -207,6 +228,7 @@ def build_config(
     *,
     seed: int,
     covariance_mode: str,
+    use_magnitude_likelihood: bool,
     campaign_name: str,
     output_dir: str,
     scatter_ln: float,
@@ -231,6 +253,10 @@ def build_config(
         subhalo_gamma_ml=0.0,
         subhalo_sigma_scatter_dex=float(scatter_ln) / np.log(10.0),
         subhalo_cut_scatter_dex=0.0,
+        source_magnitude_min=source_magnitude_min,
+        source_magnitude_max=source_magnitude_max,
+        image_magnitude_sigma_mag=image_magnitude_sigma_mag,
+        image_magnitude_mu_floor=image_magnitude_mu_floor,
         min_images_per_family=3,
         max_images_per_family=None,
         primary_source_redshifts=np.linspace(1.5, 9.0, n_primary_families),
@@ -254,7 +280,7 @@ def build_config(
             output_dir=output_dir,
             run_name=f"single_bcg_{preset}",
             campaign_name=campaign_name,
-            variant_name=covariance_mode,
+            variant_name=f"{covariance_mode}_maglikelihood" if use_magnitude_likelihood else covariance_mode,
         ),
         runtime=MockValidationRuntimeConfig(
             realizations=1,
@@ -267,6 +293,7 @@ def build_config(
                 production=production,
                 seed=seed,
                 critical_arc_anisotropic_covariance=critical_arc_anisotropic_covariance,
+                use_magnitude_likelihood=use_magnitude_likelihood,
                 scatter_ln=scatter_ln,
             ),
             run_name="solver",
@@ -275,11 +302,12 @@ def build_config(
     )
 
 
-preset, seed, covariance_mode, campaign_name, output_dir = _parse_args(sys.argv)
+preset, seed, covariance_mode, use_magnitude_likelihood, campaign_name, output_dir = _parse_args(sys.argv)
 config = build_config(
     preset,
     seed=seed,
     covariance_mode=covariance_mode,
+    use_magnitude_likelihood=use_magnitude_likelihood,
     campaign_name=campaign_name,
     output_dir=output_dir,
     scatter_ln=scatter_ln,
@@ -288,9 +316,13 @@ config = build_config(
 print(
     f"[config] preset={preset} seed={seed} "
     f"covariance={covariance_mode} "
+    f"use_magnitude_likelihood={config.solver.template.likelihood.use_magnitude_likelihood} "
     f"scatter_ln={scatter_ln} scaling_scatter={config.solver.template.scaling.scaling_scatter} "
     f"subhalo_sigma_scatter_dex={config.mock.subhalo_sigma_scatter_dex:.6f} "
     f"pos_sigma_arcsec={config.mock.pos_sigma_arcsec} "
+    f"source_magnitude_range=({config.mock.source_magnitude_min}, {config.mock.source_magnitude_max}) "
+    f"image_magnitude_sigma_mag={config.mock.image_magnitude_sigma_mag} "
+    f"image_magnitude_mu_floor={config.mock.image_magnitude_mu_floor} "
     f"critical_arc_anisotropic_covariance={config.solver.template.likelihood.critical_arc_anisotropic_covariance} "
     f"mock_caustic_grid_chunk_memory_gb={config.mock.mock_caustic_grid_chunk_memory_gb} "
     f"mock_generation_workers={config.mock.mock_generation_workers} "

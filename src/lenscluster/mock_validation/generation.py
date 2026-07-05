@@ -144,6 +144,10 @@ class SingleBCGMockConfig:
     subhalo_cut_scatter_dex: float = 0.0
     subhalo_alpha_sigma: float = 0.25
     subhalo_gamma_ml: float = 0.0
+    source_magnitude_min: float = 24.0
+    source_magnitude_max: float = 27.0
+    image_magnitude_sigma_mag: float = 0.10
+    image_magnitude_mu_floor: float = 1.0e-3
     halo: DPIETruth = DPIETruth(
         potential_id="halo",
         x_centre=0.0,
@@ -272,6 +276,14 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         if not math.isfinite(float(getattr(config, name))):
             raise ValueError(f"{name} must be finite.")
     _subhalo_beta_radius_from_config(config)
+    source_mag_min = float(config.source_magnitude_min)
+    source_mag_max = float(config.source_magnitude_max)
+    if not math.isfinite(source_mag_min) or not math.isfinite(source_mag_max) or source_mag_max <= source_mag_min:
+        raise ValueError("source_magnitude_min/source_magnitude_max must be finite and ordered.")
+    for name in ("image_magnitude_sigma_mag", "image_magnitude_mu_floor"):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{name} must be positive and finite.")
 
 
 def _lenstool_ellipticite_to_axis_ratio(ellipticite: float) -> float:
@@ -2049,8 +2061,31 @@ def generate_single_bcg_mock(
         # The recovery metric evaluates the model magnification at the OBSERVED positions,
         # so record the truth magnification there too; near critical curves the two differ.
         magnification_at_obs = _mock_magnification(family_lens_state, x_obs_arr, y_obs_arr)
-        for image_index, (x_true, y_true, x_obs, y_obs, mu_true, mu_obs) in enumerate(
-            zip(x_arr, y_arr, x_obs_arr, y_obs_arr, magnification, magnification_at_obs), start=1
+        source_magnitude_true = float(
+            state.observation_rng.uniform(float(config.source_magnitude_min), float(config.source_magnitude_max))
+        )
+        source_rows[-1]["source_magnitude_true"] = source_magnitude_true
+        image_magnitude_true = source_magnitude_true - 2.5 * np.log10(
+            np.abs(magnification_at_obs) + float(config.image_magnitude_mu_floor)
+        )
+        image_magnitude_noise = state.observation_rng.normal(
+            0.0,
+            float(config.image_magnitude_sigma_mag),
+            size=image_magnitude_true.shape,
+        )
+        image_magnitude_obs = image_magnitude_true + image_magnitude_noise
+        for image_index, (x_true, y_true, x_obs, y_obs, mu_true, mu_obs, mag_true, mag_obs) in enumerate(
+            zip(
+                x_arr,
+                y_arr,
+                x_obs_arr,
+                y_obs_arr,
+                magnification,
+                magnification_at_obs,
+                image_magnitude_true,
+                image_magnitude_obs,
+            ),
+            start=1,
         ):
             image_id = _lowercase_image_suffix(image_index)
             image_rows.append(
@@ -2065,6 +2100,10 @@ def generate_single_bcg_mock(
                     "y_obs_arcsec": float(y_obs),
                     "magnification_true": float(mu_true),
                     "magnification_true_at_obs": float(mu_obs),
+                    "source_magnitude_true": source_magnitude_true,
+                    "image_magnitude_true": float(mag_true),
+                    "image_magnitude_obs": float(mag_obs),
+                    "image_magnitude_err": float(config.image_magnitude_sigma_mag),
                     "caustic_class": str(contour.caustic_class),
                     "caustic_index": int(contour.caustic_index),
                 }
@@ -2095,7 +2134,8 @@ def generate_single_bcg_mock(
         + "\n".join(
             (
                 f"{row.image_label} {row.x_obs_arcsec:.8f} {row.y_obs_arcsec:.8f} "
-                f"0.3734 0.3734 90.0 {row.z_source:.8f} 25.0"
+                f"0.3734 0.3734 90.0 {row.z_source:.8f} "
+                f"{row.image_magnitude_obs:.8f} 1.0 {row.image_magnitude_err:.8f}"
             )
             for row in images.itertuples(index=False)
         )
@@ -2278,6 +2318,12 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         ),
         subhalo_cut_scatter_dex=float(config.get("subhalo_cut_scatter_dex", defaults.subhalo_cut_scatter_dex)),
         subhalo_gamma_ml=float(config.get("subhalo_gamma_ml", defaults.subhalo_gamma_ml)),
+        source_magnitude_min=float(config.get("source_magnitude_min", defaults.source_magnitude_min)),
+        source_magnitude_max=float(config.get("source_magnitude_max", defaults.source_magnitude_max)),
+        image_magnitude_sigma_mag=float(
+            config.get("image_magnitude_sigma_mag", defaults.image_magnitude_sigma_mag)
+        ),
+        image_magnitude_mu_floor=float(config.get("image_magnitude_mu_floor", defaults.image_magnitude_mu_floor)),
         caustic_compute_window_arcsec=float(
             config.get("caustic_compute_window_arcsec", defaults.caustic_compute_window_arcsec)
         ),

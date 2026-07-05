@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/id255/scratch_pi_pn38/id255/lenscluster")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON = Path("/home/id255/.conda/envs/lenstronomy/bin/python")
 
 SCRIPT_DIR = PROJECT_ROOT / "hpc_scripts/mock_validation/jobs"
@@ -73,7 +73,7 @@ def shell_array(values: tuple[int, ...]) -> str:
     return " ".join(str(value) for value in values)
 
 
-def build_run_command(covariance: str, args: argparse.Namespace) -> str:
+def build_run_command(covariance: str, magnitude_likelihood: str, args: argparse.Namespace) -> str:
     command = [
         '"$PYTHON"',
         "-m",
@@ -87,6 +87,8 @@ def build_run_command(covariance: str, args: argparse.Namespace) -> str:
         "${SEED}",
         "--covariance",
         covariance,
+        "--magnitude-likelihood",
+        magnitude_likelihood,
         "--output-dir",
         args.output_dir,
     ]
@@ -125,11 +127,11 @@ TASK_ID="${{SLURM_ARRAY_TASK_ID:-0}}"
 SEED="${{SEEDS[$TASK_ID]}}"
 echo "Task $TASK_ID seed=$SEED preset={args.preset} campaign={args.campaign} output_dir={args.output_dir}"
 
-echo "Running anisotropic covariance fit"
-{build_run_command("anisotropic", args)}
+echo "Running anisotropic position-only fit"
+{build_run_command("anisotropic", "off", args)}
 
-echo "Running isotropic covariance fit"
-{build_run_command("isotropic", args)}
+echo "Running anisotropic magnitude-likelihood fit"
+{build_run_command("anisotropic", "on", args)}
 
 end_epoch=$(date +%s)
 rt=$(( end_epoch - start_epoch ))
