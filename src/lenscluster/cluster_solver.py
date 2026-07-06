@@ -376,6 +376,16 @@ PERTURBATION_DISCOVERY_JACOBIAN_LEVER_ARCSEC = 1.0
 PERTURBATION_DISCOVERY_SCORE_DRAWS = 16
 DEFAULT_PERTURBATION_DISCOVERY_JACOBIAN_WEIGHT = 1.0
 DEFAULT_PERTURBATION_DISCOVERY_TOP_K = None
+# Stage-0 SVI hardening (jul6_0045: early ELBO collapsed member masses ~20 prior-sigma
+# low in 60% of runs, starving the stage-0-frozen member promotion). Phase A fits the
+# macro model with all member-family sites frozen at their init values, multi-started
+# and picked by tail-mean ELBO; phase B releases everything.
+STAGE0_SVI_MACRO_WARMUP_FRACTION = 0.2
+STAGE0_SVI_MULTI_START_COUNT = 3
+STAGE0_SVI_MULTI_START_LOSS_TAIL_FRACTION = 0.1
+STAGE0_MEMBER_COMPONENT_FAMILIES = ("scaling", "scaling_scatter", "independent_scaling")
+STAGE0_SCALING_COLLAPSE_PRIOR_SIGMA = 4.0
+STAGE0_SCALING_COLLAPSE_UNIFORM_EDGE_FRACTION = 0.01
 
 
 def _perturbation_discovery_calibrated_tolerances(
@@ -3849,7 +3859,7 @@ def _sample_site_model(parameter_specs: list[ParameterSpec]):
                 )
             else:
                 value = numpyro.sample(site.name, _distribution_for_sample_site(site, parameter_specs))
-            if len(site.indices) == 1:
+            if not site.vector:
                 sampled[spec.sample_name] = value
             else:
                 for offset, idx in enumerate(site.indices):
@@ -11401,6 +11411,98 @@ def _nuts_initialization_from_reference(
     )
 
 
+def _stage0_member_frozen_site_values(
+    parameter_specs: list[ParameterSpec],
+    theta_init: np.ndarray,
+) -> dict[str, jnp.ndarray]:
+    """Sample sites whose specs are all member-family, valued from the init theta.
+
+    These are the sites frozen during the stage-0 macro warmup so the early ELBO
+    cannot profit from collapsing the member masses while the macro model is wrong.
+    """
+    member_families = set(STAGE0_MEMBER_COMPONENT_FAMILIES)
+    frozen: dict[str, jnp.ndarray] = {}
+    for site in _parameter_sample_sites(parameter_specs):
+        families = {str(parameter_specs[idx].component_family) for idx in site.indices}
+        if families and families <= member_families:
+            frozen[site.name] = _site_value_from_theta(np.asarray(theta_init, dtype=float), site)
+    return frozen
+
+
+def _multi_start_best_index(
+    losses_per_start: list[np.ndarray],
+    tail_fraction: float = STAGE0_SVI_MULTI_START_LOSS_TAIL_FRACTION,
+) -> tuple[int, list[float]]:
+    """Index of the start with the lowest mean ELBO loss over the trailing window."""
+    if not losses_per_start:
+        raise ValueError("Multi-start ELBO pick requires at least one loss trace.")
+    scores: list[float] = []
+    for losses in losses_per_start:
+        array = np.asarray(losses, dtype=float)
+        if array.size == 0:
+            scores.append(float("inf"))
+            continue
+        tail = array[-max(1, int(math.ceil(float(tail_fraction) * array.size))):]
+        finite = tail[np.isfinite(tail)]
+        scores.append(float(np.mean(finite)) if finite.size else float("inf"))
+    if not np.isfinite(min(scores)):
+        raise ValueError("Multi-start ELBO pick found no finite tail losses in any start.")
+    return int(np.argmin(scores)), scores
+
+
+def _warn_if_stage0_scaling_state_collapsed(
+    args: argparse.Namespace,
+    state: BuildState,
+    center_theta: np.ndarray,
+) -> dict[str, Any]:
+    """Loud non-fatal sentinel: is the stage-0 scaling state far outside its priors?
+
+    Member promotion is frozen from the stage-0 state; a collapsed state (jul6_0045:
+    sigma* driven ~20 prior-sigma low) silently promotes nothing. Returns payload
+    fields for the perturbation-discovery diagnostics; never raises.
+    """
+    theta = np.asarray(center_theta, dtype=float)
+    physical = np.asarray(_convert_theta_to_physical(theta, state.parameter_specs), dtype=float)
+    prior_z: dict[str, float] = {}
+    offenders: list[str] = []
+    for idx, spec in enumerate(state.parameter_specs):
+        if str(spec.component_family) != "scaling":
+            continue
+        if spec.prior_kind in {"normal", "truncated_normal"} and spec.std:
+            z = (float(theta[idx]) - float(spec.mean)) / float(spec.std)
+            prior_z[spec.name] = float(z)
+            if abs(z) > STAGE0_SCALING_COLLAPSE_PRIOR_SIGMA:
+                offenders.append(f"{spec.name}={physical[idx]:.6g} ({z:+.1f} prior-sigma)")
+        elif spec.prior_kind == "uniform" and np.isfinite(spec.lower) and np.isfinite(spec.upper):
+            width = float(spec.upper) - float(spec.lower)
+            if width <= 0.0:
+                continue
+            edge_fraction = (float(theta[idx]) - float(spec.lower)) / width
+            prior_z[spec.name] = float(edge_fraction)
+            if (
+                edge_fraction < STAGE0_SCALING_COLLAPSE_UNIFORM_EDGE_FRACTION
+                or edge_fraction > 1.0 - STAGE0_SCALING_COLLAPSE_UNIFORM_EDGE_FRACTION
+            ):
+                offenders.append(f"{spec.name}={physical[idx]:.6g} (at prior edge, fraction {edge_fraction:.3f})")
+    suspect = bool(offenders)
+    if suspect:
+        _log(
+            args,
+            (
+                "[perturbation-discovery] STAGE-0 SCALING STATE SUSPECT: "
+                + "; ".join(offenders)
+                + f" — beyond {STAGE0_SCALING_COLLAPSE_PRIOR_SIGMA:.0f} prior-sigma/at the prior edge. "
+                "Member promotion is selected from this state and will likely promote "
+                "nothing; treat the frozen independent-member selection of this run as "
+                "unreliable (see the stage-1 audit)."
+            ),
+        )
+    return {
+        "stage0_scaling_state_suspect": suspect,
+        "stage0_scaling_state_prior_z": prior_z,
+    }
+
+
 def _run_svi_fit(
     args: argparse.Namespace,
     state: BuildState,
@@ -11437,12 +11539,117 @@ def _run_svi_fit(
             ),
         )
     init_values = dict(state.svi_init_values or {})
+    stage0_warmup_diag: dict[str, Any] = {}
+    remaining_steps = total_steps
+    if perturbation_stage0_svi:
+        # Stage-0 macro warmup: fit the macro model with every member-family site
+        # frozen at its init value, multi-started; the best-ELBO start seeds the full
+        # phase-B fit. Prevents the early-ELBO member-mass collapse (jul6_0045).
+        theta_init = _default_theta(state.parameter_specs)
+        for idx, spec in enumerate(state.parameter_specs):
+            if spec.sample_name in init_values:
+                theta_init[idx] = float(init_values[spec.sample_name])
+        theta_init = _clip_theta_to_support(
+            theta_init,
+            state.parameter_specs,
+            boundary_frac=float(getattr(args, "nuts_init_boundary_frac", DEFAULT_NUTS_INIT_BOUNDARY_FRAC)),
+        )
+        frozen_values = _stage0_member_frozen_site_values(state.parameter_specs, theta_init)
+        all_sites = _parameter_sample_sites(state.parameter_specs)
+        phase_a_steps = int(math.ceil(STAGE0_SVI_MACRO_WARMUP_FRACTION * total_steps))
+        if not frozen_values or len(frozen_values) >= len(all_sites) or phase_a_steps >= total_steps:
+            _log(
+                args,
+                (
+                    "[svi-stage0] macro warmup skipped: "
+                    f"frozen_sites={len(frozen_values)} total_sites={len(all_sites)} "
+                    f"phase_a_steps={phase_a_steps} total_steps={total_steps}"
+                ),
+            )
+        else:
+            frozen_spec_indices = {
+                idx for site in all_sites if site.name in frozen_values for idx in site.indices
+            }
+            frozen_sample_names = {
+                state.parameter_specs[idx].sample_name for idx in frozen_spec_indices
+            }
+            # condition (not substitute): conditioned sites leave the guide entirely,
+            # so phase A optimizes only the macro/source sites. Init mirrors the plain
+            # path (configured init values or numpyro's randomized default) — a
+            # deterministic all-prior-means init sits on gradient singularities
+            # (e.g. e1=e2=0) and fails initialize_model; start diversity comes from
+            # the per-start PRNG key.
+            warmup_model = numpyro.handlers.condition(sample_model, data=frozen_values)
+            warmup_init_values = {
+                name: value for name, value in init_values.items() if name not in frozen_sample_names
+            }
+            losses_per_start: list[np.ndarray] = []
+            medians_per_start: list[dict[str, Any]] = []
+            for start_index in range(int(STAGE0_SVI_MULTI_START_COUNT)):
+                warmup_guide = _make_auto_normal_guide(
+                    warmup_model, state.parameter_specs, warmup_init_values or None
+                )
+                warmup_svi = SVI(
+                    warmup_model,
+                    warmup_guide,
+                    numpyro_optim.Adam(float(args.svi_learning_rate)),
+                    Trace_ELBO(),
+                )
+                warmup_result = _run_logged_phase(
+                    args,
+                    f"svi.run.stage0_warmup_start_{start_index + 1}",
+                    lambda warmup_svi=warmup_svi, start_index=start_index: warmup_svi.run(
+                        jax.random.PRNGKey(
+                            (404 if args.seed is None else int(args.seed) + 404) + 1000 * start_index
+                        ),
+                        int(phase_a_steps),
+                        progress_bar=True,
+                    ),
+                )
+                warmup_params = warmup_svi.get_params(warmup_result.state)
+                medians_per_start.append(warmup_guide.median(warmup_params))
+                losses_per_start.append(np.asarray(warmup_result.losses, dtype=float))
+            best_start, start_scores = _multi_start_best_index(losses_per_start)
+            _log(
+                args,
+                (
+                    f"[svi-stage0] multi-start macro warmup steps={phase_a_steps} "
+                    f"starts={len(start_scores)} frozen_sites={len(frozen_values)} "
+                    f"elbo_tail_means={[f'{score:.4g}' for score in start_scores]} "
+                    f"winner=start_{best_start + 1}"
+                ),
+            )
+            theta_after = np.asarray(theta_init, dtype=float).copy()
+            winner_median = medians_per_start[best_start]
+            for idx, spec in enumerate(state.parameter_specs):
+                if idx in frozen_spec_indices:
+                    continue
+                theta_after[idx] = float(_site_array_for_spec(winner_median, spec))
+            theta_after = _clip_theta_to_support(
+                theta_after,
+                state.parameter_specs,
+                boundary_frac=float(getattr(args, "nuts_init_boundary_frac", DEFAULT_NUTS_INIT_BOUNDARY_FRAC)),
+            )
+            if not np.all(np.isfinite(theta_after)):
+                raise ValueError("Stage-0 macro warmup produced non-finite guide median values.")
+            init_values = {
+                spec.sample_name: float(theta_after[idx]) for idx, spec in enumerate(state.parameter_specs)
+            }
+            block_losses.append(losses_per_start[best_start])
+            block_steps.append(int(phase_a_steps))
+            remaining_steps = total_steps - phase_a_steps
+            stage0_warmup_diag = {
+                "svi_stage0_warmup_steps": int(phase_a_steps),
+                "svi_stage0_warmup_starts": int(len(start_scores)),
+                "svi_stage0_warmup_frozen_sites": int(len(frozen_values)),
+                "svi_stage0_warmup_elbo_tail_means": [float(score) for score in start_scores],
+                "svi_stage0_warmup_winner": int(best_start),
+            }
     guide = None
     svi = None
     svi_result = None
     params = None
     center_theta_previous: np.ndarray | None = None
-    remaining_steps = total_steps
     block_index = 0
     while remaining_steps > 0:
         block_index += 1
@@ -11601,6 +11808,7 @@ def _run_svi_fit(
         "perturbation_discovery_svi_exact": bool(perturbation_stage0_svi),
         "perturbation_discovery_svi_independent_candidates": int(len(_selected_component_set_from_state(state))),
         "perturbation_discovery_svi_rebuild_count": 0,
+        **stage0_warmup_diag,
         "direct_evaluator_startup": True,
         "requested_chains": 0,
         "retained_finite_chains": 0,
@@ -15015,6 +15223,10 @@ def _spec_sample_site_index(spec: ParameterSpec) -> int | None:
 class _SampleSiteSpec:
     name: str
     indices: tuple[int, ...]
+    # Vector sites keep their trailing event axis even with a single element; the flag
+    # comes from the specs' sample_site_index so a lone promoted member still samples
+    # as shape (1,) and downstream `values[..., site_index]` extraction stays valid.
+    vector: bool = False
 
 
 def _parameter_sample_sites(parameter_specs: list[ParameterSpec]) -> list[_SampleSiteSpec]:
@@ -15035,7 +15247,16 @@ def _parameter_sample_sites(parameter_specs: list[ParameterSpec]) -> list[_Sampl
         actual = [int(item[1]) for item in ordered]
         if len(ordered) > 1 and actual != expected:
             raise ValueError(f"Vector sample site {site_name!r} has non-contiguous indices {actual}; expected {expected}.")
-        sites.append(_SampleSiteSpec(name=site_name, indices=tuple(int(item[0]) for item in ordered)))
+        vector = len(ordered) > 1 or any(
+            parameter_specs[int(item[0])].sample_site_index is not None for item in ordered
+        )
+        sites.append(
+            _SampleSiteSpec(
+                name=site_name,
+                indices=tuple(int(item[0]) for item in ordered),
+                vector=vector,
+            )
+        )
     return sites
 
 
@@ -15066,7 +15287,7 @@ def _blocked_nuts_dense_mass_argument(args: argparse.Namespace) -> bool:
 
 def _site_value_from_theta(theta: np.ndarray | jnp.ndarray, site: _SampleSiteSpec) -> jnp.ndarray:
     theta_array = jnp.asarray(theta, dtype=jnp.float64)
-    if len(site.indices) == 1:
+    if not site.vector:
         return jnp.asarray(theta_array[int(site.indices[0])], dtype=jnp.float64)
     return jnp.stack([theta_array[int(idx)] for idx in site.indices])
 
@@ -15688,7 +15909,13 @@ def _build_parameter_specs(
     return specs, component_param_assignments, lens_model_list
 
 
-def _potfile_scaling_prior_override(entry: Any, *, context: str) -> dict[str, Any] | None:
+def _potfile_scaling_prior_override(
+    entry: Any,
+    *,
+    context: str,
+    default_lower: float = float("nan"),
+    default_upper: float = float("nan"),
+) -> dict[str, Any] | None:
     """Decode a potfile sigma/cut limit entry into prior overrides for the scaling specs.
 
     Entries follow the lenstool limit encoding produced by `_prior_config_to_limit_entry`
@@ -15696,7 +15923,9 @@ def _potfile_scaling_prior_override(entry: Any, *, context: str) -> dict[str, An
     [3, mean, std] normal, [9, mean, std, lower, upper] truncated normal. Returns None
     for absent entries, bare nominal values, or fixed entries — the baked defaults then
     apply. Values are physical; the caller's log-positive transform maps them to latent
-    space, so a uniform entry becomes log-uniform in the physical parameter.
+    space, so a uniform entry becomes log-uniform in the physical parameter. Kind-3
+    normal entries are truncated at `default_lower`/`default_upper` (the field's baked
+    default physical bounds).
     """
     if entry is None or not isinstance(entry, (list, tuple)):
         return None
@@ -15720,10 +15949,18 @@ def _potfile_scaling_prior_override(entry: Any, *, context: str) -> dict[str, An
     if kind == 3:
         if len(values) < 2 or not np.isfinite(values[0]) or values[0] <= 0.0 or not np.isfinite(values[1]) or values[1] <= 0.0:
             raise ValueError(f"Normal prior for {context} requires positive finite mean and std: {entry!r}.")
+        # Truncate configured normal priors at the baked default physical bounds: an
+        # unbounded latent lognormal lets early stage-0 SVI collapse the members
+        # (sigma* driven ~20 prior-sigma low in jul6_0045); the bounds restore the
+        # floor the pre-honoring defaults always had.
+        lower = float(default_lower)
+        upper = float(default_upper)
+        if not (np.isfinite(lower) and np.isfinite(upper) and upper > lower):
+            raise ValueError(f"Normal prior for {context} requires finite default bounds, got [{lower}, {upper}].")
         return {
-            "prior_kind": "normal",
-            "lower": float("-inf"),
-            "upper": float("inf"),
+            "prior_kind": "truncated_normal",
+            "lower": lower,
+            "upper": upper,
             "mean": values[0],
             "std": values[1],
             "step": None,
@@ -15841,7 +16078,12 @@ def _build_scaling_parameter_specs(
         if cut_entry is None and potfile.get("cut") is not None:
             cut_entry = _scale_potfile_prior_to_kpc(potfile.get("cut"), kpc_per_arcsec)
         for field_name, entry in (("sigma", potfile.get("sigma")), ("cutkpc", cut_entry)):
-            override = _potfile_scaling_prior_override(entry, context=f"{potfile_id}.{field_name}")
+            override = _potfile_scaling_prior_override(
+                entry,
+                context=f"{potfile_id}.{field_name}",
+                default_lower=float(solver_priors[field_name]["lower"]),
+                default_upper=float(solver_priors[field_name]["upper"]),
+            )
             if override is None:
                 continue
             step = override.pop("step")
@@ -27331,7 +27573,7 @@ def _distribution_for_spec(spec: ParameterSpec):
 
 
 def _distribution_for_sample_site(site: _SampleSiteSpec, parameter_specs: list[ParameterSpec]):
-    if len(site.indices) == 1:
+    if not site.vector:
         return _distribution_for_spec(parameter_specs[site.indices[0]])
     specs = [parameter_specs[idx] for idx in site.indices]
     prior_kinds = {str(spec.prior_kind) for spec in specs}
@@ -27425,7 +27667,7 @@ def _posterior_model(parameter_specs: list[ParameterSpec], evaluator: ClusterJAX
                 )
             else:
                 value = numpyro.sample(site.name, _distribution_for_sample_site(site, parameter_specs))
-            if len(site.indices) == 1:
+            if not site.vector:
                 sampled[spec.sample_name] = value
                 values[site.indices[0]] = value
             else:
@@ -28785,12 +29027,18 @@ def _run_inference(args: argparse.Namespace, state: BuildState, run_dir: Path) -
                         "[perturbation-discovery] score_draws=1 reason=svi_posterior_unavailable "
                         "(falling back to the reference point estimate)",
                     )
+                stage0_collapse_payload = _warn_if_stage0_scaling_state_collapsed(
+                    args,
+                    state,
+                    np.asarray(best_fit, dtype=float),
+                )
                 final_union, final_union_diag, final_union_detail_df = _perturbation_discovery_union_from_evaluator(
                     state,
                     evaluator,
                     best_fit,
                     reference_draws=discovery_draws,
                 )
+                final_union_diag.update(stage0_collapse_payload)
                 if not final_union_detail_df.empty:
                     discovery_tables_dir = run_dir / "tables"
                     discovery_tables_dir.mkdir(parents=True, exist_ok=True)

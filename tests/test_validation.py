@@ -10470,13 +10470,18 @@ def test_scaling_specs_honor_configured_normal_sigma_and_uniform_cutkpc_priors()
     expected_mean, expected_std = cluster_solver._positive_lognormal_parameters(
         245.0, 35.0, floor=cluster_solver.VDISP_TRUNCATION_FLOOR_KM_S
     )
-    assert sigma_spec.prior_kind == "normal"
+    # Configured normal priors are truncated at the baked default physical bounds so
+    # early stage-0 SVI cannot collapse the members far below the prior (jul6_0045).
+    assert sigma_spec.prior_kind == "truncated_normal"
     assert sigma_spec.transform_kind == "log_positive"
-    assert sigma_spec.lower == float("-inf") and sigma_spec.upper == float("inf")
+    assert sigma_spec.lower == pytest.approx(np.log(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_LOWER))
+    assert sigma_spec.upper == pytest.approx(np.log(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_UPPER))
     assert sigma_spec.mean == pytest.approx(expected_mean)
     assert sigma_spec.std == pytest.approx(expected_std)
     assert sigma_spec.physical_mean == pytest.approx(245.0)
     assert sigma_spec.physical_std == pytest.approx(35.0)
+    assert sigma_spec.physical_lower == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_LOWER)
+    assert sigma_spec.physical_upper == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_SIGMA_REF_UPPER)
 
     # A uniform entry on a log-positive field samples log-uniform in the physical value.
     assert cut_spec.prior_kind == "uniform"
@@ -10489,6 +10494,19 @@ def test_scaling_specs_honor_configured_normal_sigma_and_uniform_cutkpc_priors()
     assert cut_spec.step == pytest.approx(37.2)
 
 
+def test_scaling_specs_kind3_cutkpc_prior_gets_default_bounds() -> None:
+    specs, param_indices, _ = cluster_solver._build_scaling_parameter_specs(
+        [_scaling_prior_potfile(cutkpc=[3, 187.0, 50.0])],
+        kpc_per_arcsec=5.0,
+    )
+    cut_spec = specs[param_indices[0]["cutkpc"]]
+    assert cut_spec.prior_kind == "truncated_normal"
+    assert cut_spec.physical_mean == pytest.approx(187.0)
+    assert cut_spec.physical_std == pytest.approx(50.0)
+    assert cut_spec.physical_lower == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_LOWER_KPC)
+    assert cut_spec.physical_upper == pytest.approx(cluster_solver.DEFAULT_SOLVER_POTFILE_CUT_REF_UPPER_KPC)
+
+
 def test_scaling_specs_scale_cut_arcsec_prior_to_kpc() -> None:
     specs, param_indices, _ = cluster_solver._build_scaling_parameter_specs(
         [_scaling_prior_potfile(cut=[1, 8.0, 80.0, 1.0])],
@@ -10498,6 +10516,87 @@ def test_scaling_specs_scale_cut_arcsec_prior_to_kpc() -> None:
     assert cut_spec.prior_kind == "uniform"
     assert cut_spec.physical_lower == pytest.approx(40.0)
     assert cut_spec.physical_upper == pytest.approx(400.0)
+
+
+def _simple_spec(name: str, family: str, *, prior_kind: str = "normal", mean: float = 0.0,
+                 std: float = 1.0, lower: float = -10.0, upper: float = 10.0) -> ParameterSpec:
+    return ParameterSpec(
+        name=name,
+        sample_name=name.replace(".", "_"),
+        potential_id="pot",
+        profile_type=cluster_solver.DP_IE_PROFILE,
+        field=name.split(".")[-1],
+        prior_kind=prior_kind,
+        lower=lower,
+        upper=upper,
+        step=0.1,
+        mean=mean,
+        std=std,
+        component_family=family,
+    )
+
+
+def test_stage0_member_frozen_site_values_freezes_member_families() -> None:
+    specs = [
+        _simple_spec("halo.v_disp", "large"),
+        _simple_spec("potfile.sigma", "scaling"),
+        _simple_spec("potfile.sigma_log_scatter", "scaling_scatter"),
+        _simple_spec("potfile.member001.delta", "independent_scaling"),
+        _simple_spec("source.1.beta_x", "source_position"),
+    ]
+    theta = np.asarray([1.0, 2.0, 3.0, 4.0, 5.0], dtype=float)
+    frozen = cluster_solver._stage0_member_frozen_site_values(specs, theta)
+    assert set(frozen) == {"potfile_sigma", "potfile_sigma_log_scatter", "potfile_member001_delta"}
+    assert float(frozen["potfile_sigma"]) == pytest.approx(2.0)
+    assert float(frozen["potfile_member001_delta"]) == pytest.approx(4.0)
+    # No member-family specs -> nothing frozen (staging is skipped by the caller).
+    assert cluster_solver._stage0_member_frozen_site_values(specs[:1], theta[:1]) == {}
+
+
+def test_multi_start_best_index_picks_lowest_tail_mean() -> None:
+    losses = [
+        np.linspace(100.0, 50.0, 100),   # tail mean ~50
+        np.linspace(100.0, 10.0, 100),   # tail mean ~10 -> winner
+        np.full(100, 30.0),
+    ]
+    best, scores = cluster_solver._multi_start_best_index(losses, tail_fraction=0.1)
+    assert best == 1
+    assert scores[2] == pytest.approx(30.0)
+    # A start that diverged to NaN cannot win.
+    losses[1] = np.full(100, np.nan)
+    best, _ = cluster_solver._multi_start_best_index(losses, tail_fraction=0.1)
+    assert best == 2
+    with pytest.raises(ValueError):
+        cluster_solver._multi_start_best_index([np.full(10, np.nan)], tail_fraction=0.1)
+
+
+def test_stage0_collapse_sentinel_warns_and_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    specs = [
+        _simple_spec("potfile.sigma", "scaling", prior_kind="truncated_normal", mean=5.5, std=0.14, lower=3.0, upper=6.2),
+        _simple_spec("potfile.cutkpc", "scaling", prior_kind="uniform", lower=3.7, upper=6.0),
+        _simple_spec("halo.v_disp", "large", prior_kind="truncated_normal", mean=6.6, std=0.1, lower=6.0, upper=7.1),
+    ]
+    state = SimpleNamespace(parameter_specs=specs)
+    messages: list[str] = []
+    monkeypatch.setattr(cluster_solver, "_log", lambda _args, message, **_kw: messages.append(str(message)))
+    args = argparse.Namespace(quiet=False)
+
+    # Collapsed: sigma ~20 prior-sigma low and cutkpc pinned to the lower prior edge.
+    payload = cluster_solver._warn_if_stage0_scaling_state_collapsed(
+        args, state, np.asarray([2.7, 3.70001, 6.6])
+    )
+    assert payload["stage0_scaling_state_suspect"] is True
+    assert payload["stage0_scaling_state_prior_z"]["potfile.sigma"] == pytest.approx((2.7 - 5.5) / 0.14)
+    assert any("STAGE-0 SCALING STATE SUSPECT" in message for message in messages)
+    assert any("potfile.sigma" in message for message in messages)
+
+    # Healthy state: silent, flag off; the non-scaling halo spec is never checked.
+    messages.clear()
+    payload = cluster_solver._warn_if_stage0_scaling_state_collapsed(
+        args, state, np.asarray([5.4, 4.9, 0.0])
+    )
+    assert payload["stage0_scaling_state_suspect"] is False
+    assert messages == []
 
 
 def test_scaling_specs_fall_back_to_defaults_for_fixed_or_absent_priors() -> None:
