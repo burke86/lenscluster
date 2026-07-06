@@ -914,10 +914,13 @@ def test_submit_mock_array_runs_anisotropic_position_and_magnitude_likelihood() 
         output_dir="validation_runs/mock_recovery",
         preset="production",
         seeds=(12345,),
+        email="dutra@example.edu",
     )
 
     script = submit_mock_array.build_sbatch_script("dryrun_magcompare", args)
 
+    assert "#SBATCH --mail-type=END" in script
+    assert "#SBATCH --mail-user=dutra@example.edu" in script
     assert script.count("run_mock.xsh") == 2
     assert script.count("--covariance anisotropic") == 2
     assert "--covariance isotropic" not in script

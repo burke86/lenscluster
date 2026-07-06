@@ -55,6 +55,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SEEDS,
         help="Comma-separated seed list. Default: 12345,12346,...,12354.",
     )
+    parser.add_argument(
+        "--email",
+        default=None,
+        help="Optional email address for SLURM completion notification. If omitted, SLURM uses the cluster default.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Write the sbatch script but do not submit it.")
     return parser.parse_args()
 
@@ -97,6 +102,8 @@ def build_run_command(covariance: str, magnitude_likelihood: str, args: argparse
 
 def build_sbatch_script(prefix: str, args: argparse.Namespace) -> str:
     log_pattern = LOG_DIR / f"{prefix}-%A_%a-%j.txt"
+    email = getattr(args, "email", None)
+    mail_user_line = f"#SBATCH --mail-user={email}\n" if email else ""
     return f"""#!/bin/bash
 #SBATCH --job-name={prefix}
 #SBATCH --output={log_pattern}
@@ -105,6 +112,8 @@ def build_sbatch_script(prefix: str, args: argparse.Namespace) -> str:
 #SBATCH --mem={MEMORY}
 #SBATCH --partition={PARTITION}
 #SBATCH --time={TIME_LIMIT}
+#SBATCH --mail-type=END
+{mail_user_line.rstrip()}
 
 set -euo pipefail
 
