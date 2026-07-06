@@ -28,6 +28,7 @@ from ..jax_cosmology import (
     flat_wcdm_config,
     kpc_per_arcsec_from_config,
 )
+from ..utils import log10_dpie_mass_msun
 
 ORIGINAL_DPIE_PROFILE_NAME = "DPIE_NIE"
 DEFAULT_CAUSTIC_COMPUTE_WINDOW_ARCSEC = 160.0
@@ -1532,6 +1533,27 @@ def generate_single_bcg_mock(
         mag_faint_limit=float(config.subhalo_mag_faint_limit),
     )
     subhalo_components = [_scaled_subhalo_params(row, config) for row in subhalos]
+    # `subhalo_mass_msun` is the Schechter abundance label used to draw the population;
+    # the physical mass of the member actually placed on the sky is the dPIE mass of its
+    # realized profile (scaling relation + drawn scatter). Recovery comparisons use this.
+    for row, component in zip(subhalos, subhalo_components, strict=True):
+        row["subhalo_dpie_mass_msun"] = float(
+            10.0
+            ** log10_dpie_mass_msun(
+                component.v_disp,
+                float(component.cut_radius_arcsec) * float(kpc_per_arcsec),
+            )
+        )
+    if subhalo_selection is not None:
+        # dPIE mass of an L=1 member with no scatter: anchors the label->physical mass
+        # transform (both scale as L^(2*alpha+beta)) for the SHMF Schechter overlay.
+        subhalo_selection["dpie_mass_anchor_msun"] = float(
+            10.0
+            ** log10_dpie_mass_msun(
+                float(config.subhalo_sigma_ref),
+                float(config.subhalo_cut_radius_arcsec) * float(kpc_per_arcsec),
+            )
+        )
     primary_family_redshifts, subhalo_family_redshifts, needed_source_redshifts = _mock_family_source_redshifts(config)
     redshift_index_by_value = {float(z): index + 1 for index, z in enumerate(needed_source_redshifts)}
     caustic_num_pix = 0

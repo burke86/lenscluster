@@ -119,11 +119,16 @@ from ..utils import (
     configure_debug_log as _configure_debug_log,
     fmt_seconds as _fmt_seconds,
     jax_cpu_worker_count,
+    log10_dpie_mass_msun,
     log_exception as _log_exception,
     log_message as _log,
     log_stage_banner as _log_stage_banner,
     progress_context as _progress_context,
     run_logged_phase as _run_logged_phase,
+)
+from .aggregate_plots import (
+    dpie_mass_anchor_from_truth,
+    dpie_truth_subhalo_masses_from_scaling,
 )
 
 from ..runner import LensClusterRunner
@@ -4663,26 +4668,6 @@ def _truth_scaling_reference_value(
     return float(fallback)
 
 
-def _truth_subhalo_mass_ref(truth: dict[str, Any]) -> float:
-    selection = truth.get("subhalo_selection", {}) if isinstance(truth, dict) else {}
-    config = truth.get("config", {}) if isinstance(truth, dict) else {}
-    candidates = (
-        selection.get("mass_ref")
-        if isinstance(selection, dict)
-        else None,
-        config.get("subhalo_mass_ref") if isinstance(config, dict) else None,
-        SingleBCGMockConfig().subhalo_mass_ref,
-    )
-    for candidate in candidates:
-        try:
-            value = float(candidate)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(value) and value > 0.0:
-            return value
-    return float(SingleBCGMockConfig().subhalo_mass_ref)
-
-
 def _finite_float_or_nan(value: Any) -> float:
     try:
         parsed = float(value)
@@ -4732,7 +4717,6 @@ def _recovered_subhalo_mass_table(state: Any, best_fit: np.ndarray, truth: dict[
         best_fit_values,
     )
     beta_radius = 1.0 + gamma_ml - 2.0 * alpha_sigma
-    mass_ref = _truth_subhalo_mass_ref(truth)
     rows: list[dict[str, Any]] = []
     for component_index in scaling_indices:
         if component_index >= luminosity_ratio.size:
@@ -4770,8 +4754,15 @@ def _recovered_subhalo_mass_table(state: Any, best_fit: np.ndarray, truth: dict[
             normalization *= (sigma_value / truth_sigma_ref) ** 2
         if np.isfinite(truth_cut_ref) and truth_cut_ref > 0.0:
             normalization *= cut_value / truth_cut_ref
-        exponent = 2.0 * alpha_sigma_value + beta_radius_value
-        mass = mass_ref * normalization * luminosity**exponent
+        # Physical dPIE mass of the fitted member profile — the same convention as the
+        # truth `subhalo_dpie_mass_msun` and the aggregate SHMF.
+        mass = float(
+            10.0
+            ** log10_dpie_mass_msun(
+                sigma_value * luminosity**alpha_sigma_value,
+                cut_value * luminosity**beta_radius_value,
+            )
+        )
         if not (np.isfinite(mass) and mass > 0.0):
             continue
         rows.append(
@@ -4853,8 +4844,13 @@ def _subhalo_linear_bins(*value_arrays: np.ndarray) -> np.ndarray | None:
 
 
 def _plot_subhalo_recovery_shmf(truth: dict[str, Any], recovered_subhalo_df: pd.DataFrame, path: Path) -> None:
-    truth_subhalo_df = pd.DataFrame(truth.get("subhalos", [])) if isinstance(truth, dict) else pd.DataFrame()
-    truth_mass = _positive_finite_series(truth_subhalo_df, "subhalo_mass_msun")
+    truth_dict = truth if isinstance(truth, dict) else {}
+    truth_subhalo_df = pd.DataFrame(truth_dict.get("subhalos", []))
+    truth_mass = _positive_finite_series(truth_subhalo_df, "subhalo_dpie_mass_msun")
+    if truth_mass.size == 0:
+        # Pre-fix mocks only recorded the Schechter abundance label; recompute the
+        # physical dPIE masses so the comparison stays in one mass convention.
+        truth_mass = dpie_truth_subhalo_masses_from_scaling(truth_dict)
     recovered_mass = _positive_finite_series(recovered_subhalo_df, "recovered_subhalo_mass_msun")
     selection = truth.get("subhalo_selection", {}) if isinstance(truth, dict) else {}
     if not isinstance(selection, dict):
@@ -4895,20 +4891,25 @@ def _plot_subhalo_recovery_shmf(truth: dict[str, Any], recovered_subhalo_df: pd.
         label="recovered subhalos",
     )
     schechter_alpha = float(selection.get("schechter_alpha", SingleBCGMockConfig().subhalo_schechter_alpha))
-    mass_ref = float(selection.get("mass_ref", SingleBCGMockConfig().subhalo_mass_ref))
+    # Histograms are in physical dPIE mass, so anchor the Schechter curve at the dPIE
+    # mass of an L=1 member instead of the abundance-label mass_ref.
+    mass_anchor_value = selection.get("dpie_mass_anchor_msun")
+    if mass_anchor_value is None:
+        mass_anchor_value = dpie_mass_anchor_from_truth(truth_dict)
+    mass_anchor = float(mass_anchor_value) if mass_anchor_value is not None else float("nan")
     exponent = float(
         selection.get("mass_luminosity_exponent", _subhalo_mass_luminosity_exponent(SingleBCGMockConfig()))
     )
     if (
         np.isfinite(schechter_alpha)
-        and np.isfinite(mass_ref)
-        and mass_ref > 0.0
+        and np.isfinite(mass_anchor)
+        and mass_anchor > 0.0
         and np.isfinite(exponent)
         and exponent > 0.0
     ):
         log_mass_grid = np.linspace(float(bins[0]), float(bins[-1]), 256)
         mass_grid = np.power(10.0, log_mass_grid)
-        luminosity_grid = np.power(mass_grid / mass_ref, 1.0 / exponent)
+        luminosity_grid = np.power(mass_grid / mass_anchor, 1.0 / exponent)
         schechter_density = np.power(luminosity_grid, schechter_alpha + 1.0) * np.exp(-luminosity_grid)
         schechter_norm = float(np.trapezoid(schechter_density, log_mass_grid))
         if np.isfinite(schechter_norm) and schechter_norm > 0.0:
@@ -4921,7 +4922,6 @@ def _plot_subhalo_recovery_shmf(truth: dict[str, Any], recovered_subhalo_df: pd.
                 linewidth=1.3,
                 label=fr"Schechter $\alpha={schechter_alpha:.2g}$",
             )
-    ax.set_yscale("log")
     ax.xaxis.set_minor_locator(AutoMinorLocator(5))
     ax.tick_params(axis="x", which="minor", length=3.0)
     ax.tick_params(axis="both", which="major", labelsize=12)

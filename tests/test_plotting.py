@@ -211,13 +211,8 @@ def test_scaling_results_summary_table_reports_bergamini_reference_values_and_ma
         weights,
         [0.16, 0.5, 0.84],
     )
-    mass = (
-        math.pi
-        * np.square(samples[:, 0])
-        * np.maximum(samples[:, 1], 0.0)
-        / plotting.DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
-    )
-    _mass_p16, expected_mass_median, _mass_p84 = plotting._weighted_quantile(np.log10(mass), weights, [0.16, 0.5, 0.84])
+    log_mass = plotting._log10_dpie_mass_msun(samples[:, 0], samples[:, 1])
+    _mass_p16, expected_mass_median, _mass_p84 = plotting._weighted_quantile(log_mass, weights, [0.16, 0.5, 0.84])
     expected_alpha_median = plotting._weighted_quantile(samples[:, 3], weights, [0.5])[0]
     expected_gamma_median = plotting._weighted_quantile(samples[:, 4], weights, [0.5])[0]
     expected_beta_median = plotting._weighted_quantile(1.0 + samples[:, 4] - 2.0 * samples[:, 3], weights, [0.5])[0]
@@ -446,7 +441,7 @@ def test_scaling_relation_summary_table_preserves_classes_and_free_branch() -> N
     assert free_row["free_cut_radius_kpc_median"] == pytest.approx(80.0)
     assert free_row["free_cut_radius_kpc_best"] == pytest.approx(82.0)
     expected_free_mass = math.log10(
-        math.pi * 420.0**2 * 80.0 / plotting.DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
+        1.5 * math.pi * 420.0**2 * 80.0 / plotting.DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
     )
     assert free_row["free_log10_mass_msun_median"] == pytest.approx(expected_free_mass)
 

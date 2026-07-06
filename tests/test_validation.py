@@ -29,6 +29,7 @@ import lenscluster.plotting as plotting
 import lenscluster.mock_validation as mock_validation_api
 import lenscluster.mock_validation.runner as validation
 from lenscluster.config import ImageDiagnosticsConfig, LensClusterSolverConfig, LikelihoodConfig, RuntimeConfig, StageScheduleConfig, TruthRecoveryConfig, WorkflowConfig
+from lenscluster.utils import log10_dpie_mass_msun
 from lenscluster.planning import SolverRuntime
 from lenscluster.jax_cosmology import (
     ARCSEC_TO_RAD,
@@ -2159,6 +2160,19 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
     assert all(float(row["catalog_mag"]) <= config.subhalo_mag_faint_limit for row in truth["subhalos"])
     assert all("subhalo_mass_msun" in row for row in truth["subhalos"])
     assert all("subhalo_parent_rank" in row for row in truth["subhalos"])
+    # Physical dPIE mass of each realized member profile (scaling relation + scatter),
+    # distinct from the Schechter abundance label above.
+    truth_kpc_per_arcsec = float(truth["kpc_per_arcsec"])
+    components_by_id = {row["potential_id"]: row for row in truth["subhalo_components"]}
+    for row in truth["subhalos"]:
+        component = components_by_id[row["id"]]
+        expected_mass = 10.0 ** float(
+            log10_dpie_mass_msun(
+                component["v_disp"],
+                float(component["cut_radius_arcsec"]) * truth_kpc_per_arcsec,
+            )
+        )
+        assert row["subhalo_dpie_mass_msun"] == pytest.approx(expected_mass)
     assert all(row["selected_by_mag_cut"] is True for row in truth["subhalos"])
     selection = truth["subhalo_selection"]
     assert selection["schechter_alpha"] == pytest.approx(config.subhalo_schechter_alpha)
@@ -2176,6 +2190,15 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
         config.subhalo_mass_ref * (config.subhalo_schechter_alpha + 1.0) ** selection["mass_luminosity_exponent"]
     )
     assert selection["mass_peak"] == pytest.approx(3.0e11)
+    assert selection["dpie_mass_anchor_msun"] == pytest.approx(
+        10.0
+        ** float(
+            log10_dpie_mass_msun(
+                config.subhalo_sigma_ref,
+                float(config.subhalo_cut_radius_arcsec) * truth_kpc_per_arcsec,
+            )
+        )
+    )
     assert selection["parent_count"] >= config.n_subhalos
     assert selection["selected_count"] == config.n_subhalos
     candidates = selection["candidates"]
@@ -2493,13 +2516,15 @@ def test_recovered_subhalo_mass_table_uses_recovered_scaling_parameters() -> Non
 
     table = validation._recovered_subhalo_mass_table(state, best_fit, truth)
 
-    normalization = (300.0 / 245.0) ** 2 * (60.0 / 40.0)
-    exponent = 1.0 + 0.60
+    # Recovered masses are physical dPIE masses of the fitted member profiles:
+    # sigma_i = sigma_ref_fit * L^alpha_fit, cut_i = cut_ref_fit * L^beta_fit,
+    # with beta = 1 + gamma_ml - 2*alpha.
+    beta = 1.0 + 0.60 - 2.0 * 0.30
     assert table["catalog_id"].tolist() == ["member001", "member002"]
     assert table["recovered_subhalo_mass_msun"].tolist() == pytest.approx(
         [
-            1.0e12 * normalization,
-            1.0e12 * normalization * 0.25**exponent,
+            float(10.0 ** log10_dpie_mass_msun(300.0, 60.0)),
+            float(10.0 ** log10_dpie_mass_msun(300.0 * 0.25**0.30, 60.0 * 0.25**beta)),
         ]
     )
     assert table["x_arcsec"].tolist() == pytest.approx([3.0, 6.0])
@@ -3444,9 +3469,9 @@ def test_plot_critical_arc_support_placeholder_without_finite_values(tmp_path: P
 def test_plot_subhalo_recovery_shmf_writes_pdf(tmp_path: Path) -> None:
     truth = {
         "subhalos": [
-            {"subhalo_mass_msun": 1.0e11},
-            {"subhalo_mass_msun": 3.0e11},
-            {"subhalo_mass_msun": 1.2e12},
+            {"subhalo_dpie_mass_msun": 1.0e11},
+            {"subhalo_dpie_mass_msun": 3.0e11},
+            {"subhalo_dpie_mass_msun": 1.2e12},
         ]
     }
     recovered = pd.DataFrame(
@@ -3468,13 +3493,14 @@ def test_plot_subhalo_recovery_shmf_uses_truth_schechter_without_parent_or_rugs(
 ) -> None:
     truth = {
         "subhalos": [
-            {"subhalo_mass_msun": 1.0e11},
-            {"subhalo_mass_msun": 3.0e11},
-            {"subhalo_mass_msun": 1.2e12},
+            {"subhalo_dpie_mass_msun": 1.0e11},
+            {"subhalo_dpie_mass_msun": 3.0e11},
+            {"subhalo_dpie_mass_msun": 1.2e12},
         ],
         "subhalo_selection": {
             "schechter_alpha": -0.7,
             "mass_ref": 1.0e12,
+            "dpie_mass_anchor_msun": 1.0e12,
             "mass_luminosity_exponent": 1.0,
             "candidates": [
                 {"subhalo_mass_msun": 5.0e10},
@@ -3521,6 +3547,9 @@ def test_plot_subhalo_recovery_shmf_uses_truth_schechter_without_parent_or_rugs(
     def fail_title(self: Any, *args: Any, **kwargs: Any) -> Any:
         raise AssertionError("subhalo recovery SHMF should not draw a title")
 
+    def fail_yscale(self: Any, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("subhalo recovery SHMF should keep a linear y axis")
+
     def record_set_xlabel(self: Any, *args: Any, **kwargs: Any) -> Any:
         xlabel_fontsizes.append(kwargs.get("fontsize"))
         return original_set_xlabel(self, *args, **kwargs)
@@ -3542,6 +3571,7 @@ def test_plot_subhalo_recovery_shmf_uses_truth_schechter_without_parent_or_rugs(
     monkeypatch.setattr(validation.plt.Axes, "plot", record_plot)
     monkeypatch.setattr(validation.plt.Axes, "scatter", fail_scatter)
     monkeypatch.setattr(validation.plt.Axes, "set_title", fail_title)
+    monkeypatch.setattr(validation.plt.Axes, "set_yscale", fail_yscale)
     monkeypatch.setattr(validation.plt.Axes, "set_xlabel", record_set_xlabel)
     monkeypatch.setattr(validation.plt.Axes, "set_ylabel", record_set_ylabel)
     monkeypatch.setattr(validation.plt.Axes, "legend", record_legend)
@@ -3566,6 +3596,144 @@ def test_plot_subhalo_recovery_shmf_uses_truth_schechter_without_parent_or_rugs(
     assert legend_locs == ["upper left"]
     assert path.exists()
     assert path.stat().st_size > 0
+
+
+def _dpie_mass_truth_payload() -> dict[str, Any]:
+    return {
+        "parameter_truth": {
+            "potfile.sigma": 245.0,
+            "potfile.cutkpc": 187.0,
+            "potfile.alpha_sigma": 0.25,
+            "potfile.beta_radius": 0.5,
+        },
+        "subhalos": [
+            {"luminosity_ratio": 1.0, "sigma_log_offset": 0.0, "cut_log_offset": 0.0},
+            {"luminosity_ratio": 0.1, "sigma_log_offset": 0.05, "cut_log_offset": 0.0},
+        ],
+    }
+
+
+def test_aggregate_truth_subhalo_masses_prefer_recorded_dpie_masses() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    payload = {
+        "mock_cluster": {
+            "truth": {
+                "subhalos": [
+                    {"subhalo_dpie_mass_msun": 2.0e12, "subhalo_mass_msun": 1.0e11},
+                    {"subhalo_dpie_mass_msun": 5.0e11, "subhalo_mass_msun": 3.0e10},
+                ]
+            }
+        }
+    }
+    np.testing.assert_allclose(aggregate_plots._truth_subhalo_masses(payload), [2.0e12, 5.0e11])
+
+
+def test_aggregate_truth_subhalo_masses_recompute_for_pre_fix_mocks_and_warn() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    truth = _dpie_mass_truth_payload()
+    # Pre-fix mocks recorded only the abundance label.
+    for row in truth["subhalos"]:
+        row["subhalo_mass_msun"] = 1.0e12 * row["luminosity_ratio"]
+    payload = {"mock_cluster": {"truth": truth}}
+    with pytest.warns(RuntimeWarning, match="subhalo_dpie_mass_msun"):
+        masses = aggregate_plots._truth_subhalo_masses(payload)
+    expected = [
+        10.0 ** float(log10_dpie_mass_msun(245.0, 187.0)),
+        10.0
+        ** float(
+            log10_dpie_mass_msun(
+                245.0 * 0.1**0.25 * math.exp(0.05),
+                187.0 * 0.1**0.5,
+            )
+        ),
+    ]
+    np.testing.assert_allclose(masses, expected)
+
+
+def test_aggregate_schechter_curve_requires_dpie_anchor() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    x = np.linspace(10.0, 13.0, 64)
+    selection = {"schechter_alpha": -0.7, "mass_ref": 1.0e12, "mass_luminosity_exponent": 1.0}
+    assert aggregate_plots._schechter_shmf_curve(selection, x, 10.0) is None
+    curve = aggregate_plots._schechter_shmf_curve(
+        {**selection, "dpie_mass_anchor_msun": 8.2e12}, x, 10.0
+    )
+    assert curve is not None
+    # Curve integrates to the requested normalization over log-mass.
+    assert float(np.trapezoid(curve, x)) == pytest.approx(10.0)
+    # Anchoring at the dPIE L=1 mass peaks the curve near anchor * (alpha+1).
+    assert x[int(np.argmax(curve))] == pytest.approx(np.log10(8.2e12 * 0.3), abs=0.1)
+
+
+def test_aggregate_recovered_masses_prefer_free_columns_for_promoted_members() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    payload = {
+        "solver": {
+            "stage_manifests": [
+                {
+                    "stage": "stage2_free_source_forward_fit",
+                    "table_artifacts": {
+                        "scaling_relation_summary.csv": {
+                            "data": {
+                                "records": [
+                                    # Promoted member: free mass wins.
+                                    {
+                                        "free_log10_mass_msun_best": 11.5,
+                                        "scaling_log10_mass_msun_best": 11.0,
+                                    },
+                                    # Unpromoted member: free columns are NaN.
+                                    {
+                                        "free_log10_mass_msun_best": float("nan"),
+                                        "scaling_log10_mass_msun_best": 10.5,
+                                    },
+                                    # Best missing entirely: median fallback.
+                                    {"scaling_log10_mass_msun_median": 10.0},
+                                ]
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    }
+    values = aggregate_plots._recovered_stage_subhalo_log_masses(payload, "stage2_free_source_forward_fit")
+    np.testing.assert_allclose(values, [11.5, 10.5, 10.0])
+
+
+def test_dpie_mass_helper_matches_integrated_profile_total() -> None:
+    # Convention lock: the helper must equal the Eliasdottir A11 / lenstronomy
+    # mass_tot (2*pi*sigma0*Ra*Rs*Sigma_cr) of the exact profile the pipeline builds
+    # from v_disp, for the lenstool sigma_dPIE convention of our amplitude packing.
+    from lenscluster.jax_cosmology import (
+        critical_surface_density_angle_msun_per_arcsec2,
+        dpie_sigma0_from_vel_disp,
+        flat_wcdm_config,
+        kpc_per_arcsec_from_config,
+    )
+
+    cosmo = flat_wcdm_config(h0=70.0, om0=0.3)
+    z_lens, v_disp, ra_arcsec, rs_arcsec = 0.375, 245.0, 0.03, 35.0
+    kpc_per_arcsec = float(kpc_per_arcsec_from_config(z_lens, cosmo))
+    helper_mass = 10.0 ** float(log10_dpie_mass_msun(v_disp, rs_arcsec * kpc_per_arcsec))
+    profile_masses = []
+    for z_source in (2.0, 9.0):
+        sigma0 = dpie_sigma0_from_vel_disp(v_disp, ra_arcsec, rs_arcsec, z_lens, z_source, cosmo)
+        sigma_crit = float(
+            np.asarray(critical_surface_density_angle_msun_per_arcsec2(z_lens, z_source, 70.0, 0.3, -1.0))
+        )
+        profile_masses.append(2.0 * np.pi * sigma0 * ra_arcsec * rs_arcsec * sigma_crit)
+    # Independent of source redshift, and equal to the helper up to the neglected
+    # (1 - Ra^2/Rs^2) core term (<1e-3 relative here).
+    assert profile_masses[0] == pytest.approx(profile_masses[1], rel=1.0e-8)
+    assert helper_mass == pytest.approx(profile_masses[0], rel=1.0e-3)
+    # Hard value check of the formula itself.
+    assert float(log10_dpie_mass_msun(245.0, 187.0)) == pytest.approx(
+        math.log10(1.5 * math.pi * 245.0**2 * 187.0 / 4.30091e-6)
+    )
 
 
 def test_plot_subhalo_recovery_radial_writes_pdf(tmp_path: Path) -> None:
@@ -18668,12 +18836,13 @@ def _write_aggregate_combined_recovery(
         "mock_cluster": {
             "truth": {
                 "subhalos": [
-                    {"id": f"member{index:03d}", "subhalo_mass_msun": mass}
+                    {"id": f"member{index:03d}", "subhalo_dpie_mass_msun": mass}
                     for index, mass in enumerate(truth_masses, start=1)
                 ],
                 "subhalo_selection": {
                     "schechter_alpha": -1.3,
                     "mass_ref": 1.0e12,
+                    "dpie_mass_anchor_msun": 8.2e12,
                     "mass_luminosity_exponent": 1.0,
                 },
             }
@@ -19649,6 +19818,7 @@ def test_subhalo_shmf_tables_aggregate_seed_quantiles(tmp_path: Path) -> None:
     seed_df, summary_df = aggregate_plots.build_subhalo_shmf_tables(shmf_inputs, log_mass_bins=bins)
 
     assert selection["mass_ref"] == pytest.approx(1.0e12)
+    assert selection["dpie_mass_anchor_msun"] == pytest.approx(8.2e12)
     assert len(seed_df) == 4
     assert set(seed_df["variant"]) == {"anisotropic"}
     recovered_bin0 = summary_df[
@@ -19665,8 +19835,15 @@ def test_subhalo_shmf_tables_aggregate_seed_quantiles(tmp_path: Path) -> None:
     assert ratio_bin1.empty
 
 
-def test_subhalo_shmf_outputs_create_plot_and_tables(tmp_path: Path) -> None:
+def test_subhalo_shmf_outputs_create_plot_and_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from matplotlib.axes import Axes
+
     import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    def fail_yscale(self: Axes, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("aggregate subhalo recovery SHMF should keep a linear y axis")
+
+    monkeypatch.setattr(Axes, "set_yscale", fail_yscale)
 
     campaign = tmp_path / "jul2_2215_mock_validation"
     output_dir = campaign / "aggregate_plots"

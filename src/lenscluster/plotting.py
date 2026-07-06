@@ -64,7 +64,9 @@ from .model import BuildState, EvaluationResult, ParameterSpec, PosteriorResults
 from .model import convert_theta_to_latent as _convert_theta_to_latent
 from .model import display_lower as _display_lower
 from .model import display_upper as _display_upper
+from .utils import DPIE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
 from .utils import Table as _RichTable
+from .utils import log10_dpie_mass_msun as _log10_dpie_mass_msun
 from .utils import jax_cpu_worker_count
 from .utils import log_message as _log
 from .utils import progress_context as _progress_context
@@ -141,10 +143,10 @@ CRITICAL_ARC_SINGULAR_THRESHOLD_SAMPLE_NAME = "critical_arc_singular_threshold"
 CRITICAL_ARC_SINGULAR_SOFTNESS_SAMPLE_NAME = "critical_arc_singular_softness"
 CRITICAL_ARC_LOG_S_MIN_FLOOR = 1.0e-12
 SUBHALO_TOTAL_MASS_RADIUS_FACTOR = 1.0e6
-DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN = 4.30091e-6
+DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN = DPIE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
 SCALING_RESULTS_MASS_NOTE = (
-    "M* = pi * vdisp*^2 * rcut* / G, "
-    "with G = 4.30091e-6 kpc (km/s)^2 Msun^-1"
+    "M* = (3/2) * pi * vdisp*^2 * rcut* / G (Eliasdottir+07 eq. A11, "
+    "lenstool sigma convention), with G = 4.30091e-6 kpc (km/s)^2 Msun^-1"
 )
 NUMPYRO_MODEL_PLOT_FILENAME = "numpyro_model.pdf"
 NUMPYRO_MODEL_DEFAULT_LIKELIHOOD_MODE = "source"
@@ -194,17 +196,6 @@ def _finish_pdf_page(pdf: PdfPages, fig: Any, **savefig_kwargs: Any) -> None:
     plt.close(fig)
 
 
-def _log10_dpie_mass_msun(v_disp: Any, cut_radius_kpc: Any) -> np.ndarray:
-    v_disp_array = np.asarray(v_disp, dtype=float)
-    cut_array = np.asarray(cut_radius_kpc, dtype=float)
-    mass = (
-        math.pi
-        * np.square(v_disp_array)
-        * np.maximum(cut_array, 0.0)
-        / DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
-    )
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(mass > 0.0, np.log10(mass), np.nan)
 NUMPYRO_MODEL_ROLE_STYLE = {
     "critical_arc_hyperparameter": {
         "title": "Critical-arc gate",
@@ -922,24 +913,11 @@ def _scaling_results_summary_table(
         _add_summary(row, "rcut_star_kpc", cut, _map(field_index.get("cutkpc")))
         _add_summary(row, "rcore_star_kpc", core, _map(field_index.get("corekpc")))
         if sigma is not None and cut is not None:
-            mass = (
-                math.pi
-                * np.square(sigma)
-                * np.maximum(cut, 0.0)
-                / DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
-            )
-            with np.errstate(divide="ignore", invalid="ignore"):
-                log_mass = np.where(mass > 0.0, np.log10(mass), np.nan)
+            log_mass = _log10_dpie_mass_msun(sigma, cut)
             sigma_map = _map(field_index.get("sigma"))
             cut_map = _map(field_index.get("cutkpc"))
             core_map = _map(field_index.get("corekpc"))
-            mass_map = (
-                math.pi
-                * sigma_map * sigma_map
-                * max(cut_map, 0.0)
-                / DPiE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN
-            )
-            log_mass_map = math.log10(mass_map) if mass_map > 0.0 and np.isfinite(mass_map) else float("nan")
+            log_mass_map = float(_log10_dpie_mass_msun(sigma_map, cut_map))
             _add_summary(row, "log10_m_star_msun", log_mass, log_mass_map)
         else:
             _add_summary(row, "log10_m_star_msun", None, float("nan"))

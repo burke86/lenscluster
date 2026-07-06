@@ -17,6 +17,7 @@ from matplotlib.patches import Ellipse
 from matplotlib.lines import Line2D
 
 from lenscluster.plot_style import apply_lenscluster_plot_style
+from lenscluster.utils import log10_dpie_mass_msun
 
 DEFAULT_RUN_NAME = "single_bcg_production"
 DEFAULT_STAGES = ("stage1_backprojected_centroid_fit", "stage2_free_source_forward_fit")
@@ -1525,11 +1526,84 @@ def _table_records_from_manifest(manifest: dict[str, Any], table_name: str) -> l
     return [record for record in records if isinstance(record, dict)] if isinstance(records, list) else []
 
 
+def _dpie_truth_scaling_values(truth: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    parameter_truth = truth.get("parameter_truth", {})
+    if not isinstance(parameter_truth, dict):
+        return None
+    try:
+        sigma_ref = float(parameter_truth["potfile.sigma"])
+        cut_ref_kpc = float(parameter_truth["potfile.cutkpc"])
+        alpha_sigma = float(parameter_truth["potfile.alpha_sigma"])
+        beta_radius = float(parameter_truth["potfile.beta_radius"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    values = (sigma_ref, cut_ref_kpc, alpha_sigma, beta_radius)
+    if not all(np.isfinite(values)) or sigma_ref <= 0.0 or cut_ref_kpc <= 0.0:
+        return None
+    return values
+
+
+def dpie_truth_subhalo_masses_from_scaling(truth: dict[str, Any]) -> np.ndarray:
+    """Recompute physical dPIE member masses for truth payloads that predate
+    `subhalo_dpie_mass_msun` (mocks generated before the label/physical mass split)."""
+    scaling = _dpie_truth_scaling_values(truth)
+    if scaling is None:
+        return np.empty((0,), dtype=float)
+    sigma_ref, cut_ref_kpc, alpha_sigma, beta_radius = scaling
+    subhalos = truth.get("subhalos", [])
+    masses: list[float] = []
+    for record in subhalos if isinstance(subhalos, list) else []:
+        if not isinstance(record, dict):
+            continue
+        try:
+            luminosity = float(record.get("luminosity_ratio"))
+        except (TypeError, ValueError):
+            continue
+        if not (np.isfinite(luminosity) and luminosity > 0.0):
+            continue
+        v_disp = sigma_ref * luminosity**alpha_sigma * math.exp(float(record.get("sigma_log_offset", 0.0)))
+        cut_kpc = cut_ref_kpc * luminosity**beta_radius * math.exp(float(record.get("cut_log_offset", 0.0)))
+        masses.append(float(10.0 ** log10_dpie_mass_msun(v_disp, cut_kpc)))
+    return _positive_finite_values(masses)
+
+
+def dpie_mass_anchor_from_truth(truth: dict[str, Any]) -> float | None:
+    """Physical dPIE mass of an L=1, no-scatter member — the label->physical anchor."""
+    scaling = _dpie_truth_scaling_values(truth)
+    if scaling is None:
+        return None
+    sigma_ref, cut_ref_kpc, _alpha_sigma, _beta_radius = scaling
+    return float(10.0 ** log10_dpie_mass_msun(sigma_ref, cut_ref_kpc))
+
+
 def _truth_subhalo_masses(payload: dict[str, Any]) -> np.ndarray:
     truth = payload.get("mock_cluster", {}).get("truth", {})
-    subhalos = truth.get("subhalos", []) if isinstance(truth, dict) else []
-    masses = [record.get("subhalo_mass_msun") for record in subhalos if isinstance(record, dict)]
-    return _positive_finite_values(masses)
+    if not isinstance(truth, dict):
+        return np.empty((0,), dtype=float)
+    subhalos = truth.get("subhalos", [])
+    masses = [
+        record.get("subhalo_dpie_mass_msun")
+        for record in (subhalos if isinstance(subhalos, list) else [])
+        if isinstance(record, dict)
+    ]
+    values = _positive_finite_values(masses)
+    if values.size:
+        return values
+    recomputed = dpie_truth_subhalo_masses_from_scaling(truth)
+    if recomputed.size:
+        warnings.warn(
+            "truth.json lacks subhalo_dpie_mass_msun (mock generated before the "
+            "label/physical mass split); recomputed physical dPIE masses from the "
+            "scaling-relation truth. Do NOT compare against subhalo_mass_msun — that "
+            "is the Schechter abundance label. NOTE: this campaign's stored per-run "
+            "recovered-mass tables (scaling_relation_summary.csv) also predate the "
+            "(3/2)*pi*sigma^2*rcut/G total-mass convention and are a factor 1.5 low; "
+            "the SHMF ratio panel will read ~2/3 until the per-run plots are "
+            "regenerated.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return recomputed
 
 
 def _recovered_stage_subhalo_log_masses(payload: dict[str, Any], stage: str) -> np.ndarray:
@@ -1539,9 +1613,20 @@ def _recovered_stage_subhalo_log_masses(payload: dict[str, Any], stage: str) -> 
     records = _table_records_from_manifest(manifest, "scaling_relation_summary.csv")
     values: list[Any] = []
     for record in records:
-        value = record.get("scaling_log10_mass_msun_best")
-        if value is None:
-            value = record.get("scaling_log10_mass_msun_median")
+        # Promoted members carry individually fitted masses (their delta offsets model
+        # exactly the per-member scatter the truth includes); fall back to the pure
+        # scaling-relation mass for members without free columns.
+        value = None
+        for column in (
+            "free_log10_mass_msun_best",
+            "free_log10_mass_msun_median",
+            "scaling_log10_mass_msun_best",
+            "scaling_log10_mass_msun_median",
+        ):
+            candidate = pd.to_numeric(pd.Series([record.get(column)]), errors="coerce").iloc[0]
+            if np.isfinite(candidate):
+                value = float(candidate)
+                break
         values.append(value)
     log_mass = pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce").to_numpy(dtype=float)
     return log_mass[np.isfinite(log_mass)]
@@ -1611,6 +1696,11 @@ def collect_subhalo_shmf_inputs(
                 continue
             if not selection:
                 selection = _truth_subhalo_selection(payload)
+                if selection and "dpie_mass_anchor_msun" not in selection:
+                    truth = payload.get("mock_cluster", {}).get("truth", {})
+                    anchor = dpie_mass_anchor_from_truth(truth if isinstance(truth, dict) else {})
+                    if anchor is not None:
+                        selection = {**selection, "dpie_mass_anchor_msun": anchor}
             rows.append(
                 {
                     "campaign": root.name,
@@ -1713,16 +1803,19 @@ def build_subhalo_shmf_tables(
 
 
 def _schechter_shmf_curve(selection: dict[str, Any], x_values: np.ndarray, normalization: float) -> np.ndarray | None:
+    # The empirical histograms are in physical dPIE mass, so the Schechter curve must
+    # be anchored at the dPIE mass of an L=1 member, not the abundance-label mass_ref
+    # (both scale as L^exponent, so only the anchor changes).
     try:
         schechter_alpha = float(selection.get("schechter_alpha"))
-        mass_ref = float(selection.get("mass_ref"))
+        mass_anchor = float(selection.get("dpie_mass_anchor_msun"))
         exponent = float(selection.get("mass_luminosity_exponent"))
     except (TypeError, ValueError):
         return None
     if not (
         np.isfinite(schechter_alpha)
-        and np.isfinite(mass_ref)
-        and mass_ref > 0.0
+        and np.isfinite(mass_anchor)
+        and mass_anchor > 0.0
         and np.isfinite(exponent)
         and exponent > 0.0
         and np.isfinite(normalization)
@@ -1730,7 +1823,7 @@ def _schechter_shmf_curve(selection: dict[str, Any], x_values: np.ndarray, norma
     ):
         return None
     mass_grid = np.power(10.0, x_values)
-    luminosity_grid = np.power(mass_grid / mass_ref, 1.0 / exponent)
+    luminosity_grid = np.power(mass_grid / mass_anchor, 1.0 / exponent)
     density = np.power(luminosity_grid, schechter_alpha + 1.0) * np.exp(-luminosity_grid)
     density_norm = float(np.trapezoid(density, x_values))
     if not (np.isfinite(density_norm) and density_norm > 0.0):
@@ -1763,8 +1856,7 @@ def plot_subhalo_shmf_summary(
     paths: list[Path] = []
     selection = selection or {}
     empirical_y = _positive_shmf_plot_values(summary_df)
-    y_floor = float(np.nanmin(empirical_y) * 0.5) if empirical_y.size else np.nan
-    y_ceiling = float(np.nanmax(empirical_y) * 2.0) if empirical_y.size else np.nan
+    y_ceiling = float(np.nanmax(empirical_y) * 1.15) if empirical_y.size else np.nan
     for fmt in formats:
         path = output_base.with_suffix(f".{fmt}")
         fig, axes = plt.subplots(2, 1, figsize=(7.2, 7.0), sharex=True, gridspec_kw={"height_ratios": [2.2, 1.0]})
@@ -1775,7 +1867,7 @@ def plot_subhalo_shmf_summary(
             y = truth["value_median"].to_numpy(dtype=float)
             y16 = truth["value_q16"].to_numpy(dtype=float)
             y84 = truth["value_q84"].to_numpy(dtype=float)
-            mask = y > 0.0
+            mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(y16) & np.isfinite(y84)
             top_ax.fill_between(x[mask], y16[mask], y84[mask], color="0.7", alpha=0.35, step="mid")
             top_ax.step(x[mask], y[mask], where="mid", color="0.25", linewidth=2.0, label="Truth")
             bin_widths = (truth["log_mass_right"] - truth["log_mass_left"]).to_numpy(dtype=float)
@@ -1783,8 +1875,6 @@ def plot_subhalo_shmf_summary(
             curve = _schechter_shmf_curve(selection, x, schechter_norm)
             if curve is not None:
                 curve_mask = np.isfinite(curve)
-                if np.isfinite(y_floor):
-                    curve_mask &= curve >= y_floor
                 if np.any(curve_mask):
                     top_ax.plot(x[curve_mask], curve[curve_mask], color="0.1", linestyle="--", linewidth=1.3, label="Schechter")
         for variant in DEFAULT_VARIANTS:
@@ -1795,7 +1885,7 @@ def plot_subhalo_shmf_summary(
             y = recovered["value_median"].to_numpy(dtype=float)
             y16 = recovered["value_q16"].to_numpy(dtype=float)
             y84 = recovered["value_q84"].to_numpy(dtype=float)
-            mask = y > 0.0
+            mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(y16) & np.isfinite(y84)
             color = VARIANT_COLORS.get(variant, "0.35")
             top_ax.fill_between(x[mask], y16[mask], y84[mask], color=color, alpha=0.18, step="mid")
             top_ax.step(x[mask], y[mask], where="mid", color=color, linewidth=2.0, label=variant_label(variant))
@@ -1808,9 +1898,8 @@ def plot_subhalo_shmf_summary(
                 finite = np.isfinite(ry)
                 ratio_ax.fill_between(rx[finite], ry16[finite], ry84[finite], color=color, alpha=0.18, step="mid")
                 ratio_ax.step(rx[finite], ry[finite], where="mid", color=color, linewidth=2.0)
-        top_ax.set_yscale("log")
-        if np.isfinite(y_floor) and np.isfinite(y_ceiling) and y_floor > 0.0 and y_ceiling > y_floor:
-            top_ax.set_ylim(y_floor, y_ceiling)
+        if np.isfinite(y_ceiling) and y_ceiling > 0.0:
+            top_ax.set_ylim(0.0, y_ceiling)
         top_ax.set_ylabel(r"$dN/d\log M$")
         top_ax.legend(loc="best", frameon=False)
         ratio_ax.axhline(1.0, color="0.25", linewidth=1.0)
