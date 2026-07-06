@@ -21,7 +21,7 @@ from lenscluster.utils import log10_dpie_mass_msun
 
 DEFAULT_RUN_NAME = "single_bcg_production"
 DEFAULT_STAGES = ("stage1_backprojected_centroid_fit", "stage2_free_source_forward_fit")
-DEFAULT_VARIANTS = ("anisotropic", "isotropic")
+DEFAULT_VARIANTS = ("anisotropic", "anisotropic_maglikelihood")
 DEFAULT_FORMATS = ("pdf",)
 PAPER_PARAMETERS = (
     "halo.x_centre",
@@ -50,20 +50,23 @@ STAGE_LABELS = {
     "stage2_free_source_forward_fit": "Stage 2",
 }
 VARIANT_LABELS = {
-    "anisotropic": "Anisotropic",
+    "anisotropic": "use_magnitude_likelihood=False",
+    "anisotropic_maglikelihood": "use_magnitude_likelihood=True",
     "isotropic": "Isotropic",
 }
 VARIANT_COLORS = {
     "anisotropic": "tab:blue",
-    "isotropic": "tab:orange",
+    "anisotropic_maglikelihood": "tab:orange",
+    "isotropic": "tab:green",
 }
 STAGE_MARKERS = {
     "stage1_backprojected_centroid_fit": "o",
     "stage2_free_source_forward_fit": "s",
 }
 VARIANT_MARKERS = {
-    "anisotropic": "D",
-    "isotropic": "o",
+    "anisotropic": "o",
+    "anisotropic_maglikelihood": "D",
+    "isotropic": "s",
 }
 JOINT_SIGMA_RCUT_SPECS = {
     "potfile": {
@@ -93,13 +96,16 @@ JOINT_SCALING_PARAMETERS = tuple(
 JOINT_SCALING_LEVELS = (2.30, 5.99)
 METHOD_JITTER = {
     ("stage1_backprojected_centroid_fit", "anisotropic"): -0.018,
-    ("stage1_backprojected_centroid_fit", "isotropic"): -0.006,
+    ("stage1_backprojected_centroid_fit", "anisotropic_maglikelihood"): -0.006,
+    ("stage1_backprojected_centroid_fit", "isotropic"): 0.0,
     ("stage2_free_source_forward_fit", "anisotropic"): 0.006,
-    ("stage2_free_source_forward_fit", "isotropic"): 0.018,
+    ("stage2_free_source_forward_fit", "anisotropic_maglikelihood"): 0.018,
+    ("stage2_free_source_forward_fit", "isotropic"): 0.03,
 }
 SEED_VARIANT_JITTER = {
     "anisotropic": -0.015,
-    "isotropic": 0.015,
+    "anisotropic_maglikelihood": 0.015,
+    "isotropic": 0.03,
 }
 FRACTIONAL_BIAS_SUFFIXES = (
     ".v_disp",
@@ -166,6 +172,15 @@ def stage_label(stage: str) -> str:
 
 def variant_label(variant: str) -> str:
     return VARIANT_LABELS.get(str(variant), str(variant).replace("_", " ").title())
+
+
+def _ordered_variants_from_df(df: pd.DataFrame, *, fallback: tuple[str, ...] = DEFAULT_VARIANTS) -> tuple[str, ...]:
+    if df.empty or "variant" not in df:
+        return fallback
+    present = {str(value) for value in df["variant"].dropna().astype(str)}
+    ordered = [variant for variant in fallback if variant in present]
+    ordered.extend(sorted(present.difference(ordered)))
+    return tuple(ordered) if ordered else fallback
 
 
 def _darken_color(color: str, factor: float = 0.72) -> tuple[float, float, float]:
@@ -614,7 +629,7 @@ def _plot_recovery_page(
         ax.set_ylabel(f"{label} (fit)")
     for ax in axes.ravel()[len(parameters) :]:
         ax.axis("off")
-    _add_method_legend(fig)
+    _add_method_legend(fig, variants=_ordered_variants_from_df(page_df))
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     return fig
 
@@ -673,7 +688,7 @@ def _plot_seed_recovery_page(
         _draw_seed_parameter_axis(ax, page_df, parameter)
     for ax in axes.ravel()[len(parameters) :]:
         ax.axis("off")
-    _add_variant_legend(fig)
+    _add_variant_legend(fig, variants=_ordered_variants_from_df(page_df))
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     return fig
 
@@ -798,7 +813,8 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
                 linestyle="none",
                 label=variant_label(variant),
             )
-            for variant, color in VARIANT_COLORS.items()
+            for variant in _ordered_variants_from_df(df)
+            for color in (VARIANT_COLORS.get(variant, "0.35"),)
         ]
         ax.legend(handles=handles, loc="best", frameon=False)
     return True
@@ -834,12 +850,12 @@ def _plot_seed_recovery_single_page(
         next_axis += 1
     for ax in flat_axes[next_axis:]:
         ax.axis("off")
-    _add_variant_legend(fig)
+    _add_variant_legend(fig, variants=_ordered_variants_from_df(page_df))
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig
 
 
-def _add_variant_legend(fig: plt.Figure) -> None:
+def _add_variant_legend(fig: plt.Figure, *, variants: tuple[str, ...] = DEFAULT_VARIANTS) -> None:
     variant_handles = [
         Line2D(
             [0],
@@ -851,12 +867,13 @@ def _add_variant_legend(fig: plt.Figure) -> None:
             linestyle="none",
             label=variant_label(variant),
         )
-        for variant, color in VARIANT_COLORS.items()
+        for variant in variants
+        for color in (VARIANT_COLORS.get(variant, "0.35"),)
     ]
     fig.legend(handles=variant_handles, loc="upper center", ncol=len(variant_handles), frameon=False)
 
 
-def _add_method_legend(fig: plt.Figure) -> None:
+def _add_method_legend(fig: plt.Figure, *, variants: tuple[str, ...] = DEFAULT_VARIANTS) -> None:
     variant_handles = [
         Line2D(
             [0],
@@ -868,7 +885,8 @@ def _add_method_legend(fig: plt.Figure) -> None:
             linestyle="none",
             label=variant_label(variant),
         )
-        for variant, color in VARIANT_COLORS.items()
+        for variant in variants
+        for color in (VARIANT_COLORS.get(variant, "0.35"),)
     ]
     stage_handles = [
         Line2D(
@@ -1126,7 +1144,12 @@ def plot_parameter_bias_summary(
         metric_column="bias_median",
         max_parameters=max_parameters,
     )
-    methods = [method for method in (method_label(stage, variant) for stage in DEFAULT_STAGES for variant in DEFAULT_VARIANTS) if method in set(df["method_label"])]
+    variants = _ordered_variants_from_df(df)
+    methods = [
+        method
+        for method in (method_label(stage, variant) for stage in DEFAULT_STAGES for variant in variants)
+        if method in set(df["method_label"])
+    ]
     paths: list[Path] = []
     for fmt in formats:
         path = output_base.with_suffix(f".{fmt}")
@@ -1154,7 +1177,7 @@ def plot_parameter_bias_summary(
             metric_q16_column="bias_q16",
             metric_q84_column="bias_q84",
         )
-        _add_method_legend(fig)
+        _add_method_legend(fig, variants=variants)
         fig.tight_layout(rect=(0, 0, 1, 0.92))
         fig.savefig(path, dpi=300)
         plt.close(fig)
@@ -1877,7 +1900,9 @@ def plot_subhalo_shmf_summary(
                 curve_mask = np.isfinite(curve)
                 if np.any(curve_mask):
                     top_ax.plot(x[curve_mask], curve[curve_mask], color="0.1", linestyle="--", linewidth=1.3, label="Schechter")
-        for variant in DEFAULT_VARIANTS:
+        for variant in _ordered_variants_from_df(
+            summary_df[summary_df["series"].astype(str).isin(["recovered", "ratio"])]
+        ):
             recovered = summary_df[(summary_df["series"] == "recovered") & (summary_df["variant"] == variant)].sort_values("bin_index")
             if recovered.empty:
                 continue

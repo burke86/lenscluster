@@ -16396,7 +16396,7 @@ def test_sequential_stage2_linearized_runs_as_free_source_forward_fit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    calls: list[tuple[str, str, str, dict[str, float] | None, dict[str, tuple[float, float]] | None]] = []
+    calls: list[tuple[str, str, str, bool, dict[str, float] | None, dict[str, tuple[float, float]] | None]] = []
 
     def fake_run_single_stage(
         args,
@@ -16407,7 +16407,16 @@ def test_sequential_stage2_linearized_runs_as_free_source_forward_fit(
         source_position_prior_values=None,
         **_kwargs,
     ):
-        calls.append((fit_mode, run_name, sample_likelihood_mode, svi_init_physical_values, source_position_prior_values))
+        calls.append(
+            (
+                fit_mode,
+                run_name,
+                sample_likelihood_mode,
+                bool(getattr(args, "use_magnitude_likelihood", False)),
+                svi_init_physical_values,
+                source_position_prior_values,
+            )
+        )
         return tmp_path / run_name
 
     monkeypatch.setattr(cluster_solver, "_run_single_stage", fake_run_single_stage)
@@ -16433,6 +16442,7 @@ def test_sequential_stage2_linearized_runs_as_free_source_forward_fit(
         image_plane_mode=IMAGE_PLANE_MODE_NONE,
         fit_mode="sequential",
         model_config=object(),
+        use_magnitude_likelihood=True,
     )
     args = SolverRuntime(vars(args))
     stage_fit_controls = {
@@ -16449,12 +16459,19 @@ def test_sequential_stage2_linearized_runs_as_free_source_forward_fit(
         "fit/stage2_free_source_forward_fit",
     ]
     assert calls[0][2] == SAMPLE_LIKELIHOOD_SOURCE
+    assert calls[0][3] is False
     assert calls[1][2] == SAMPLE_LIKELIHOOD_LOCAL_JACOBIAN
-    assert calls[1][3] == {"halo_v_disp": 1200.0}
+    assert calls[1][3] is False
+    assert calls[1][4] == {"halo_v_disp": 1200.0}
     assert calls[2][2] == SAMPLE_LIKELIHOOD_LINEARIZED_FORWARD_BETA_IMAGE_PLANE
-    assert calls[2][3] == {"halo_v_disp": 1200.0}
-    assert calls[2][4] == {"1": (0.1, -0.2)}
+    assert calls[2][3] is True
+    assert calls[2][4] == {"halo_v_disp": 1200.0}
+    assert calls[2][5] == {"1": (0.1, -0.2)}
     summary = json.loads((tmp_path / "fit" / "sequential_summary.json").read_text(encoding="utf-8"))
+    assert summary["configured_use_magnitude_likelihood"] is True
+    assert summary["stage0_use_magnitude_likelihood"] is False
+    assert summary["stage1_use_magnitude_likelihood"] is False
+    assert summary["stage2_use_magnitude_likelihood"] is True
     assert summary["stage0_run_dir"].endswith("stage0_fast_initializer")
     assert summary["stage1_run_dir"].endswith("stage1_backprojected_centroid_fit")
     assert summary["stage2_run_dir"].endswith("stage2_free_source_forward_fit")
@@ -16492,7 +16509,7 @@ def test_sequential_stage2_critical_arc_runs_as_free_source_forward_fit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    calls: list[tuple[str, str, str, str, dict[str, float] | None, dict[str, tuple[float, float]] | None]] = []
+    calls: list[tuple[str, str, str, str, bool, dict[str, float] | None, dict[str, tuple[float, float]] | None]] = []
 
     def fake_run_single_stage(
         args,
@@ -16509,6 +16526,7 @@ def test_sequential_stage2_critical_arc_runs_as_free_source_forward_fit(
                 run_name,
                 sample_likelihood_mode,
                 args.fit_method,
+                bool(getattr(args, "use_magnitude_likelihood", False)),
                 svi_init_physical_values,
                 source_position_prior_values,
             )
@@ -16540,6 +16558,7 @@ def test_sequential_stage2_critical_arc_runs_as_free_source_forward_fit(
         sampling_engine="refreshing_surrogate_flat",
         image_plane_newton_steps=0,
         source_position_parameterization="prior-whitened",
+        use_magnitude_likelihood=False,
         critical_arc_critical_direction_sigma_arcsec=4.5,
         critical_arc_base_prob=0.2,
         critical_arc_max_prob=0.7,
@@ -16567,9 +16586,16 @@ def test_sequential_stage2_critical_arc_runs_as_free_source_forward_fit(
     ]
     assert calls[2][2] == SAMPLE_LIKELIHOOD_CRITICAL_ARC_MIXTURE_IMAGE_PLANE
     assert calls[2][3] == "smc"
-    assert calls[2][4] == {"halo_v_disp": 1200.0}
-    assert calls[2][5] == {"1": (0.1, -0.2)}
+    assert calls[0][4] is False
+    assert calls[1][4] is False
+    assert calls[2][4] is False
+    assert calls[2][5] == {"halo_v_disp": 1200.0}
+    assert calls[2][6] == {"1": (0.1, -0.2)}
     summary = json.loads((tmp_path / "fit" / "sequential_summary.json").read_text(encoding="utf-8"))
+    assert summary["configured_use_magnitude_likelihood"] is False
+    assert summary["stage0_use_magnitude_likelihood"] is False
+    assert summary["stage1_use_magnitude_likelihood"] is False
+    assert summary["stage2_use_magnitude_likelihood"] is False
     assert summary["stage0_run_dir"].endswith("stage0_fast_initializer")
     assert summary["stage2_run_dir"].endswith("stage2_free_source_forward_fit")
     assert summary["stage0_selected_free_scaling"] == 2
@@ -18887,10 +18913,10 @@ def test_aggregate_parameter_recovery_loads_stage_and_variant_methods(tmp_path: 
     assert len(parameter_df) == 8
     assert inventory_df["loaded"].all()
     assert set(parameter_df["method_label"]) == {
-        "Stage 1 Anisotropic",
-        "Stage 1 Isotropic",
-        "Stage 2 Anisotropic",
-        "Stage 2 Isotropic",
+        "Stage 1 use_magnitude_likelihood=False",
+        "Stage 1 use_magnitude_likelihood=True",
+        "Stage 2 use_magnitude_likelihood=False",
+        "Stage 2 use_magnitude_likelihood=True",
     }
     assert set(parameter_df["stage_label"]) == {"Stage 1", "Stage 2"}
     assert {"truth", "median", "q16", "q84", "covered_68"} <= set(parameter_df.columns)
@@ -18910,7 +18936,7 @@ def test_aggregate_magnification_recovery_loads_stage_and_variant_methods(tmp_pa
     assert len(magnification_df) == 16
     assert inventory_df["loaded"].all()
     assert set(magnification_df["stage_label"]) == {"Stage 1", "Stage 2"}
-    assert set(magnification_df["variant"]) == {"anisotropic", "isotropic"}
+    assert set(magnification_df["variant"]) == {"anisotropic", "anisotropic_maglikelihood"}
     assert set(magnification_df["seed"]) == {12345, 12346}
     assert {
         "magnification_true",
@@ -18943,7 +18969,7 @@ def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_lab
             },
             {
                 "stage": "stage1_backprojected_centroid_fit",
-                "variant": "isotropic",
+                "variant": "anisotropic_maglikelihood",
                 "magnification_true": -3.0,
                 "magnification_q16": -3.5,
                 "magnification_q50": -3.1,
@@ -19009,13 +19035,13 @@ def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_lab
         legend = ax.get_legend()
         assert legend is not None
         labels = [text.get_text() for text in legend.get_texts()]
-        assert labels == ["Anisotropic", "Isotropic"]
+        assert labels == ["use_magnitude_likelihood=False", "use_magnitude_likelihood=True"]
         assert "Stage 1" not in labels
         assert "Stage 2" not in labels
-        assert "Stage 2 Anisotropic" not in labels
-        isotropic_call = next(call for call in errorbar_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
-        np.testing.assert_allclose(isotropic_call["y"], [3.1])
-        errorbar_kwargs = isotropic_call["kwargs"]
+        assert "Stage 2 use_magnitude_likelihood=False" not in labels
+        mag_call = next(call for call in errorbar_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
+        np.testing.assert_allclose(mag_call["y"], [3.1])
+        errorbar_kwargs = mag_call["kwargs"]
         assert errorbar_kwargs["fmt"] == "none"
         assert errorbar_kwargs["elinewidth"] == pytest.approx(0.65)
         assert errorbar_kwargs["capsize"] == pytest.approx(1.8)
@@ -19023,21 +19049,21 @@ def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_lab
         assert errorbar_kwargs["alpha"] == pytest.approx(0.30)
         assert errorbar_kwargs["zorder"] == 1
         assert errorbar_kwargs["label"] == "_nolegend_"
-        yerr = isotropic_call["yerr"]
+        yerr = mag_call["yerr"]
         assert isinstance(yerr, list)
         np.testing.assert_allclose(yerr[0], [0.4])
         np.testing.assert_allclose(yerr[1], [0.4])
-        isotropic_scatter = next(call for call in scatter_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
-        np.testing.assert_allclose(isotropic_scatter["y"], [3.1])
-        scatter_kwargs = isotropic_scatter["kwargs"]
-        assert scatter_kwargs["marker"] == "o"
+        mag_scatter = next(call for call in scatter_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
+        np.testing.assert_allclose(mag_scatter["y"], [3.1])
+        scatter_kwargs = mag_scatter["kwargs"]
+        assert scatter_kwargs["marker"] == "D"
         assert scatter_kwargs["facecolors"] == "white"
         assert scatter_kwargs["edgecolors"] == "tab:orange"
         assert scatter_kwargs["s"] == pytest.approx(21.0)
         assert scatter_kwargs["linewidths"] == pytest.approx(0.75)
         assert scatter_kwargs["zorder"] == 2
         stage2_scatter = next(call for call in scatter_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(4.0))
-        assert stage2_scatter["kwargs"]["marker"] == "D"
+        assert stage2_scatter["kwargs"]["marker"] == "o"
         assert stage2_scatter["kwargs"]["facecolors"] == "tab:blue"
     finally:
         plt.close("all")
@@ -19055,7 +19081,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 Anisotropic",
+                "method_label": "Stage 2 use_magnitude_likelihood=False",
                 "result_path": "results.json",
                 "parameter": "potfile.sigma",
                 "truth": 245.0,
@@ -19070,7 +19096,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 Anisotropic",
+                "method_label": "Stage 2 use_magnitude_likelihood=False",
                 "result_path": "results.json",
                 "parameter": "potfile.cutkpc",
                 "truth": 187.0,
@@ -19085,7 +19111,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 Anisotropic",
+                "method_label": "Stage 2 use_magnitude_likelihood=False",
                 "result_path": "results.json",
                 "parameter": "halo.v_disp",
                 "truth": 760.0,
@@ -19100,7 +19126,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 Anisotropic",
+                "method_label": "Stage 2 use_magnitude_likelihood=False",
                 "result_path": "results.json",
                 "parameter": "halo.cut_radius_kpc",
                 "truth": 950.0,
@@ -19151,7 +19177,7 @@ def test_joint_sigma_rcut_recovery_plot_draws_truth_points_markers_and_contours(
     rows: list[dict[str, object]] = []
     for variant, offsets in {
         "anisotropic": ((-5.0, -15.0), (0.0, 25.0), (7.0, 5.0)),
-        "isotropic": ((-7.0, 10.0), (4.0, -20.0), (9.0, 18.0)),
+        "anisotropic_maglikelihood": ((-7.0, 10.0), (4.0, -20.0), (9.0, 18.0)),
     }.items():
         for seed_index, (sigma_offset, cut_offset) in enumerate(offsets, start=1):
             rows.append(
@@ -19201,8 +19227,8 @@ def test_joint_sigma_rcut_recovery_plot_draws_truth_points_markers_and_contours(
         assert ax.get_ylabel() == r"Halo $r_{\rm cut}$ (fit)"
         assert sum(isinstance(patch, Ellipse) for patch in ax.patches) == 4
         marker_by_label = {call["kwargs"].get("label"): call["kwargs"].get("marker") for call in scatter_calls}
-        assert marker_by_label["Anisotropic"] == "D"
-        assert marker_by_label["Isotropic"] == "o"
+        assert marker_by_label["use_magnitude_likelihood=False"] == "o"
+        assert marker_by_label["use_magnitude_likelihood=True"] == "D"
         truth_call = next(call for call in scatter_calls if call["kwargs"].get("label") == "Truth")
         assert truth_call["kwargs"]["marker"] == "*"
         np.testing.assert_allclose(truth_call["x"], [245.0])
@@ -19231,7 +19257,7 @@ def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch
             },
             {
                 "stage": "stage2_free_source_forward_fit",
-                "variant": "isotropic",
+                "variant": "anisotropic_maglikelihood",
                 "seed": 2,
                 "parameter": "halo.v_disp",
                 "truth": 1000.0,
@@ -19270,14 +19296,14 @@ def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch
             assert kwargs["alpha"] == pytest.approx(0.30)
             assert kwargs["zorder"] == 1
             assert kwargs["label"] == "_nolegend_"
-        anisotropic_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
+        anisotropic_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
         assert anisotropic_scatter["kwargs"]["facecolors"] == "white"
         assert anisotropic_scatter["kwargs"]["edgecolors"] == "tab:blue"
-        isotropic_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
-        assert isotropic_scatter["kwargs"]["facecolors"] == "tab:orange"
-        assert isotropic_scatter["kwargs"]["s"] == pytest.approx(21.0)
-        assert isotropic_scatter["kwargs"]["linewidths"] == pytest.approx(0.75)
-        assert isotropic_scatter["kwargs"]["zorder"] == 2
+        mag_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
+        assert mag_scatter["kwargs"]["facecolors"] == "tab:orange"
+        assert mag_scatter["kwargs"]["s"] == pytest.approx(21.0)
+        assert mag_scatter["kwargs"]["linewidths"] == pytest.approx(0.75)
+        assert mag_scatter["kwargs"]["zorder"] == 2
     finally:
         plt.close(fig)
 
@@ -19293,7 +19319,7 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
             {
                 "stage": "stage1_backprojected_centroid_fit",
                 "variant": "anisotropic",
-                "method_label": "Stage 1 Anisotropic",
+                "method_label": "Stage 1 use_magnitude_likelihood=False",
                 "parameter": "halo.v_disp",
                 "bias_median": 0.1,
                 "bias_q16": -0.1,
@@ -19301,8 +19327,8 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
             },
             {
                 "stage": "stage2_free_source_forward_fit",
-                "variant": "isotropic",
-                "method_label": "Stage 2 Isotropic",
+                "variant": "anisotropic_maglikelihood",
+                "method_label": "Stage 2 use_magnitude_likelihood=True",
                 "parameter": "halo.v_disp",
                 "bias_median": -0.2,
                 "bias_q16": -0.5,
@@ -19331,7 +19357,7 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
             ax,
             metric_df,
             ["halo.v_disp"],
-            ["Stage 1 Anisotropic", "Stage 2 Isotropic"],
+            ["Stage 1 use_magnitude_likelihood=False", "Stage 2 use_magnitude_likelihood=True"],
             ylabel="bias",
             title="Bias",
             metric_column="bias_median",
@@ -19342,9 +19368,9 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
         assert len(scatter_calls) == 2
         assert {call["kwargs"]["fmt"] for call in errorbar_calls} == {"none"}
         assert {call["kwargs"]["marker"] for call in scatter_calls} == {"D", "o"}
-        stage1_call = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
+        stage1_call = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
         assert stage1_call["kwargs"]["facecolors"] == "white"
-        stage2_call = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
+        stage2_call = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
         assert stage2_call["kwargs"]["facecolors"] == "tab:orange"
     finally:
         plt.close(fig)
@@ -19656,10 +19682,10 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         "potfile.sigma": 4,
     }
     assert set(table["method_label"]) == {
-        "Stage 1 Anisotropic",
-        "Stage 1 Isotropic",
-        "Stage 2 Anisotropic",
-        "Stage 2 Isotropic",
+        "Stage 1 use_magnitude_likelihood=False",
+        "Stage 1 use_magnitude_likelihood=True",
+        "Stage 2 use_magnitude_likelihood=False",
+        "Stage 2 use_magnitude_likelihood=True",
     }
 
 
@@ -19890,7 +19916,7 @@ def test_stage2_seed_recovery_rows_keep_each_seed_and_variant(tmp_path: Path) ->
     seed_df = aggregate_plots.stage2_seed_recovery_rows(parameter_df)
 
     assert set(seed_df["stage"]) == {"stage2_free_source_forward_fit"}
-    assert set(seed_df["variant"]) == {"anisotropic", "isotropic"}
+    assert set(seed_df["variant"]) == {"anisotropic", "anisotropic_maglikelihood"}
     assert set(seed_df["seed"]) == {12345, 12346}
     assert len(seed_df) == 8
 
@@ -19916,7 +19942,7 @@ def test_aggregate_bias_summary_splits_fractional_and_absolute_parameters(tmp_pa
                 "variant": "anisotropic",
                 "stage": "stage1_backprojected_centroid_fit",
                 "stage_label": "Stage 1",
-                "method_label": "Stage 1 Anisotropic",
+                "method_label": "Stage 1 use_magnitude_likelihood=False",
                 "truth": 760.0,
                 "median": 780.0,
                 "q16": 760.0,
@@ -19930,7 +19956,7 @@ def test_aggregate_bias_summary_splits_fractional_and_absolute_parameters(tmp_pa
                 "variant": "anisotropic",
                 "stage": "stage1_backprojected_centroid_fit",
                 "stage_label": "Stage 1",
-                "method_label": "Stage 1 Anisotropic",
+                "method_label": "Stage 1 use_magnitude_likelihood=False",
                 "truth": 0.0,
                 "median": 0.045,
                 "q16": 0.02,

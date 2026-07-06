@@ -30227,6 +30227,7 @@ def _run_sequential_v2(args: argparse.Namespace, stage_fit_controls: dict[str, S
         stage1_controls,
         sampling_engine=stage1_sampling_engine,
         critical_arc_source_position_policy=stage1_source_position_policy,
+        use_magnitude_likelihood=False,
     )
     if stage2_enabled:
         stage1_args = _force_quick_diagnostics_for_nonfinal_stage(
@@ -30252,15 +30253,24 @@ def _run_sequential_v2(args: argparse.Namespace, stage_fit_controls: dict[str, S
 
     summary_payload: dict[str, Any] = {
         "fit_mode": "sequential",
+        "configured_use_magnitude_likelihood": bool(
+            getattr(args, "use_magnitude_likelihood", DEFAULT_USE_MAGNITUDE_LIKELIHOOD)
+        ),
         "stage0_fast_initializer": True,
         "stage0_engine": SAMPLING_ENGINE_FULL_FLAT,
         "stage0_run_dir": str(stage0_run_dir),
         "stage0_selected_free_scaling": int(stage0_selected_count),
+        "stage0_use_magnitude_likelihood": bool(
+            getattr(stage0_args, "use_magnitude_likelihood", DEFAULT_USE_MAGNITUDE_LIKELIHOOD)
+        ),
         "stage0_likelihood": str(getattr(args, "stage0_likelihood", "")),
         "stage0_sample_likelihood_mode": str(stage0_likelihood),
         "stage0_source_position_policy": str(stage0_source_position_policy),
         "stage1_sampling_engine": stage1_sampling_engine,
         "stage1_run_dir": str(stage1_run_dir),
+        "stage1_use_magnitude_likelihood": bool(
+            getattr(stage1_args, "use_magnitude_likelihood", DEFAULT_USE_MAGNITUDE_LIKELIHOOD)
+        ),
         "stage1_likelihood": str(getattr(args, "stage1_likelihood", STAGE1_LIKELIHOOD_LOCAL_JACOBIAN)),
         "stage1_sample_likelihood_mode": str(stage1_likelihood),
         "stage1_source_position_policy": str(stage1_source_position_policy),
@@ -30272,6 +30282,15 @@ def _run_sequential_v2(args: argparse.Namespace, stage_fit_controls: dict[str, S
         },
         "resume_mode": str(resume_mode or "none"),
     }
+    _log(
+        args,
+        (
+            "[magnitude-likelihood] "
+            f"configured={summary_payload['configured_use_magnitude_likelihood']} "
+            f"stage0={summary_payload['stage0_use_magnitude_likelihood']} "
+            f"stage1={summary_payload['stage1_use_magnitude_likelihood']}"
+        ),
+    )
     aggregate_stage_dirs: list[Path | None] = [stage0_run_dir, stage1_run_dir]
 
     if stage2_enabled:
@@ -30308,11 +30327,15 @@ def _run_sequential_v2(args: argparse.Namespace, stage_fit_controls: dict[str, S
             member_shape_values_by_potfile=stage2_member_shape_values,
         )
         summary_payload["stage2_run_dir"] = str(stage2_run_dir)
+        summary_payload["stage2_use_magnitude_likelihood"] = bool(
+            getattr(stage2_args, "use_magnitude_likelihood", DEFAULT_USE_MAGNITUDE_LIKELIHOOD)
+        )
         summary_payload["stage2_sample_likelihood_mode"] = str(stage2_likelihood)
         summary_payload["stage2_source_position_policy"] = str(stage2_source_position_policy)
         summary_payload["stage2_sampling_engine_requested"] = requested_stage2_engine
         summary_payload["stage2_sampling_engine_effective"] = str(effective_stage2_engine)
         summary_payload["stage2_fresh_process"] = bool(stage2_runs_fresh)
+        _log(args, f"[magnitude-likelihood] stage2={summary_payload['stage2_use_magnitude_likelihood']}")
         aggregate_stage_dirs.append(stage2_run_dir)
 
     summary_path = Path(args.output_dir) / root_run_name / "sequential_summary.json"
