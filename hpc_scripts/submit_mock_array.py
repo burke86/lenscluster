@@ -12,7 +12,7 @@ PYTHON = Path("/home/id255/.conda/envs/lenstronomy/bin/python")
 SCRIPT_DIR = PROJECT_ROOT / "hpc_scripts/mock_validation/jobs"
 LOG_DIR = PROJECT_ROOT / "hpc_scripts/mock_validation/logs"
 
-DEFAULT_SEEDS = tuple(range(12345, 12355))
+DEFAULT_SEEDS = tuple(range(12340, 12380))
 DEFAULT_PRESET = "production"
 DEFAULT_OUTPUT_DIR = "validation_runs/mock_recovery"
 
