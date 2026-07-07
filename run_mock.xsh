@@ -235,7 +235,7 @@ def build_config(
 ) -> MockValidationConfig:
     production = preset == "production"
     critical_arc_anisotropic_covariance = covariance_mode == "anisotropic"
-    n_primary_families = 10 if production else 5
+    n_primary_families = 15 if production else 5
     n_subhalo_families = 5 if production else 0
     mock = SingleBCGMockConfig(
         seed=seed,
@@ -243,7 +243,7 @@ def build_config(
         n_subhalo_families=n_subhalo_families,
         # Smoke needs a member population when scatter is injected so the linearized
         # scatter likelihood path is actually exercised.
-        n_subhalos=25 if production else (10 if scatter_ln > 0.0 else 0),
+        n_subhalos=50 if production else (10 if scatter_ln > 0.0 else 0),
         subhalo_spatial_distribution="dpie",
         subhalo_spatial_core_radius_arcsec=25.0,
         subhalo_spatial_cut_radius_arcsec=180.0,
