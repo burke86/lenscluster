@@ -7175,14 +7175,89 @@ def test_refreshing_surrogate_flat_scaling_scatter_cache_matches_per_bin_refresh
     _assert_cache_dicts_allclose(
         flat.scaling_scatter_cache_by_z,
         legacy.scaling_scatter_cache_by_z,
-        ("sigma_x", "sigma_y", "mass_x", "mass_y"),
+        cluster_solver.SCALING_SCATTER_CACHE_KEYS,
     )
     np.testing.assert_allclose(
-        np.asarray(flat.flat_critical_arc_data.sigma_scatter_x),
-        np.concatenate([legacy.scaling_scatter_cache_by_z[2.0]["sigma_x"], legacy.scaling_scatter_cache_by_z[3.0]["sigma_x"]]),
+        np.asarray(flat.flat_critical_arc_data.sigma_scatter_cov00),
+        np.concatenate(
+            [legacy.scaling_scatter_cache_by_z[2.0]["sigma_cov00"], legacy.scaling_scatter_cache_by_z[3.0]["sigma_cov00"]]
+        ),
         rtol=1.0e-8,
         atol=1.0e-8,
     )
+
+
+def test_scatter_covariance_terms_are_sum_of_outer_products_not_coherent() -> None:
+    # Two anti-aligned members: independent scatter still induces variance, while the
+    # coherent construction (sum first, then square) is exactly zero.
+    v = np.asarray([[0.3, -0.1, 0.2]], dtype=float)
+    deriv_x = np.concatenate([v, -v], axis=0)
+    deriv_y = np.concatenate([2.0 * v, -2.0 * v], axis=0)
+    cov00, cov01, cov11 = cluster_solver._scatter_covariance_terms_from_member_derivatives(deriv_x, deriv_y)
+    np.testing.assert_allclose(cov00, 2.0 * np.square(v[0]))
+    np.testing.assert_allclose(cov01, 2.0 * v[0] * (2.0 * v[0]))
+    np.testing.assert_allclose(cov11, 2.0 * np.square(2.0 * v[0]))
+    coherent00 = np.square(deriv_x.sum(axis=0))
+    np.testing.assert_allclose(coherent00, 0.0)
+
+
+def test_scatter_covariance_coherent_exceeds_per_member_for_aligned_members() -> None:
+    # G identical (aligned) members: the coherent construction over-counts by exactly G.
+    n_members = 5
+    v_x = np.tile(np.asarray([[0.4, 0.1]]), (n_members, 1))
+    v_y = np.tile(np.asarray([[-0.2, 0.3]]), (n_members, 1))
+    cov00, cov01, cov11 = cluster_solver._scatter_covariance_terms_from_member_derivatives(v_x, v_y)
+    coherent00 = np.square(v_x.sum(axis=0))
+    coherent01 = v_x.sum(axis=0) * v_y.sum(axis=0)
+    coherent11 = np.square(v_y.sum(axis=0))
+    np.testing.assert_allclose(coherent00, n_members * cov00)
+    np.testing.assert_allclose(coherent01, n_members * cov01)
+    np.testing.assert_allclose(coherent11, n_members * cov11)
+    assert np.all(coherent00 > cov00)
+    with pytest.raises(ValueError):
+        cluster_solver._scatter_covariance_terms_from_member_derivatives(v_x, v_y[:, :1])
+
+
+def test_scatter_image_covariance_congruence_identity_inverse() -> None:
+    # With an identity inverse operator, the image covariance equals the (scaled)
+    # source covariance; the diagonal fallback returns its variance terms.
+    state = _minimal_two_bin_local_jacobian_state_with_scaling_scatter()
+    evaluator = cluster_solver.ClusterJAXEvaluator(
+        state=state,
+        match_tolerance_arcsec=0.1,
+        sampling_engine="full_flat",
+        sample_likelihood_mode=SAMPLE_LIKELIHOOD_LOCAL_JACOBIAN,
+    )
+    reference = cluster_solver._default_theta(state.parameter_specs)
+    evaluator.refresh_scaling_scatter_cache(reference, reason="test")
+    assert evaluator.scaling_scatter_cache_by_z, "scatter cache must populate for this state"
+    flat_data = evaluator.flat_critical_arc_data
+    physical = evaluator._physical_parameter_vector(jnp.asarray(reference, dtype=jnp.float64))
+    sigma_scale, mass_scale = evaluator._scaling_scatter_field_scales_from_physical(physical)
+    ones = jnp.ones_like(flat_data.x_obs)
+    zeros = jnp.zeros_like(flat_data.x_obs)
+    cov00, cov01, cov11, finite = evaluator._flat_scaling_scatter_image_covariance_from_inverse(
+        physical, flat_data, ones, zeros, zeros, ones, jnp.ones_like(flat_data.x_obs, dtype=bool)
+    )
+    expected00 = (
+        jnp.square(sigma_scale) * flat_data.sigma_scatter_cov00
+        + jnp.square(mass_scale) * flat_data.mass_scatter_cov00
+    )
+    expected01 = (
+        jnp.square(sigma_scale) * flat_data.sigma_scatter_cov01
+        + jnp.square(mass_scale) * flat_data.mass_scatter_cov01
+    )
+    expected11 = (
+        jnp.square(sigma_scale) * flat_data.sigma_scatter_cov11
+        + jnp.square(mass_scale) * flat_data.mass_scatter_cov11
+    )
+    np.testing.assert_allclose(np.asarray(cov00), np.asarray(expected00), rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(cov01), np.asarray(expected01), rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(cov11), np.asarray(expected11), rtol=1e-10)
+    assert bool(np.asarray(finite).all())
+    var_x, var_y = evaluator._flat_scaling_scatter_extra_variance_from_physical(physical, flat_data)
+    np.testing.assert_allclose(np.asarray(var_x), np.asarray(expected00), rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(var_y), np.asarray(expected11), rtol=1e-10)
 
 
 def test_scaling_scatter_disabled_when_no_cached_scaling_components() -> None:
@@ -7204,7 +7279,7 @@ def test_scaling_scatter_disabled_when_no_cached_scaling_components() -> None:
     assert evaluator._scaling_scatter_component_indices().size == 0
     assert evaluator.scaling_scatter_cache_by_z == {}
     assert evaluator.scaling_scatter_reference_params is None
-    np.testing.assert_allclose(np.asarray(evaluator.flat_critical_arc_data.sigma_scatter_x), 0.0)
+    np.testing.assert_allclose(np.asarray(evaluator.flat_critical_arc_data.sigma_scatter_cov00), 0.0)
     physical = evaluator._physical_parameter_vector(jnp.asarray(reference, dtype=jnp.float64))
     var_x, var_y = evaluator._flat_scaling_scatter_extra_variance_from_physical(
         physical,
@@ -7619,11 +7694,13 @@ def test_full_flat_scaling_scatter_cache_matches_per_bin_refresh() -> None:
     _assert_cache_dicts_allclose(
         flat.scaling_scatter_cache_by_z,
         legacy.scaling_scatter_cache_by_z,
-        ("sigma_x", "sigma_y", "mass_x", "mass_y"),
+        cluster_solver.SCALING_SCATTER_CACHE_KEYS,
     )
     np.testing.assert_allclose(
-        np.asarray(flat.flat_critical_arc_data.sigma_scatter_x),
-        np.concatenate([legacy.scaling_scatter_cache_by_z[2.0]["sigma_x"], legacy.scaling_scatter_cache_by_z[3.0]["sigma_x"]]),
+        np.asarray(flat.flat_critical_arc_data.sigma_scatter_cov00),
+        np.concatenate(
+            [legacy.scaling_scatter_cache_by_z[2.0]["sigma_cov00"], legacy.scaling_scatter_cache_by_z[3.0]["sigma_cov00"]]
+        ),
         rtol=1.0e-8,
         atol=1.0e-8,
     )

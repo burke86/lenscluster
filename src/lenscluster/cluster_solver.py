@@ -166,6 +166,7 @@ from .plotting import (
 from .utils import (
     close_debug_log as _close_debug_log,
     configure_debug_log as _configure_debug_log,
+    debug_log_line as _debug_log_line,
     fmt_seconds as _fmt_seconds,
     log_exception as _log_exception,
     log_message as _log,
@@ -386,6 +387,36 @@ STAGE0_SVI_MULTI_START_LOSS_TAIL_FRACTION = 0.1
 STAGE0_MEMBER_COMPONENT_FAMILIES = ("scaling", "scaling_scatter", "independent_scaling")
 STAGE0_SCALING_COLLAPSE_PRIOR_SIGMA = 4.0
 STAGE0_SCALING_COLLAPSE_UNIFORM_EDGE_FRACTION = 0.01
+SCALING_SCATTER_CACHE_KEYS = (
+    "sigma_cov00",
+    "sigma_cov01",
+    "sigma_cov11",
+    "mass_cov00",
+    "mass_cov01",
+    "mass_cov11",
+)
+
+
+def _scatter_covariance_terms_from_member_derivatives(
+    deriv_x: np.ndarray,
+    deriv_y: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-image scatter covariance terms from per-member derivative rows.
+
+    `deriv_x`/`deriv_y` have shape (n_members, n_images): the backprojection response
+    of each cached member alone, per unit ln offset. Independent member scatter adds
+    covariances incoherently, so the cached terms are sum_g v_g v_g^T — NOT the
+    coherent (sum_g v_g)(sum_g v_g)^T, which measures a population-level shift and
+    overestimates the variance per unit amplitude by ~n_members.
+    """
+    dx = np.asarray(deriv_x, dtype=float)
+    dy = np.asarray(deriv_y, dtype=float)
+    if dx.shape != dy.shape or dx.ndim != 2:
+        raise ValueError(f"Member derivative rows must share a (n_members, n_images) shape; got {dx.shape} and {dy.shape}.")
+    cov00 = np.sum(np.square(dx), axis=0)
+    cov01 = np.sum(dx * dy, axis=0)
+    cov11 = np.sum(np.square(dy), axis=0)
+    return cov00, cov01, cov11
 
 
 def _perturbation_discovery_calibrated_tolerances(
@@ -781,10 +812,16 @@ class FlatCriticalArcData:
     global_family_prior_sigma: jnp.ndarray
     bin_index_per_image: jnp.ndarray
     local_image_index_per_image: jnp.ndarray
-    sigma_scatter_x: jnp.ndarray
-    sigma_scatter_y: jnp.ndarray
-    mass_scatter_x: jnp.ndarray
-    mass_scatter_y: jnp.ndarray
+    # Per-image source-plane scatter covariance terms, summed over cached members g:
+    # cov00 = sum_g v_x^2, cov01 = sum_g v_x*v_y, cov11 = sum_g v_y^2 with v_g the
+    # per-unit-ln-offset backprojection response of member g alone. NOT the coherent
+    # (sum_g v_g)(sum_g v_g)^T — independent member scatter adds incoherently.
+    sigma_scatter_cov00: jnp.ndarray
+    sigma_scatter_cov01: jnp.ndarray
+    sigma_scatter_cov11: jnp.ndarray
+    mass_scatter_cov00: jnp.ndarray
+    mass_scatter_cov01: jnp.ndarray
+    mass_scatter_cov11: jnp.ndarray
     magnitude_per_image: jnp.ndarray | None = None
     magnitude_error_per_image: jnp.ndarray | None = None
 
@@ -19025,43 +19062,49 @@ class ClusterJAXEvaluator:
             global_family_prior_sigma=jnp.asarray(prior_sigma, dtype=jnp.float64),
             bin_index_per_image=concat_or_empty(bin_index_per_image, jnp.int32),
             local_image_index_per_image=concat_or_empty(local_image_index_per_image, jnp.int32),
-            sigma_scatter_x=zero_float,
-            sigma_scatter_y=zero_float,
-            mass_scatter_x=zero_float,
-            mass_scatter_y=zero_float,
+            sigma_scatter_cov00=zero_float,
+            sigma_scatter_cov01=zero_float,
+            sigma_scatter_cov11=zero_float,
+            mass_scatter_cov00=zero_float,
+            mass_scatter_cov01=zero_float,
+            mass_scatter_cov11=zero_float,
         )
 
-    def _flat_scaling_scatter_arrays_from_cache(self) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    def _flat_scaling_scatter_arrays_from_cache(self) -> dict[str, jnp.ndarray]:
         base = getattr(self, "flat_critical_arc_data", None)
         if base is None:
             empty = jnp.asarray([], dtype=jnp.float64)
-            return empty, empty, empty, empty
-        keys = ("sigma_x", "sigma_y", "mass_x", "mass_y")
-        values_by_key: dict[str, list[np.ndarray]] = {key: [] for key in keys}
+            return {key: empty for key in SCALING_SCATTER_CACHE_KEYS}
+        values_by_key: dict[str, list[np.ndarray]] = {key: [] for key in SCALING_SCATTER_CACHE_KEYS}
         for bin_data in self.traced_bin_data:
             n_images = int(np.asarray(bin_data.x_obs).size)
             cache = self.scaling_scatter_cache_by_z.get(float(bin_data.effective_z_source))
-            for key in keys:
+            for key in SCALING_SCATTER_CACHE_KEYS:
                 if cache is None:
                     values_by_key[key].append(np.zeros(n_images, dtype=float))
                 else:
                     values_by_key[key].append(np.asarray(cache.get(key, np.zeros(n_images, dtype=float)), dtype=float))
-        return tuple(
-            jnp.asarray(np.concatenate(values_by_key[key]) if values_by_key[key] else np.asarray([], dtype=float), dtype=jnp.float64)
-            for key in keys
-        )
+        return {
+            key: jnp.asarray(
+                np.concatenate(values_by_key[key]) if values_by_key[key] else np.asarray([], dtype=float),
+                dtype=jnp.float64,
+            )
+            for key in SCALING_SCATTER_CACHE_KEYS
+        }
 
     def _refresh_flat_critical_arc_scatter_arrays(self) -> None:
         base = getattr(self, "flat_critical_arc_data", None)
         if base is None:
             return
-        sigma_x, sigma_y, mass_x, mass_y = self._flat_scaling_scatter_arrays_from_cache()
+        arrays = self._flat_scaling_scatter_arrays_from_cache()
         self.flat_critical_arc_data = replace(
             base,
-            sigma_scatter_x=sigma_x,
-            sigma_scatter_y=sigma_y,
-            mass_scatter_x=mass_x,
-            mass_scatter_y=mass_y,
+            sigma_scatter_cov00=arrays["sigma_cov00"],
+            sigma_scatter_cov01=arrays["sigma_cov01"],
+            sigma_scatter_cov11=arrays["sigma_cov11"],
+            mass_scatter_cov00=arrays["mass_cov00"],
+            mass_scatter_cov01=arrays["mass_cov01"],
+            mass_scatter_cov11=arrays["mass_cov11"],
         )
 
     def _flat_source_metric_arrays_from_cache(self) -> FlatSourceMetricCache:
@@ -20130,17 +20173,15 @@ class ClusterJAXEvaluator:
             zeros = jnp.zeros_like(beta_x)
             return zeros, zeros
         sigma_scatter, mass_scatter = self._scaling_scatter_field_scales_from_physical(physical_params)
-        sigma_dx = jnp.asarray(cache["sigma_x"], dtype=jnp.float64)
-        sigma_dy = jnp.asarray(cache["sigma_y"], dtype=jnp.float64)
-        mass_dx = jnp.asarray(cache["mass_x"], dtype=jnp.float64)
-        mass_dy = jnp.asarray(cache["mass_y"], dtype=jnp.float64)
+        # Source-plane diagonal fallback: variance terms of the per-member covariance
+        # (sum_g v_g v_g^T); the source-plane cross term is dropped on this path.
         var_x = (
-            jnp.square(sigma_scatter * sigma_dx)
-            + jnp.square(mass_scatter * mass_dx)
+            jnp.square(sigma_scatter) * jnp.asarray(cache["sigma_cov00"], dtype=jnp.float64)
+            + jnp.square(mass_scatter) * jnp.asarray(cache["mass_cov00"], dtype=jnp.float64)
         )
         var_y = (
-            jnp.square(sigma_scatter * sigma_dy)
-            + jnp.square(mass_scatter * mass_dy)
+            jnp.square(sigma_scatter) * jnp.asarray(cache["sigma_cov11"], dtype=jnp.float64)
+            + jnp.square(mass_scatter) * jnp.asarray(cache["mass_cov11"], dtype=jnp.float64)
         )
         return var_x, var_y
 
@@ -20192,15 +20233,22 @@ class ClusterJAXEvaluator:
             return zeros, zeros, zeros, jnp.ones_like(inv00, dtype=bool)
         sigma_scatter, mass_scatter = self._scaling_scatter_field_scales_from_physical(physical_params)
 
-        def _image_displacement_covariance(scale: jnp.ndarray, key_x: str, key_y: str) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            source_dx = scale * jnp.asarray(cache[key_x], dtype=jnp.float64)
-            source_dy = scale * jnp.asarray(cache[key_y], dtype=jnp.float64)
-            image_dx = inv00 * source_dx + inv01 * source_dy
-            image_dy = inv10 * source_dx + inv11 * source_dy
-            return jnp.square(image_dx), image_dx * image_dy, jnp.square(image_dy)
+        def _image_displacement_covariance(
+            scale: jnp.ndarray, key_prefix: str
+        ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            # Congruence transform of the per-member source-plane covariance
+            # (sum_g v_g v_g^T) through the inverse operator: J^-1 M J^-T.
+            scale2 = jnp.square(scale)
+            s00 = scale2 * jnp.asarray(cache[f"{key_prefix}_cov00"], dtype=jnp.float64)
+            s01 = scale2 * jnp.asarray(cache[f"{key_prefix}_cov01"], dtype=jnp.float64)
+            s11 = scale2 * jnp.asarray(cache[f"{key_prefix}_cov11"], dtype=jnp.float64)
+            img00 = jnp.square(inv00) * s00 + 2.0 * inv00 * inv01 * s01 + jnp.square(inv01) * s11
+            img01 = inv00 * inv10 * s00 + (inv00 * inv11 + inv01 * inv10) * s01 + inv01 * inv11 * s11
+            img11 = jnp.square(inv10) * s00 + 2.0 * inv10 * inv11 * s01 + jnp.square(inv11) * s11
+            return img00, img01, img11
 
-        sigma00, sigma01, sigma11 = _image_displacement_covariance(sigma_scatter, "sigma_x", "sigma_y")
-        mass00, mass01, mass11 = _image_displacement_covariance(mass_scatter, "mass_x", "mass_y")
+        sigma00, sigma01, sigma11 = _image_displacement_covariance(sigma_scatter, "sigma")
+        mass00, mass01, mass11 = _image_displacement_covariance(mass_scatter, "mass")
         cov00 = sigma00 + mass00
         cov01 = sigma01 + mass01
         cov11 = sigma11 + mass11
@@ -20225,38 +20273,45 @@ class ClusterJAXEvaluator:
             return
         reference = np.asarray(reference_params, dtype=float)
         reference_jax = jnp.asarray(reference, dtype=jnp.float64)
-        physical_reference = self._physical_parameter_vector(reference_jax)
-        scatter_offset_weight = jnp.ones_like(self.packed_spec_jax["luminosity_ratio"], dtype=jnp.float64)
         eps = 1.0e-3
         fit_component_indices = self._scaling_scatter_component_indices()
+        one_hot_offsets = self._scaling_scatter_member_one_hot_offsets(eps)
 
-        def _derivative_for_field(
+        def _member_derivatives_for_field(
             bin_data: BinData,
             x_obs: jnp.ndarray,
             y_obs: jnp.ndarray,
-            beta_x: jnp.ndarray,
-            beta_y: jnp.ndarray,
-            sigma_offset: float,
-            core_offset: float,
-            cut_offset: float,
+            base_x: np.ndarray,
+            base_y: np.ndarray,
+            sigma_scale: float,
+            core_scale: float,
+            cut_scale: float,
         ) -> tuple[np.ndarray, np.ndarray]:
-            packed_plus = self._build_packed_lens_state(
-                reference_jax,
-                bin_data.effective_z_source,
-                sigma_log_offset=sigma_offset,
-                core_log_offset=core_offset,
-                cut_log_offset=cut_offset,
-            )
-            beta_plus_x, beta_plus_y = self._ray_shooting_for_components(
-                bin_data.effective_z_source,
-                x_obs,
-                y_obs,
-                packed_plus,
-                fit_component_indices,
-            )
-            deriv_x = np.asarray((beta_plus_x - beta_x) / eps, dtype=float)
-            deriv_y = np.asarray((beta_plus_y - beta_y) / eps, dtype=float)
-            return deriv_x, deriv_y
+            def _member_beta(offset_row: jnp.ndarray):
+                packed_plus = self._build_packed_lens_state(
+                    reference_jax,
+                    bin_data.effective_z_source,
+                    sigma_log_offset=sigma_scale * offset_row,
+                    core_log_offset=core_scale * offset_row,
+                    cut_log_offset=cut_scale * offset_row,
+                )
+                return self._ray_shooting_for_components(
+                    bin_data.effective_z_source,
+                    x_obs,
+                    y_obs,
+                    packed_plus,
+                    fit_component_indices,
+                )
+
+            chunks_x: list[np.ndarray] = []
+            chunks_y: list[np.ndarray] = []
+            n_members = int(one_hot_offsets.shape[0])
+            chunk_size = 32
+            for start in range(0, n_members, chunk_size):
+                bx, by = jax.vmap(_member_beta)(one_hot_offsets[start : start + chunk_size])
+                chunks_x.append((np.asarray(bx, dtype=float) - base_x[None, :]) / eps)
+                chunks_y.append((np.asarray(by, dtype=float) - base_y[None, :]) / eps)
+            return np.concatenate(chunks_x, axis=0), np.concatenate(chunks_y, axis=0)
 
         for bin_data in self.traced_bin_data:
             x_obs = jnp.asarray(bin_data.x_obs, dtype=jnp.float64)
@@ -20275,42 +20330,43 @@ class ClusterJAXEvaluator:
                 packed_state,
                 fit_component_indices,
             )
-            zero_offset = jnp.zeros_like(scatter_offset_weight)
-            weighted_offset = eps * scatter_offset_weight
-            sigma_dx, sigma_dy = _derivative_for_field(
-                bin_data,
-                x_obs,
-                y_obs,
-                beta_x,
-                beta_y,
-                weighted_offset,
-                -2.0 * weighted_offset,
-                -2.0 * weighted_offset,
+            base_x = np.asarray(beta_x, dtype=float)
+            base_y = np.asarray(beta_y, dtype=float)
+            sigma_dx, sigma_dy = _member_derivatives_for_field(
+                bin_data, x_obs, y_obs, base_x, base_y, 1.0, -2.0, -2.0
             )
-            mass_dx, mass_dy = _derivative_for_field(
-                bin_data,
-                x_obs,
-                y_obs,
-                beta_x,
-                beta_y,
-                zero_offset,
-                weighted_offset,
-                weighted_offset,
+            mass_dx, mass_dy = _member_derivatives_for_field(
+                bin_data, x_obs, y_obs, base_x, base_y, 0.0, 1.0, 1.0
             )
-            derivatives = {
-                "sigma_x": sigma_dx,
-                "sigma_y": sigma_dy,
-                "mass_x": mass_dx,
-                "mass_y": mass_dy,
-            }
-            if not all(np.isfinite(value).all() for value in derivatives.values()):
+            if not all(np.isfinite(value).all() for value in (sigma_dx, sigma_dy, mass_dx, mass_dy)):
+                _debug_log_line(
+                    "[scaling-scatter] DROPPED per-member scatter cache: non-finite member "
+                    f"derivatives at z={float(bin_data.effective_z_source):.4f}"
+                )
                 self.scaling_scatter_cache_by_z = {}
                 self._refresh_flat_critical_arc_scatter_arrays()
                 return
-            self.scaling_scatter_cache_by_z[float(bin_data.effective_z_source)] = derivatives
+            sigma_cov00, sigma_cov01, sigma_cov11 = _scatter_covariance_terms_from_member_derivatives(sigma_dx, sigma_dy)
+            mass_cov00, mass_cov01, mass_cov11 = _scatter_covariance_terms_from_member_derivatives(mass_dx, mass_dy)
+            self.scaling_scatter_cache_by_z[float(bin_data.effective_z_source)] = {
+                "sigma_cov00": sigma_cov00,
+                "sigma_cov01": sigma_cov01,
+                "sigma_cov11": sigma_cov11,
+                "mass_cov00": mass_cov00,
+                "mass_cov01": mass_cov01,
+                "mass_cov11": mass_cov11,
+            }
         self.scaling_scatter_reference_params = reference.copy()
         self._refresh_flat_critical_arc_scatter_arrays()
         self._source_loglike_fn = jax.jit(self._source_loglike_impl)
+
+    def _scaling_scatter_member_one_hot_offsets(self, eps: float) -> jnp.ndarray:
+        """(n_members, n_components) rows of eps at each cached member's component."""
+        member_components = np.asarray(self._scaling_scatter_component_indices(), dtype=int)
+        n_components = int(np.asarray(self.packed_spec_jax["luminosity_ratio"]).size)
+        one_hot = np.zeros((member_components.size, n_components), dtype=float)
+        one_hot[np.arange(member_components.size), member_components] = float(eps)
+        return jnp.asarray(one_hot, dtype=jnp.float64)
 
     def _refresh_flat_scaling_scatter_cache_from_reference(
         self,
@@ -20326,7 +20382,6 @@ class ClusterJAXEvaluator:
         reference = np.asarray(reference_params, dtype=float)
         reference_jax = jnp.asarray(reference, dtype=jnp.float64)
         physical_params = self._physical_parameter_vector(reference_jax)
-        scatter_offset_weight = jnp.ones_like(self.packed_spec_jax["luminosity_ratio"], dtype=jnp.float64)
         eps = 1.0e-3
         flat_data = self.flat_critical_arc_data
         fit_component_indices = self._scaling_scatter_component_indices()
@@ -20345,12 +20400,11 @@ class ClusterJAXEvaluator:
             packed_state,
             fit_component_indices,
         )
+        base_x = np.asarray(beta_x, dtype=float)
+        base_y = np.asarray(beta_y, dtype=float)
+        one_hot_offsets = self._scaling_scatter_member_one_hot_offsets(eps)
 
-        def _derivative_for_field(
-            sigma_offset: float,
-            core_offset: float,
-            cut_offset: float,
-        ) -> tuple[np.ndarray, np.ndarray]:
+        def _member_beta(sigma_offset: jnp.ndarray, core_offset: jnp.ndarray, cut_offset: jnp.ndarray):
             packed_plus, plus_validity = self._build_flat_packed_lens_state_with_validity_from_physical(
                 physical_params,
                 flat_data,
@@ -20359,53 +20413,68 @@ class ClusterJAXEvaluator:
                 core_log_offset=core_offset,
                 cut_log_offset=cut_offset,
             )
-            if not bool(np.asarray(plus_validity.is_valid, dtype=bool)):
-                self._record_invalid_state_host(np.asarray(plus_validity.reason_flags, dtype=bool))
-                raise ValueError("invalid flat scaling-scatter offset state")
             beta_plus_x, beta_plus_y = self._flat_ray_shooting_for_components(
                 flat_data.x_obs,
                 flat_data.y_obs,
                 packed_plus,
                 fit_component_indices,
             )
-            deriv_x = np.asarray((beta_plus_x - beta_x) / eps, dtype=float)
-            deriv_y = np.asarray((beta_plus_y - beta_y) / eps, dtype=float)
-            return deriv_x, deriv_y
+            return beta_plus_x, beta_plus_y, plus_validity.is_valid
 
-        try:
-            zero_offset = jnp.zeros_like(scatter_offset_weight)
-            weighted_offset = eps * scatter_offset_weight
-            sigma_dx, sigma_dy = _derivative_for_field(
-                weighted_offset,
-                -2.0 * weighted_offset,
-                -2.0 * weighted_offset,
+        def _member_derivatives_for_field(
+            sigma_scale: float,
+            core_scale: float,
+            cut_scale: float,
+        ) -> tuple[np.ndarray, np.ndarray, bool]:
+            # One finite difference per cached member (only that member's ln offset is
+            # perturbed): the derivative rows of independent per-member scatter, chunked
+            # vmaps so hundreds of members stay memory-safe.
+            chunks_x: list[np.ndarray] = []
+            chunks_y: list[np.ndarray] = []
+            all_valid = True
+            n_members = int(one_hot_offsets.shape[0])
+            chunk_size = 32
+            for start in range(0, n_members, chunk_size):
+                rows = one_hot_offsets[start : start + chunk_size]
+                bx, by, valid = jax.vmap(
+                    lambda w: _member_beta(sigma_scale * w, core_scale * w, cut_scale * w)
+                )(rows)
+                chunks_x.append((np.asarray(bx, dtype=float) - base_x[None, :]) / eps)
+                chunks_y.append((np.asarray(by, dtype=float) - base_y[None, :]) / eps)
+                all_valid = all_valid and bool(np.asarray(valid, dtype=bool).all())
+            return np.concatenate(chunks_x, axis=0), np.concatenate(chunks_y, axis=0), all_valid
+
+        sigma_dx, sigma_dy, sigma_valid = _member_derivatives_for_field(1.0, -2.0, -2.0)
+        mass_dx, mass_dy, mass_valid = _member_derivatives_for_field(0.0, 1.0, 1.0)
+        finite = all(np.isfinite(value).all() for value in (sigma_dx, sigma_dy, mass_dx, mass_dy))
+        if not (sigma_valid and mass_valid and finite):
+            _debug_log_line(
+                "[scaling-scatter] DROPPED per-member scatter cache: "
+                f"sigma_valid={sigma_valid} mass_valid={mass_valid} finite={finite}; "
+                "scatter amplitudes will not inflate the covariance until the next refresh"
             )
-            mass_dx, mass_dy = _derivative_for_field(
-                zero_offset,
-                weighted_offset,
-                weighted_offset,
-            )
-        except ValueError:
             self._refresh_flat_critical_arc_scatter_arrays()
             return
-
+        sigma_cov00, sigma_cov01, sigma_cov11 = _scatter_covariance_terms_from_member_derivatives(sigma_dx, sigma_dy)
+        mass_cov00, mass_cov01, mass_cov11 = _scatter_covariance_terms_from_member_derivatives(mass_dx, mass_dy)
         derivatives = {
-            "sigma_x": sigma_dx,
-            "sigma_y": sigma_dy,
-            "mass_x": mass_dx,
-            "mass_y": mass_dy,
+            "sigma_cov00": sigma_cov00,
+            "sigma_cov01": sigma_cov01,
+            "sigma_cov11": sigma_cov11,
+            "mass_cov00": mass_cov00,
+            "mass_cov01": mass_cov01,
+            "mass_cov11": mass_cov11,
         }
-        if not all(np.isfinite(value).all() for value in derivatives.values()):
-            self._refresh_flat_critical_arc_scatter_arrays()
-            return
         self.scaling_scatter_cache_by_z = self._scaling_scatter_cache_by_z_from_flat_arrays(derivatives)
         self.scaling_scatter_reference_params = reference.copy()
         self.flat_critical_arc_data = replace(
             self.flat_critical_arc_data,
-            sigma_scatter_x=jnp.asarray(sigma_dx, dtype=jnp.float64),
-            sigma_scatter_y=jnp.asarray(sigma_dy, dtype=jnp.float64),
-            mass_scatter_x=jnp.asarray(mass_dx, dtype=jnp.float64),
-            mass_scatter_y=jnp.asarray(mass_dy, dtype=jnp.float64),
+            sigma_scatter_cov00=jnp.asarray(sigma_cov00, dtype=jnp.float64),
+            sigma_scatter_cov01=jnp.asarray(sigma_cov01, dtype=jnp.float64),
+            sigma_scatter_cov11=jnp.asarray(sigma_cov11, dtype=jnp.float64),
+            mass_scatter_cov00=jnp.asarray(mass_cov00, dtype=jnp.float64),
+            mass_scatter_cov01=jnp.asarray(mass_cov01, dtype=jnp.float64),
+            mass_scatter_cov11=jnp.asarray(mass_cov11, dtype=jnp.float64),
         )
         self._source_loglike_fn = jax.jit(self._source_loglike_impl)
 
@@ -20641,15 +20710,32 @@ class ClusterJAXEvaluator:
             return zeros, zeros, zeros, jnp.ones_like(inv00, dtype=bool)
         sigma_scatter, mass_scatter = self._scaling_scatter_field_scales_from_physical(physical_params)
 
-        def image_cov(scale: jnp.ndarray, source_dx: jnp.ndarray, source_dy: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            source_dx = scale * source_dx
-            source_dy = scale * source_dy
-            image_dx = inv00 * source_dx + inv01 * source_dy
-            image_dy = inv10 * source_dx + inv11 * source_dy
-            return jnp.square(image_dx), image_dx * image_dy, jnp.square(image_dy)
+        def image_cov(
+            scale: jnp.ndarray, s00: jnp.ndarray, s01: jnp.ndarray, s11: jnp.ndarray
+        ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            # Congruence transform of the per-member source-plane covariance
+            # (sum_g v_g v_g^T) through the inverse operator: J^-1 M J^-T.
+            scale2 = jnp.square(scale)
+            s00 = scale2 * s00
+            s01 = scale2 * s01
+            s11 = scale2 * s11
+            img00 = jnp.square(inv00) * s00 + 2.0 * inv00 * inv01 * s01 + jnp.square(inv01) * s11
+            img01 = inv00 * inv10 * s00 + (inv00 * inv11 + inv01 * inv10) * s01 + inv01 * inv11 * s11
+            img11 = jnp.square(inv10) * s00 + 2.0 * inv10 * inv11 * s01 + jnp.square(inv11) * s11
+            return img00, img01, img11
 
-        sigma00, sigma01, sigma11 = image_cov(sigma_scatter, flat_data.sigma_scatter_x, flat_data.sigma_scatter_y)
-        mass00, mass01, mass11 = image_cov(mass_scatter, flat_data.mass_scatter_x, flat_data.mass_scatter_y)
+        sigma00, sigma01, sigma11 = image_cov(
+            sigma_scatter,
+            flat_data.sigma_scatter_cov00,
+            flat_data.sigma_scatter_cov01,
+            flat_data.sigma_scatter_cov11,
+        )
+        mass00, mass01, mass11 = image_cov(
+            mass_scatter,
+            flat_data.mass_scatter_cov00,
+            flat_data.mass_scatter_cov01,
+            flat_data.mass_scatter_cov11,
+        )
         cov00 = sigma00 + mass00
         cov01 = sigma01 + mass01
         cov11 = sigma11 + mass11
@@ -20665,13 +20751,15 @@ class ClusterJAXEvaluator:
         if len(self._scaling_scatter_component_indices()) == 0 or len(self.scaling_scatter_param_indices) == 0:
             return zeros, zeros
         sigma_scatter, mass_scatter = self._scaling_scatter_field_scales_from_physical(physical_params)
+        # Source-plane diagonal fallback: variance terms of the per-member covariance
+        # (sum_g v_g v_g^T); the source-plane cross term is dropped on this path.
         var_x = (
-            jnp.square(sigma_scatter * flat_data.sigma_scatter_x)
-            + jnp.square(mass_scatter * flat_data.mass_scatter_x)
+            jnp.square(sigma_scatter) * flat_data.sigma_scatter_cov00
+            + jnp.square(mass_scatter) * flat_data.mass_scatter_cov00
         )
         var_y = (
-            jnp.square(sigma_scatter * flat_data.sigma_scatter_y)
-            + jnp.square(mass_scatter * flat_data.mass_scatter_y)
+            jnp.square(sigma_scatter) * flat_data.sigma_scatter_cov11
+            + jnp.square(mass_scatter) * flat_data.mass_scatter_cov11
         )
         return var_x, var_y
 
@@ -24912,19 +25000,33 @@ class ClusterJAXEvaluator:
 
                         def _image_displacement_covariance(
                             scale: jnp.ndarray,
-                            key_x: str,
-                            key_y: str,
+                            key_prefix: str,
                         ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-                            source_dx = scale * _cache_values(key_x)
-                            source_dy = scale * _cache_values(key_y)
-                            image_dx = critical_inv00 * source_dx + critical_inv01 * source_dy
-                            image_dy = critical_inv10 * source_dx + critical_inv11 * source_dy
-                            return jnp.square(image_dx), image_dx * image_dy, jnp.square(image_dy)
+                            # Congruence transform of the per-member source covariance
+                            # (sum_g v_g v_g^T) through the inverse operator.
+                            scale2 = jnp.square(scale)
+                            s00 = scale2 * _cache_values(f"{key_prefix}_cov00")
+                            s01 = scale2 * _cache_values(f"{key_prefix}_cov01")
+                            s11 = scale2 * _cache_values(f"{key_prefix}_cov11")
+                            img00 = (
+                                jnp.square(critical_inv00) * s00
+                                + 2.0 * critical_inv00 * critical_inv01 * s01
+                                + jnp.square(critical_inv01) * s11
+                            )
+                            img01 = (
+                                critical_inv00 * critical_inv10 * s00
+                                + (critical_inv00 * critical_inv11 + critical_inv01 * critical_inv10) * s01
+                                + critical_inv01 * critical_inv11 * s11
+                            )
+                            img11 = (
+                                jnp.square(critical_inv10) * s00
+                                + 2.0 * critical_inv10 * critical_inv11 * s01
+                                + jnp.square(critical_inv11) * s11
+                            )
+                            return img00, img01, img11
 
-                        sigma00, sigma01, sigma11 = _image_displacement_covariance(
-                            sigma_scatter, "sigma_x", "sigma_y"
-                        )
-                        mass00, mass01, mass11 = _image_displacement_covariance(mass_scatter, "mass_x", "mass_y")
+                        sigma00, sigma01, sigma11 = _image_displacement_covariance(sigma_scatter, "sigma")
+                        mass00, mass01, mass11 = _image_displacement_covariance(mass_scatter, "mass")
                         scatter_cov00 = jnp.where(
                             critical_inverse_finite,
                             sigma00 + mass00,
