@@ -3704,6 +3704,106 @@ def test_aggregate_recovered_masses_prefer_free_columns_for_promoted_members() -
     np.testing.assert_allclose(values, [11.5, 10.5, 10.0])
 
 
+def test_m2d_enclosed_analytic_matches_total_mass_convention() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    v_disp, core, cut = 245.0, 0.8, 187.0
+    total = 10.0 ** float(log10_dpie_mass_msun(v_disp, cut))
+    asymptotic = float(aggregate_plots.dpie_m2d_enclosed_msun(np.asarray([1.0e9]), v_disp, core, cut)[0])
+    # The analytic profile converges to the utils total mass times the exact
+    # (1 - a^2/s^2) core term that the helper documents as neglected.
+    assert asymptotic == pytest.approx(total * (1.0 - (core / cut) ** 2), rel=1.0e-6)
+    profile = aggregate_plots.dpie_m2d_enclosed_msun(np.asarray([5.0, 50.0, 500.0]), v_disp, core, cut)
+    assert np.all(np.diff(profile) > 0.0)
+
+
+def test_m2d_numeric_aperture_matches_analytic_for_centered_component() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    radii = np.geomspace(5.0, 400.0, 12)
+    v_disp, core, cut = 300.0, 1.5, 150.0
+    groups = {
+        "halo": (
+            np.asarray([v_disp]),
+            np.asarray([core]),
+            np.asarray([cut]),
+            np.asarray([0.0]),
+            np.asarray([0.0]),
+        )
+    }
+    profiles = aggregate_plots.aperture_m2d_profiles_msun(radii, groups)
+    analytic = aggregate_plots.dpie_m2d_enclosed_msun(radii, v_disp, core, cut)
+    np.testing.assert_allclose(profiles["halo"], analytic, rtol=6.0e-3)
+    np.testing.assert_allclose(profiles["total"], analytic, rtol=6.0e-3)
+    # A far-away component contributes ~nothing inside a small aperture.
+    groups["members"] = (
+        np.asarray([200.0]),
+        np.asarray([0.5]),
+        np.asarray([40.0]),
+        np.asarray([2000.0]),
+        np.asarray([0.0]),
+    )
+    profiles = aggregate_plots.aperture_m2d_profiles_msun(radii, groups)
+    assert profiles["members"][0] < 1.0e-3 * profiles["halo"][0]
+
+
+def test_m2d_model_groups_apply_scaling_and_promoted_offsets() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    theta = {
+        "halo.v_disp": 760.0, "halo.core_radius_kpc": 27.0, "halo.cut_radius_kpc": 1150.0,
+        "halo.x_centre": 0.0, "halo.y_centre": 0.0,
+        "bcg.v_disp": 285.0, "bcg.core_radius_kpc": 0.8, "bcg.cut_radius_kpc": 187.0,
+        "bcg.x_centre": 0.35, "bcg.y_centre": -0.22,
+        "potfile.sigma": 245.0, "potfile.cutkpc": 187.0, "potfile.corekpc": 0.8,
+        "potfile.alpha_sigma": 0.25, "potfile.gamma_ml": 0.1,
+        "potfile.member002.independent_free_log_sigma_delta_unit": 1.0,
+        "potfile.member002.independent_free_log_mass_delta_unit": -0.5,
+    }
+    members = [
+        {"id": "member001", "luminosity_ratio": 0.25, "x_arcsec": 10.0, "y_arcsec": -4.0},
+        {"id": "member002", "luminosity_ratio": 1.0, "x_arcsec": -6.0, "y_arcsec": 2.0},
+    ]
+    groups = aggregate_plots._m2d_model_groups(
+        theta, members, 5.0, sigma_offset_width=0.1, mass_offset_width=0.2
+    )
+    v, core, cut, xs, ys = groups["members"]
+    beta = 1.0 + 0.1 - 2.0 * 0.25
+    assert v[0] == pytest.approx(245.0 * 0.25**0.25)
+    assert cut[0] == pytest.approx(187.0 * 0.25**beta)
+    # Promoted member: sigma gets exp(width * delta), radius gets exp(mass - 2 sigma).
+    assert v[1] == pytest.approx(245.0 * math.exp(0.1 * 1.0))
+    assert cut[1] == pytest.approx(187.0 * math.exp(0.2 * -0.5 - 2.0 * 0.1 * 1.0))
+    assert xs[1] == pytest.approx(-30.0)
+    assert groups["halo"][0][0] == pytest.approx(760.0)
+    assert groups["bcg"][3][0] == pytest.approx(0.35 * 5.0)
+
+
+def test_m2d_aggregate_legend_uses_shared_font_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    from matplotlib.axes import Axes
+    import matplotlib.pyplot as plt
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    legend_calls: list[dict[str, object]] = []
+    original_legend = Axes.legend
+
+    def record_legend(self: Axes, *args: object, **kwargs: object) -> object:
+        legend_calls.append(dict(kwargs))
+        return original_legend(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "legend", record_legend)
+    fig, top_ax, resid_ax = aggregate_plots._m2d_two_panel_axes()
+    try:
+        top_ax.plot([1.0, 2.0], [1.0, 3.0], label="model")
+        aggregate_plots._m2d_finish_axes(top_ax, resid_ax, np.asarray([0.0, 0.05]))
+        assert legend_calls
+        assert legend_calls[-1]["fontsize"] == aggregate_plots.AGGREGATE_LEGEND_FONT_SIZE
+        assert legend_calls[-1]["loc"] == "lower right"
+    finally:
+        plt.close(fig)
+
+
 def test_dpie_mass_helper_matches_integrated_profile_total() -> None:
     # Convention lock: the helper must equal the Eliasdottir A11 / lenstronomy
     # mass_tot (2*pi*sigma0*Ra*Rs*Sigma_cr) of the exact profile the pipeline builds
@@ -18916,6 +19016,8 @@ def _write_aggregate_result(
     stage: str,
     records: list[dict[str, object]] | None = None,
     magnification_records: list[dict[str, object]] | None = None,
+    posterior_image_rms_records: list[dict[str, object]] | None = None,
+    posterior_image_residual_draws_records: list[dict[str, object]] | None = None,
 ) -> Path:
     import lenscluster.mock_validation.aggregate_plots as aggregate_plots
 
@@ -19012,6 +19114,101 @@ def _write_aggregate_result(
                                 },
                             ],
                         },
+                        "posterior_image_rms": {
+                            "columns": [
+                                "draw_index",
+                                "point_image_rms_arcsec",
+                                "point_recovered_image_count",
+                                "arc_aware_image_rms_arcsec",
+                                "arc_aware_recovered_image_count",
+                                "arc_supported_image_count",
+                                "total_image_count",
+                                "exact_failed_family_count",
+                            ],
+                            "records": posterior_image_rms_records
+                            or [
+                                {
+                                    "draw_index": 0,
+                                    "point_image_rms_arcsec": 0.18,
+                                    "point_recovered_image_count": 42,
+                                    "arc_aware_image_rms_arcsec": 0.14,
+                                    "arc_aware_recovered_image_count": 45,
+                                    "arc_supported_image_count": 3,
+                                    "total_image_count": 48,
+                                    "exact_failed_family_count": 0,
+                                },
+                                {
+                                    "draw_index": 1,
+                                    "point_image_rms_arcsec": 0.22,
+                                    "point_recovered_image_count": 41,
+                                    "arc_aware_image_rms_arcsec": 0.16,
+                                    "arc_aware_recovered_image_count": 45,
+                                    "arc_supported_image_count": 4,
+                                    "total_image_count": 48,
+                                    "exact_failed_family_count": 0,
+                                },
+                            ],
+                        },
+                        "posterior_image_residual_draws": {
+                            "columns": [
+                                "draw_index",
+                                "image_label",
+                                "family_id",
+                                "point_image_residual_arcsec",
+                                "arc_aware_image_residual_arcsec",
+                                "point_recovered",
+                                "arc_aware_recovered",
+                                "arc_supported",
+                                "exact_failed",
+                            ],
+                            "records": posterior_image_residual_draws_records
+                            or [
+                                {
+                                    "draw_index": 0,
+                                    "image_label": "1.1",
+                                    "family_id": "1",
+                                    "point_image_residual_arcsec": 0.12,
+                                    "arc_aware_image_residual_arcsec": 0.10,
+                                    "point_recovered": True,
+                                    "arc_aware_recovered": True,
+                                    "arc_supported": False,
+                                    "exact_failed": False,
+                                },
+                                {
+                                    "draw_index": 0,
+                                    "image_label": "1.2",
+                                    "family_id": "1",
+                                    "point_image_residual_arcsec": np.nan,
+                                    "arc_aware_image_residual_arcsec": 0.55,
+                                    "point_recovered": False,
+                                    "arc_aware_recovered": True,
+                                    "arc_supported": True,
+                                    "exact_failed": False,
+                                },
+                                {
+                                    "draw_index": 1,
+                                    "image_label": "1.1",
+                                    "family_id": "1",
+                                    "point_image_residual_arcsec": 0.18,
+                                    "arc_aware_image_residual_arcsec": 0.16,
+                                    "point_recovered": True,
+                                    "arc_aware_recovered": True,
+                                    "arc_supported": False,
+                                    "exact_failed": False,
+                                },
+                                {
+                                    "draw_index": 1,
+                                    "image_label": "1.2",
+                                    "family_id": "1",
+                                    "point_image_residual_arcsec": np.nan,
+                                    "arc_aware_image_residual_arcsec": np.nan,
+                                    "point_recovered": False,
+                                    "arc_aware_recovered": False,
+                                    "arc_supported": False,
+                                    "exact_failed": False,
+                                },
+                            ],
+                        },
                     }
                 }
             }
@@ -19089,10 +19286,10 @@ def test_aggregate_parameter_recovery_loads_stage_and_variant_methods(tmp_path: 
     assert len(parameter_df) == 8
     assert inventory_df["loaded"].all()
     assert set(parameter_df["method_label"]) == {
-        "Stage 1 use_magnitude_likelihood=False",
-        "Stage 1 use_magnitude_likelihood=True",
-        "Stage 2 use_magnitude_likelihood=False",
-        "Stage 2 use_magnitude_likelihood=True",
+        "Stage 1 No flux",
+        "Stage 1 Flux",
+        "Stage 2 No flux",
+        "Stage 2 Flux",
     }
     assert set(parameter_df["stage_label"]) == {"Stage 1", "Stage 2"}
     assert {"truth", "median", "q16", "q84", "covered_68"} <= set(parameter_df.columns)
@@ -19121,6 +19318,75 @@ def test_aggregate_magnification_recovery_loads_stage_and_variant_methods(tmp_pa
         "magnification_q84",
     } <= set(magnification_df.columns)
     assert magnification_df["magnification_q50"].dtype.kind in {"f", "i"}
+
+
+def test_aggregate_image_residual_recovery_loads_posterior_rms(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed in (12345, 12346):
+        for stage in aggregate_plots.DEFAULT_STAGES:
+            for variant in aggregate_plots.DEFAULT_VARIANTS:
+                _write_aggregate_result(campaign, seed=seed, variant=variant, stage=stage)
+
+    image_residual_df, inventory_df = aggregate_plots.collect_image_residual_recovery(campaign)
+    seed_summary_df = aggregate_plots.image_residual_seed_summary_rows(image_residual_df)
+
+    assert len(image_residual_df) == 16
+    assert inventory_df["loaded"].all()
+    assert set(image_residual_df["stage_label"]) == {"Stage 1", "Stage 2"}
+    assert set(image_residual_df["variant"]) == {"anisotropic", "anisotropic_maglikelihood"}
+    assert set(image_residual_df["seed"]) == {12345, 12346}
+    assert {
+        "point_image_rms_arcsec",
+        "arc_aware_image_rms_arcsec",
+        "point_recovered_image_count",
+        "arc_supported_image_count",
+    } <= set(image_residual_df.columns)
+    assert image_residual_df["point_image_rms_arcsec"].dtype.kind in {"f", "i"}
+    assert len(seed_summary_df) == 8
+    assert "point_image_rms_arcsec_q50" in seed_summary_df
+    assert "arc_aware_image_rms_arcsec_q50" in seed_summary_df
+    assert seed_summary_df["point_image_rms_arcsec_q50"].iloc[0] == pytest.approx(0.20)
+    assert seed_summary_df["arc_aware_image_rms_arcsec_q50"].iloc[0] == pytest.approx(0.15)
+
+
+def test_aggregate_image_residual_draws_load_and_summarize_distribution(tmp_path: Path) -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    residuals_with_tail = np.concatenate([np.full(100, 0.8229), np.array([2.999])])
+    assert aggregate_plots._image_residual_distribution_range_max(residuals_with_tail) == pytest.approx(0.95)
+
+    campaign = tmp_path / "jul2_2215_mock_validation"
+    for seed in (12345, 12346):
+        for stage in aggregate_plots.DEFAULT_STAGES:
+            for variant in aggregate_plots.DEFAULT_VARIANTS:
+                _write_aggregate_result(campaign, seed=seed, variant=variant, stage=stage)
+
+    residual_draws_df, inventory_df = aggregate_plots.collect_image_residual_draws_recovery(campaign)
+    summary_df = aggregate_plots.image_residual_distribution_summary_rows(residual_draws_df, bin_count=4)
+
+    assert len(residual_draws_df) == 32
+    assert inventory_df["loaded"].all()
+    assert set(residual_draws_df["variant"]) == {"anisotropic", "anisotropic_maglikelihood"}
+    assert set(residual_draws_df["stage_label"]) == {"Stage 1", "Stage 2"}
+    assert {
+        "arc_aware_image_residual_arcsec",
+        "arc_aware_recovered",
+        "arc_supported",
+        "exact_failed",
+    } <= set(residual_draws_df.columns)
+    assert not summary_df.empty
+    assert {
+        "bin_center",
+        "hist_count_q16",
+        "hist_count_q50",
+        "hist_count_q84",
+        "cumulative_fraction_q16",
+        "cumulative_fraction_q50",
+        "cumulative_fraction_q84",
+    } <= set(summary_df.columns)
+    assert set(summary_df["variant"]) == {"anisotropic", "anisotropic_maglikelihood"}
 
 
 def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_labels(
@@ -19211,10 +19477,10 @@ def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_lab
         legend = ax.get_legend()
         assert legend is not None
         labels = [text.get_text() for text in legend.get_texts()]
-        assert labels == ["use_magnitude_likelihood=False", "use_magnitude_likelihood=True"]
+        assert labels == ["No flux", "Flux"]
         assert "Stage 1" not in labels
         assert "Stage 2" not in labels
-        assert "Stage 2 use_magnitude_likelihood=False" not in labels
+        assert "Stage 2 No flux" not in labels
         mag_call = next(call for call in errorbar_calls if np.asarray(call["x"]).shape == (1,) and call["x"][0] == pytest.approx(3.0))
         np.testing.assert_allclose(mag_call["y"], [3.1])
         errorbar_kwargs = mag_call["kwargs"]
@@ -19245,6 +19511,215 @@ def test_aggregate_magnification_recovery_plot_uses_variant_legend_and_paper_lab
         plt.close("all")
 
 
+def test_aggregate_image_residual_recovery_plot_summarizes_seed_posterior_rms(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from matplotlib.axes import Axes
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    image_residual_df = pd.DataFrame(
+        [
+            {
+                "seed": 12345,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic",
+                "draw_index": 0,
+                "point_image_rms_arcsec": 0.18,
+                "arc_aware_image_rms_arcsec": 0.12,
+                "point_recovered_image_count": 40,
+                "arc_aware_recovered_image_count": 43,
+                "arc_supported_image_count": 3,
+                "total_image_count": 45,
+            },
+            {
+                "seed": 12345,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic",
+                "draw_index": 1,
+                "point_image_rms_arcsec": 0.22,
+                "arc_aware_image_rms_arcsec": 0.14,
+                "point_recovered_image_count": 41,
+                "arc_aware_recovered_image_count": 43,
+                "arc_supported_image_count": 2,
+                "total_image_count": 45,
+            },
+            {
+                "seed": 12346,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic_maglikelihood",
+                "draw_index": 0,
+                "point_image_rms_arcsec": 0.11,
+                "arc_aware_image_rms_arcsec": 0.09,
+                "point_recovered_image_count": 42,
+                "arc_aware_recovered_image_count": 44,
+                "arc_supported_image_count": 2,
+                "total_image_count": 45,
+            },
+            {
+                "seed": 12346,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic_maglikelihood",
+                "draw_index": 1,
+                "point_image_rms_arcsec": 0.13,
+                "arc_aware_image_rms_arcsec": 0.10,
+                "point_recovered_image_count": 42,
+                "arc_aware_recovered_image_count": 44,
+                "arc_supported_image_count": 2,
+                "total_image_count": 45,
+            },
+        ]
+    )
+    saved_figures: list[Figure] = []
+    errorbar_calls: list[dict[str, object]] = []
+    scatter_calls: list[dict[str, object]] = []
+    original_errorbar = Axes.errorbar
+    original_scatter = Axes.scatter
+
+    def record_savefig(self: Figure, *_args: object, **_kwargs: object) -> None:
+        saved_figures.append(self)
+
+    def record_errorbar(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        errorbar_calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "y": np.asarray(y, dtype=float),
+                "yerr": kwargs.get("yerr"),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return original_errorbar(self, x, y, *args, **kwargs)
+
+    def record_scatter(self: Axes, x: object, y: object, *args: object, **kwargs: object) -> object:
+        scatter_calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "y": np.asarray(y, dtype=float),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "errorbar", record_errorbar)
+    monkeypatch.setattr(Axes, "scatter", record_scatter)
+    monkeypatch.setattr(Figure, "savefig", record_savefig)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    try:
+        aggregate_plots.plot_aggregate_image_residual_recovery(
+            image_residual_df,
+            tmp_path / "image_residual_recovery",
+            ("pdf",),
+        )
+        assert len(saved_figures) == 1
+        axes = saved_figures[0].axes
+        assert len(axes) == 1
+        assert axes[0].get_ylabel() == "image RMS [arcsec]"
+        assert axes[0].get_title() == ""
+        assert axes[0].get_xlabel() == "Fit variant"
+        legend = axes[0].get_legend()
+        assert legend is not None
+        assert [text.get_text() for text in legend.get_texts()] == [
+            "No flux",
+            "Flux",
+        ]
+        assert all(call["kwargs"]["fmt"] == "none" for call in errorbar_calls)
+        assert all(call["kwargs"]["elinewidth"] == pytest.approx(1.15) for call in errorbar_calls)
+        assert all(call["kwargs"]["capsize"] == pytest.approx(3.0) for call in errorbar_calls)
+        summary_calls = [call for call in scatter_calls if call["kwargs"].get("s") == pytest.approx(56.0)]
+        assert len(summary_calls) == 2
+        mag_summary = next(call for call in summary_calls if call["kwargs"]["marker"] == "D")
+        np.testing.assert_allclose(mag_summary["y"], [0.095], rtol=0.0, atol=0.03)
+        assert mag_summary["kwargs"]["facecolors"] == "tab:orange"
+        assert not any(line.get_visible() for line in axes[0].get_xgridlines())
+        assert not any(line.get_visible() for line in axes[0].get_ygridlines())
+    finally:
+        plt.close("all")
+
+
+def test_aggregate_image_residual_distribution_plot_draws_histogram_and_cumulative(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    residual_draws_df = pd.DataFrame(
+        [
+            {
+                "seed": 12345,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic",
+                "draw_index": 0,
+                "arc_aware_image_residual_arcsec": 0.10,
+                "arc_aware_recovered": True,
+                "exact_failed": False,
+            },
+            {
+                "seed": 12345,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic",
+                "draw_index": 0,
+                "arc_aware_image_residual_arcsec": 0.55,
+                "arc_aware_recovered": True,
+                "exact_failed": False,
+            },
+            {
+                "seed": 12346,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic_maglikelihood",
+                "draw_index": 0,
+                "arc_aware_image_residual_arcsec": 0.08,
+                "arc_aware_recovered": True,
+                "exact_failed": False,
+            },
+            {
+                "seed": 12346,
+                "stage": "stage2_free_source_forward_fit",
+                "variant": "anisotropic_maglikelihood",
+                "draw_index": 0,
+                "arc_aware_image_residual_arcsec": np.nan,
+                "arc_aware_recovered": False,
+                "exact_failed": False,
+            },
+        ]
+    )
+    saved_figures: list[Figure] = []
+
+    def record_savefig(self: Figure, *_args: object, **_kwargs: object) -> None:
+        saved_figures.append(self)
+
+    monkeypatch.setattr(Figure, "savefig", record_savefig)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    try:
+        paths = aggregate_plots.plot_aggregate_image_residual_distribution(
+            residual_draws_df,
+            tmp_path / "mock_image_residual_distribution",
+            ("pdf",),
+        )
+        assert paths == (tmp_path / "mock_image_residual_distribution.pdf",)
+        assert len(saved_figures) == 1
+        axes = saved_figures[0].axes
+        assert len(axes) == 2
+        assert axes[0].get_ylabel() == "median N images"
+        assert axes[1].get_ylabel() == "fraction recovered"
+        assert axes[1].get_xlabel() == "image residual [arcsec]"
+        assert axes[1].get_xlim() == pytest.approx((0.0, 0.60))
+        legend = axes[0].get_legend()
+        assert legend is not None
+        assert [text.get_text() for text in legend.get_texts()] == ["No flux", "Flux"]
+        assert axes[1].get_ylim()[0] <= 0.0
+        assert axes[1].get_ylim()[1] >= 1.0
+    finally:
+        plt.close("all")
+
+
 def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
     import lenscluster.mock_validation.aggregate_plots as aggregate_plots
 
@@ -19257,7 +19732,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 use_magnitude_likelihood=False",
+                "method_label": "Stage 2 No flux",
                 "result_path": "results.json",
                 "parameter": "potfile.sigma",
                 "truth": 245.0,
@@ -19272,7 +19747,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 use_magnitude_likelihood=False",
+                "method_label": "Stage 2 No flux",
                 "result_path": "results.json",
                 "parameter": "potfile.cutkpc",
                 "truth": 187.0,
@@ -19287,7 +19762,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 use_magnitude_likelihood=False",
+                "method_label": "Stage 2 No flux",
                 "result_path": "results.json",
                 "parameter": "halo.v_disp",
                 "truth": 760.0,
@@ -19302,7 +19777,7 @@ def test_joint_sigma_rcut_recovery_rows_pivots_potfile_parameters() -> None:
                 "variant": "anisotropic",
                 "stage": "stage2_free_source_forward_fit",
                 "stage_label": "Stage 2",
-                "method_label": "Stage 2 use_magnitude_likelihood=False",
+                "method_label": "Stage 2 No flux",
                 "result_path": "results.json",
                 "parameter": "halo.cut_radius_kpc",
                 "truth": 950.0,
@@ -19403,8 +19878,8 @@ def test_joint_sigma_rcut_recovery_plot_draws_truth_points_markers_and_contours(
         assert ax.get_ylabel() == r"Halo $r_{\rm cut}$ (fit)"
         assert sum(isinstance(patch, Ellipse) for patch in ax.patches) == 4
         marker_by_label = {call["kwargs"].get("label"): call["kwargs"].get("marker") for call in scatter_calls}
-        assert marker_by_label["use_magnitude_likelihood=False"] == "o"
-        assert marker_by_label["use_magnitude_likelihood=True"] == "D"
+        assert marker_by_label["No flux"] == "o"
+        assert marker_by_label["Flux"] == "D"
         truth_call = next(call for call in scatter_calls if call["kwargs"].get("label") == "Truth")
         assert truth_call["kwargs"]["marker"] == "*"
         np.testing.assert_allclose(truth_call["x"], [245.0])
@@ -19465,6 +19940,7 @@ def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch
         assert len(scatter_calls) == 2
         for call in errorbar_calls:
             kwargs = call["kwargs"]
+            np.testing.assert_allclose(call["x"], [1000.0])
             assert kwargs["fmt"] == "none"
             assert kwargs["elinewidth"] == pytest.approx(0.65)
             assert kwargs["capsize"] == pytest.approx(1.8)
@@ -19473,12 +19949,18 @@ def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch
             assert kwargs["zorder"] == 1
             assert kwargs["label"] == "_nolegend_"
         anisotropic_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "o")
+        np.testing.assert_allclose(anisotropic_scatter["x"], [1000.0])
         assert anisotropic_scatter["kwargs"]["facecolors"] == "white"
         assert anisotropic_scatter["kwargs"]["edgecolors"] == "tab:blue"
+        assert anisotropic_scatter["kwargs"]["alpha"] == pytest.approx(
+            aggregate_plots.AGGREGATE_PARAMETER_POINT_ALPHA
+        )
         mag_scatter = next(call for call in scatter_calls if call["kwargs"]["marker"] == "D")
+        np.testing.assert_allclose(mag_scatter["x"], [1000.0])
         assert mag_scatter["kwargs"]["facecolors"] == "tab:orange"
         assert mag_scatter["kwargs"]["s"] == pytest.approx(21.0)
         assert mag_scatter["kwargs"]["linewidths"] == pytest.approx(0.75)
+        assert mag_scatter["kwargs"]["alpha"] == pytest.approx(aggregate_plots.AGGREGATE_PARAMETER_POINT_ALPHA)
         assert mag_scatter["kwargs"]["zorder"] == 2
     finally:
         plt.close(fig)
@@ -19495,7 +19977,7 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
             {
                 "stage": "stage1_backprojected_centroid_fit",
                 "variant": "anisotropic",
-                "method_label": "Stage 1 use_magnitude_likelihood=False",
+                "method_label": "Stage 1 No flux",
                 "parameter": "halo.v_disp",
                 "bias_median": 0.1,
                 "bias_q16": -0.1,
@@ -19504,7 +19986,7 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
             {
                 "stage": "stage2_free_source_forward_fit",
                 "variant": "anisotropic_maglikelihood",
-                "method_label": "Stage 2 use_magnitude_likelihood=True",
+                "method_label": "Stage 2 Flux",
                 "parameter": "halo.v_disp",
                 "bias_median": -0.2,
                 "bias_q16": -0.5,
@@ -19533,7 +20015,7 @@ def test_aggregate_bias_metric_panel_uses_polished_variant_markers(monkeypatch: 
             ax,
             metric_df,
             ["halo.v_disp"],
-            ["Stage 1 use_magnitude_likelihood=False", "Stage 2 use_magnitude_likelihood=True"],
+            ["Stage 1 No flux", "Stage 2 Flux"],
             ylabel="bias",
             title="Bias",
             metric_column="bias_median",
@@ -19810,25 +20292,33 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
     assert outputs.inventory_table.exists()
     assert outputs.magnification_table is not None
     assert outputs.magnification_table.exists()
+    assert outputs.image_residual_table is not None
+    assert outputs.image_residual_table.exists()
+    assert outputs.image_residual_draws_table is not None
+    assert outputs.image_residual_draws_table.exists()
     assert outputs.subhalo_shmf_seed_table is not None
     assert outputs.subhalo_shmf_seed_table.exists()
     assert outputs.subhalo_shmf_summary_table is not None
     assert outputs.subhalo_shmf_summary_table.exists()
     assert {path.name for path in outputs.plot_paths} == {
-        "parameter_recovery_stage1_paper.pdf",
-        "parameter_recovery_paper.pdf",
-        "parameter_recovery_all.pdf",
-        "parameter_bias_summary.pdf",
-        "sigma_rcut_recovery_stage1.pdf",
-        "sigma_rcut_recovery.pdf",
-        "halo_sigma_rcut_recovery_stage1.pdf",
-        "halo_sigma_rcut_recovery.pdf",
-        "bcg_sigma_rcut_recovery_stage1.pdf",
-        "bcg_sigma_rcut_recovery.pdf",
-        "magnification_recovery_stage1.pdf",
-        "magnification_recovery.pdf",
-        "subhalo_recovery_stage1_shmf.pdf",
-        "subhalo_recovery_shmf.pdf",
+        "mock_parameter_recovery_stage1_paper.pdf",
+        "mock_parameter_recovery_paper.pdf",
+        "mock_parameter_recovery_all.pdf",
+        "mock_parameter_bias_summary.pdf",
+        "mock_sigma_rcut_recovery_stage1.pdf",
+        "mock_sigma_rcut_recovery.pdf",
+        "mock_halo_sigma_rcut_recovery_stage1.pdf",
+        "mock_halo_sigma_rcut_recovery.pdf",
+        "mock_bcg_sigma_rcut_recovery_stage1.pdf",
+        "mock_bcg_sigma_rcut_recovery.pdf",
+        "mock_magnification_recovery_stage1.pdf",
+        "mock_magnification_recovery.pdf",
+        "mock_image_residual_recovery_stage1.pdf",
+        "mock_image_residual_recovery.pdf",
+        "mock_image_residual_distribution_stage1.pdf",
+        "mock_image_residual_distribution.pdf",
+        "mock_subhalo_recovery_stage1_shmf.pdf",
+        "mock_subhalo_recovery_shmf.pdf",
     }
     for path in outputs.plot_paths:
         assert path.exists()
@@ -19848,6 +20338,25 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         "magnification_q50",
         "magnification_q84",
     } <= set(magnification_table.columns)
+    image_residual_table = pd.read_csv(outputs.image_residual_table)
+    assert len(image_residual_table) == 24
+    assert {
+        "stage",
+        "seed",
+        "variant",
+        "point_image_rms_arcsec",
+        "arc_aware_image_rms_arcsec",
+    } <= set(image_residual_table.columns)
+    image_residual_draws_table = pd.read_csv(outputs.image_residual_draws_table)
+    assert len(image_residual_draws_table) == 48
+    assert {
+        "stage",
+        "seed",
+        "variant",
+        "draw_index",
+        "arc_aware_image_residual_arcsec",
+        "arc_aware_recovered",
+    } <= set(image_residual_draws_table.columns)
     assert aggregate_table.groupby("parameter").size().to_dict() == {
         "bcg.cut_radius_kpc": 4,
         "bcg.v_disp": 4,
@@ -19858,10 +20367,10 @@ def test_write_aggregate_plots_creates_tables_and_figures(tmp_path: Path) -> Non
         "potfile.sigma": 4,
     }
     assert set(table["method_label"]) == {
-        "Stage 1 use_magnitude_likelihood=False",
-        "Stage 1 use_magnitude_likelihood=True",
-        "Stage 2 use_magnitude_likelihood=False",
-        "Stage 2 use_magnitude_likelihood=True",
+        "Stage 1 No flux",
+        "Stage 1 Flux",
+        "Stage 2 No flux",
+        "Stage 2 Flux",
     }
 
 
@@ -19966,29 +20475,29 @@ def test_write_aggregate_plots_creates_stage1_paper_plot_when_stage1_requested(t
         formats=("pdf",),
     )
 
-    assert {path.name for path in outputs.plot_paths if path.name.startswith("parameter_recovery")} == {
-        "parameter_recovery_paper.pdf"
+    assert {path.name for path in outputs.plot_paths if path.name.startswith("mock_parameter_recovery")} == {
+        "mock_parameter_recovery_paper.pdf"
     }
-    paper_plot = outputs.output_dir / "parameter_recovery_paper.pdf"
+    paper_plot = outputs.output_dir / "mock_parameter_recovery_paper.pdf"
     assert paper_plot.exists()
     assert paper_plot.stat().st_size > 0
-    assert not (outputs.output_dir / "parameter_recovery_stage1_paper.pdf").exists()
-    magnification_plot = outputs.output_dir / "magnification_recovery.pdf"
+    assert not (outputs.output_dir / "mock_parameter_recovery_stage1_paper.pdf").exists()
+    magnification_plot = outputs.output_dir / "mock_magnification_recovery.pdf"
     assert magnification_plot.exists()
     assert magnification_plot.stat().st_size > 0
-    assert not (outputs.output_dir / "magnification_recovery_stage1.pdf").exists()
-    sigma_rcut_plot = outputs.output_dir / "sigma_rcut_recovery.pdf"
+    assert not (outputs.output_dir / "mock_magnification_recovery_stage1.pdf").exists()
+    sigma_rcut_plot = outputs.output_dir / "mock_sigma_rcut_recovery.pdf"
     assert sigma_rcut_plot.exists()
     assert sigma_rcut_plot.stat().st_size > 0
-    assert not (outputs.output_dir / "sigma_rcut_recovery_stage1.pdf").exists()
-    halo_sigma_rcut_plot = outputs.output_dir / "halo_sigma_rcut_recovery.pdf"
+    assert not (outputs.output_dir / "mock_sigma_rcut_recovery_stage1.pdf").exists()
+    halo_sigma_rcut_plot = outputs.output_dir / "mock_halo_sigma_rcut_recovery.pdf"
     assert halo_sigma_rcut_plot.exists()
     assert halo_sigma_rcut_plot.stat().st_size > 0
-    assert not (outputs.output_dir / "halo_sigma_rcut_recovery_stage1.pdf").exists()
-    bcg_sigma_rcut_plot = outputs.output_dir / "bcg_sigma_rcut_recovery.pdf"
+    assert not (outputs.output_dir / "mock_halo_sigma_rcut_recovery_stage1.pdf").exists()
+    bcg_sigma_rcut_plot = outputs.output_dir / "mock_bcg_sigma_rcut_recovery.pdf"
     assert bcg_sigma_rcut_plot.exists()
     assert bcg_sigma_rcut_plot.stat().st_size > 0
-    assert not (outputs.output_dir / "bcg_sigma_rcut_recovery_stage1.pdf").exists()
+    assert not (outputs.output_dir / "mock_bcg_sigma_rcut_recovery_stage1.pdf").exists()
     table = pd.read_csv(outputs.parameter_table)
     assert set(table["stage"]) == {"stage1_backprojected_centroid_fit"}
 
@@ -20069,7 +20578,7 @@ def test_subhalo_shmf_outputs_create_plot_and_tables(tmp_path: Path, monkeypatch
 
     assert seed_table is not None and seed_table.exists()
     assert summary_table is not None and summary_table.exists()
-    assert [path.name for path in plot_paths] == ["subhalo_recovery_stage1_shmf.pdf", "subhalo_recovery_shmf.pdf"]
+    assert [path.name for path in plot_paths] == ["mock_subhalo_recovery_stage1_shmf.pdf", "mock_subhalo_recovery_shmf.pdf"]
     for path in plot_paths:
         assert path.exists()
         assert path.stat().st_size > 0
@@ -20118,7 +20627,7 @@ def test_aggregate_bias_summary_splits_fractional_and_absolute_parameters(tmp_pa
                 "variant": "anisotropic",
                 "stage": "stage1_backprojected_centroid_fit",
                 "stage_label": "Stage 1",
-                "method_label": "Stage 1 use_magnitude_likelihood=False",
+                "method_label": "Stage 1 No flux",
                 "truth": 760.0,
                 "median": 780.0,
                 "q16": 760.0,
@@ -20132,7 +20641,7 @@ def test_aggregate_bias_summary_splits_fractional_and_absolute_parameters(tmp_pa
                 "variant": "anisotropic",
                 "stage": "stage1_backprojected_centroid_fit",
                 "stage_label": "Stage 1",
-                "method_label": "Stage 1 use_magnitude_likelihood=False",
+                "method_label": "Stage 1 No flux",
                 "truth": 0.0,
                 "median": 0.045,
                 "q16": 0.02,

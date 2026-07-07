@@ -16,8 +16,10 @@ from matplotlib.colors import to_rgb
 from matplotlib.patches import Ellipse
 from matplotlib.lines import Line2D
 
+import h5py
+
 from lenscluster.plot_style import apply_lenscluster_plot_style
-from lenscluster.utils import log10_dpie_mass_msun
+from lenscluster.utils import DPIE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN, log10_dpie_mass_msun
 
 DEFAULT_RUN_NAME = "single_bcg_production"
 DEFAULT_STAGES = ("stage1_backprojected_centroid_fit", "stage2_free_source_forward_fit")
@@ -50,8 +52,8 @@ STAGE_LABELS = {
     "stage2_free_source_forward_fit": "Stage 2",
 }
 VARIANT_LABELS = {
-    "anisotropic": "use_magnitude_likelihood=False",
-    "anisotropic_maglikelihood": "use_magnitude_likelihood=True",
+    "anisotropic": "No flux",
+    "anisotropic_maglikelihood": "Flux",
     "isotropic": "Isotropic",
 }
 VARIANT_COLORS = {
@@ -68,6 +70,7 @@ VARIANT_MARKERS = {
     "anisotropic_maglikelihood": "D",
     "isotropic": "s",
 }
+AGGREGATE_LEGEND_FONT_SIZE = 16
 JOINT_SIGMA_RCUT_SPECS = {
     "potfile": {
         "sigma_parameter": "potfile.sigma",
@@ -94,19 +97,10 @@ JOINT_SCALING_PARAMETERS = tuple(
     for parameter in (spec["sigma_parameter"], spec["rcut_parameter"])
 )
 JOINT_SCALING_LEVELS = (2.30, 5.99)
-METHOD_JITTER = {
-    ("stage1_backprojected_centroid_fit", "anisotropic"): -0.018,
-    ("stage1_backprojected_centroid_fit", "anisotropic_maglikelihood"): -0.006,
-    ("stage1_backprojected_centroid_fit", "isotropic"): 0.0,
-    ("stage2_free_source_forward_fit", "anisotropic"): 0.006,
-    ("stage2_free_source_forward_fit", "anisotropic_maglikelihood"): 0.018,
-    ("stage2_free_source_forward_fit", "isotropic"): 0.03,
-}
-SEED_VARIANT_JITTER = {
-    "anisotropic": -0.015,
-    "anisotropic_maglikelihood": 0.015,
-    "isotropic": 0.03,
-}
+AGGREGATE_PARAMETER_POINT_ALPHA = 0.58
+IMAGE_RESIDUAL_DISTRIBUTION_RANGE_QUANTILE = 0.99
+IMAGE_RESIDUAL_DISTRIBUTION_RANGE_PADDING = 1.10
+IMAGE_RESIDUAL_DISTRIBUTION_RANGE_STEP_ARCSEC = 0.05
 FRACTIONAL_BIAS_SUFFIXES = (
     ".v_disp",
     ".core_radius_kpc",
@@ -140,8 +134,11 @@ class AggregatePlotOutputs:
     aggregate_parameter_table: Path
     inventory_table: Path
     magnification_table: Path | None
+    image_residual_table: Path | None
+    image_residual_draws_table: Path | None
     subhalo_shmf_seed_table: Path | None
     subhalo_shmf_summary_table: Path | None
+    m2d_aperture_table: Path | None
     plot_paths: tuple[Path, ...]
 
 
@@ -405,6 +402,180 @@ def collect_magnification_recovery(
     return magnification_df, inventory_df
 
 
+def collect_image_residual_recovery(
+    campaign_root: str | Path,
+    *,
+    run_name: str = DEFAULT_RUN_NAME,
+    stages: tuple[str, ...] = DEFAULT_STAGES,
+    variants: tuple[str, ...] = DEFAULT_VARIANTS,
+    strict: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    root = Path(campaign_root)
+    run_root = root / run_name
+    if not run_root.exists():
+        raise FileNotFoundError(f"Run directory does not exist: {run_root}")
+    campaign = root.name
+    residual_rows: list[dict[str, Any]] = []
+    inventory_rows: list[dict[str, Any]] = []
+    seed_dirs = sorted(path for path in run_root.glob("seed_*") if path.is_dir())
+    if not seed_dirs:
+        raise FileNotFoundError(f"No seed_* directories found under {run_root}.")
+    for seed_dir in seed_dirs:
+        seed = _seed_from_dir(seed_dir)
+        for variant in variants:
+            for stage in stages:
+                result_path = seed_dir / variant / "recovery" / stage / "results.json"
+                inventory = {
+                    "campaign": campaign,
+                    "run_name": run_name,
+                    "seed": seed,
+                    "variant": variant,
+                    "stage": stage,
+                    "stage_label": stage_label(stage),
+                    "method_label": method_label(stage, variant),
+                    "result_path": str(result_path),
+                    "exists": result_path.exists(),
+                    "loaded": False,
+                    "message": "",
+                }
+                if not result_path.exists():
+                    message = f"Missing aggregate image residual input: {result_path}"
+                    inventory["message"] = message
+                    inventory_rows.append(inventory)
+                    if strict:
+                        raise FileNotFoundError(message)
+                    warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    continue
+                try:
+                    records = _table_records_from_recovery_result(result_path, stage, "posterior_image_rms")
+                except Exception as exc:
+                    message = f"Could not read image residual RMS from {result_path}: {type(exc).__name__}: {exc}"
+                    inventory["message"] = message
+                    inventory_rows.append(inventory)
+                    if strict:
+                        raise
+                    warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    continue
+                inventory["loaded"] = True
+                inventory["message"] = f"loaded {len(records)} posterior image RMS rows"
+                inventory_rows.append(inventory)
+                for record in records:
+                    row = {
+                        "campaign": campaign,
+                        "run_name": run_name,
+                        "seed": seed,
+                        "variant": variant,
+                        "stage": stage,
+                        "stage_label": stage_label(stage),
+                        "method_label": method_label(stage, variant),
+                        "result_path": str(result_path),
+                    }
+                    row.update(record)
+                    residual_rows.append(row)
+    residual_df = pd.DataFrame(residual_rows)
+    inventory_df = pd.DataFrame(inventory_rows)
+    if not residual_df.empty:
+        for column in (
+            "draw_index",
+            "point_image_rms_arcsec",
+            "point_recovered_image_count",
+            "arc_aware_image_rms_arcsec",
+            "arc_aware_recovered_image_count",
+            "arc_supported_image_count",
+            "total_image_count",
+            "exact_failed_family_count",
+        ):
+            if column in residual_df:
+                residual_df[column] = pd.to_numeric(residual_df[column], errors="coerce")
+    return residual_df, inventory_df
+
+
+def collect_image_residual_draws_recovery(
+    campaign_root: str | Path,
+    *,
+    run_name: str = DEFAULT_RUN_NAME,
+    stages: tuple[str, ...] = DEFAULT_STAGES,
+    variants: tuple[str, ...] = DEFAULT_VARIANTS,
+    strict: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    root = Path(campaign_root)
+    run_root = root / run_name
+    if not run_root.exists():
+        raise FileNotFoundError(f"Run directory does not exist: {run_root}")
+    campaign = root.name
+    residual_rows: list[dict[str, Any]] = []
+    inventory_rows: list[dict[str, Any]] = []
+    seed_dirs = sorted(path for path in run_root.glob("seed_*") if path.is_dir())
+    if not seed_dirs:
+        raise FileNotFoundError(f"No seed_* directories found under {run_root}.")
+    for seed_dir in seed_dirs:
+        seed = _seed_from_dir(seed_dir)
+        for variant in variants:
+            for stage in stages:
+                result_path = seed_dir / variant / "recovery" / stage / "results.json"
+                inventory = {
+                    "campaign": campaign,
+                    "run_name": run_name,
+                    "seed": seed,
+                    "variant": variant,
+                    "stage": stage,
+                    "stage_label": stage_label(stage),
+                    "method_label": method_label(stage, variant),
+                    "result_path": str(result_path),
+                    "exists": result_path.exists(),
+                    "loaded": False,
+                    "message": "",
+                }
+                if not result_path.exists():
+                    message = f"Missing aggregate image residual-draw input: {result_path}"
+                    inventory["message"] = message
+                    inventory_rows.append(inventory)
+                    if strict:
+                        raise FileNotFoundError(message)
+                    warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    continue
+                try:
+                    records = _table_records_from_recovery_result(result_path, stage, "posterior_image_residual_draws")
+                except Exception as exc:
+                    message = f"Could not read image residual draws from {result_path}: {type(exc).__name__}: {exc}"
+                    inventory["message"] = message
+                    inventory_rows.append(inventory)
+                    if strict:
+                        raise
+                    warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    continue
+                inventory["loaded"] = True
+                inventory["message"] = f"loaded {len(records)} posterior image residual rows"
+                inventory_rows.append(inventory)
+                for record in records:
+                    row = {
+                        "campaign": campaign,
+                        "run_name": run_name,
+                        "seed": seed,
+                        "variant": variant,
+                        "stage": stage,
+                        "stage_label": stage_label(stage),
+                        "method_label": method_label(stage, variant),
+                        "result_path": str(result_path),
+                    }
+                    row.update(record)
+                    residual_rows.append(row)
+    residual_df = pd.DataFrame(residual_rows)
+    inventory_df = pd.DataFrame(inventory_rows)
+    if not residual_df.empty:
+        for column in (
+            "draw_index",
+            "point_image_residual_arcsec",
+            "arc_aware_image_residual_arcsec",
+        ):
+            if column in residual_df:
+                residual_df[column] = pd.to_numeric(residual_df[column], errors="coerce")
+        for column in ("point_recovered", "arc_aware_recovered", "arc_supported", "exact_failed"):
+            if column in residual_df:
+                residual_df[column] = residual_df[column].astype(bool)
+    return residual_df, inventory_df
+
+
 def finite_recovery_rows(parameter_df: pd.DataFrame) -> pd.DataFrame:
     required = ["truth", "median", "q16", "q84"]
     missing = [column for column in required if column not in parameter_df]
@@ -484,34 +655,12 @@ def aggregate_parameter_recovery(
     return pd.DataFrame(rows)
 
 
-def _jittered_truth(values: np.ndarray, parameter: str, stage: str, variant: str) -> np.ndarray:
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        return values
-    span = float(np.nanmax(finite) - np.nanmin(finite))
-    scale = span if span > 0.0 else max(float(np.nanmax(np.abs(finite))), 1.0)
-    return values + METHOD_JITTER.get((stage, variant), 0.0) * scale
+def _truth_x_positions(values: np.ndarray) -> np.ndarray:
+    return values
 
 
-def _jittered_seed_truth(values: np.ndarray, seeds: np.ndarray, variant: str) -> np.ndarray:
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        return values
-    span = float(np.nanmax(finite) - np.nanmin(finite))
-    scale = span if span > 0.0 else max(float(np.nanmax(np.abs(finite))), 1.0)
-    seed_values = pd.Series(seeds).dropna().astype(int).drop_duplicates().sort_values().to_list()
-    if len(seed_values) <= 1:
-        seed_offsets = {seed: 0.0 for seed in seed_values}
-    else:
-        centered = np.linspace(-0.5, 0.5, len(seed_values))
-        seed_offsets = {seed: 0.028 * float(offset) for seed, offset in zip(seed_values, centered)}
-    jitter = np.full_like(values, SEED_VARIANT_JITTER.get(str(variant), 0.0) * scale, dtype=float)
-    for index, seed in enumerate(seeds):
-        try:
-            jitter[index] += seed_offsets.get(int(seed), 0.0) * scale
-        except (TypeError, ValueError):
-            continue
-    return values + jitter
+def _seed_truth_x_positions(values: np.ndarray) -> np.ndarray:
+    return values
 
 
 def _axis_limits(*arrays: np.ndarray) -> tuple[float, float] | None:
@@ -582,7 +731,7 @@ def _plot_recovery_page(
             q84 = group["q84"].to_numpy(dtype=float)
             truth_q16 = group["truth_q16"].to_numpy(dtype=float) if "truth_q16" in group else truth
             truth_q84 = group["truth_q84"].to_numpy(dtype=float) if "truth_q84" in group else truth
-            x = _jittered_truth(truth, parameter, stage, variant)
+            x = _truth_x_positions(truth)
             yerr = [np.maximum(0.0, median - q16), np.maximum(0.0, q84 - median)]
             xerr = [np.maximum(0.0, truth - truth_q16), np.maximum(0.0, truth_q84 - truth)]
             ax.errorbar(
@@ -608,7 +757,7 @@ def _plot_recovery_page(
                 facecolors=_stage_marker_facecolor(stage, variant_color),
                 edgecolors=_stage_marker_edgecolor(stage, variant_color),
                 linewidths=0.75,
-                alpha=0.86,
+                alpha=AGGREGATE_PARAMETER_POINT_ALPHA,
                 zorder=2,
                 label=method_label(stage, variant),
             )
@@ -665,8 +814,8 @@ def _paper_recovery_stage(stages: tuple[str, ...]) -> str:
 
 def _paper_plot_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
     if str(stage) == str(primary_stage):
-        return output_path / "parameter_recovery_paper"
-    return output_path / f"parameter_recovery_{stage_alias(stage)}_paper"
+        return output_path / "mock_parameter_recovery_paper"
+    return output_path / f"mock_parameter_recovery_{stage_alias(stage)}_paper"
 
 
 def source_position_recovery_rows(parameter_df: pd.DataFrame) -> pd.DataFrame:
@@ -704,7 +853,7 @@ def _draw_seed_parameter_axis(ax: plt.Axes, page_df: pd.DataFrame, parameter: st
         q16 = group["q16"].to_numpy(dtype=float)
         q84 = group["q84"].to_numpy(dtype=float)
         seeds = group["seed"].to_numpy() if "seed" in group else np.arange(len(group))
-        x = _jittered_seed_truth(truth, seeds, variant)
+        x = _seed_truth_x_positions(truth)
         yerr = [np.maximum(0.0, median - q16), np.maximum(0.0, q84 - median)]
         ax.errorbar(
             x,
@@ -728,7 +877,7 @@ def _draw_seed_parameter_axis(ax: plt.Axes, page_df: pd.DataFrame, parameter: st
             facecolors=_stage_marker_facecolor(stage, variant_color),
             edgecolors=_stage_marker_edgecolor(stage, variant_color),
             linewidths=0.75,
-            alpha=0.86,
+            alpha=AGGREGATE_PARAMETER_POINT_ALPHA,
             zorder=2,
             label=variant_label(variant),
         )
@@ -762,7 +911,7 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
         q16 = group["q16"].to_numpy(dtype=float)
         q84 = group["q84"].to_numpy(dtype=float)
         seeds = group["seed"].to_numpy() if "seed" in group else np.arange(len(group))
-        x = _jittered_seed_truth(truth, seeds, variant)
+        x = _seed_truth_x_positions(truth)
         yerr = [np.maximum(0.0, median - q16), np.maximum(0.0, q84 - median)]
         ax.errorbar(
             x,
@@ -786,7 +935,7 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
             facecolors=_stage_marker_facecolor(stage, variant_color),
             edgecolors=_stage_marker_edgecolor(stage, variant_color),
             linewidths=0.75,
-            alpha=0.86,
+            alpha=AGGREGATE_PARAMETER_POINT_ALPHA,
             zorder=2,
         )
     limits = _axis_limits(
@@ -816,7 +965,7 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
             for variant in _ordered_variants_from_df(df)
             for color in (VARIANT_COLORS.get(variant, "0.35"),)
         ]
-        ax.legend(handles=handles, loc="best", frameon=False)
+        ax.legend(handles=handles, loc="best", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
     return True
 
 
@@ -870,7 +1019,13 @@ def _add_variant_legend(fig: plt.Figure, *, variants: tuple[str, ...] = DEFAULT_
         for variant in variants
         for color in (VARIANT_COLORS.get(variant, "0.35"),)
     ]
-    fig.legend(handles=variant_handles, loc="upper center", ncol=len(variant_handles), frameon=False)
+    fig.legend(
+        handles=variant_handles,
+        loc="upper center",
+        ncol=len(variant_handles),
+        frameon=False,
+        fontsize=AGGREGATE_LEGEND_FONT_SIZE,
+    )
 
 
 def _add_method_legend(fig: plt.Figure, *, variants: tuple[str, ...] = DEFAULT_VARIANTS) -> None:
@@ -906,6 +1061,7 @@ def _add_method_legend(fig: plt.Figure, *, variants: tuple[str, ...] = DEFAULT_V
         loc="upper center",
         ncol=len(variant_handles) + len(stage_handles),
         frameon=False,
+        fontsize=AGGREGATE_LEGEND_FONT_SIZE,
     )
 
 
@@ -1196,8 +1352,160 @@ def _finite_magnification_rows(magnification_df: pd.DataFrame) -> pd.DataFrame:
 
 def _magnification_recovery_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
     if str(stage) == str(primary_stage):
-        return output_path / "magnification_recovery"
-    return output_path / f"magnification_recovery_{stage_alias(stage)}"
+        return output_path / "mock_magnification_recovery"
+    return output_path / f"mock_magnification_recovery_{stage_alias(stage)}"
+
+
+def _image_residual_recovery_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
+    if str(stage) == str(primary_stage):
+        return output_path / "mock_image_residual_recovery"
+    return output_path / f"mock_image_residual_recovery_{stage_alias(stage)}"
+
+
+def _image_residual_distribution_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
+    if str(stage) == str(primary_stage):
+        return output_path / "mock_image_residual_distribution"
+    return output_path / f"mock_image_residual_distribution_{stage_alias(stage)}"
+
+
+def image_residual_seed_summary_rows(image_residual_df: pd.DataFrame) -> pd.DataFrame:
+    if image_residual_df.empty:
+        return pd.DataFrame()
+    metric_columns = (
+        "point_image_rms_arcsec",
+        "arc_aware_image_rms_arcsec",
+        "point_recovered_image_count",
+        "arc_aware_recovered_image_count",
+        "arc_supported_image_count",
+        "total_image_count",
+    )
+    if not any(column in image_residual_df for column in metric_columns):
+        return pd.DataFrame()
+    group_columns = [
+        column
+        for column in ("campaign", "run_name", "seed", "variant", "stage", "stage_label", "method_label", "result_path")
+        if column in image_residual_df
+    ]
+    rows: list[dict[str, Any]] = []
+    for keys, group in image_residual_df.groupby(group_columns, sort=False, dropna=False):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        row = dict(zip(group_columns, key_values))
+        for column in metric_columns:
+            if column not in group:
+                continue
+            values = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=float)
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                row[f"{column}_q16"] = np.nan
+                row[f"{column}_q50"] = np.nan
+                row[f"{column}_q84"] = np.nan
+                row[f"{column}_std"] = np.nan
+                continue
+            row[f"{column}_q16"] = float(np.nanquantile(values, 0.16))
+            row[f"{column}_q50"] = float(np.nanmedian(values))
+            row[f"{column}_q84"] = float(np.nanquantile(values, 0.84))
+            row[f"{column}_std"] = float(np.nanstd(values, ddof=0))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _image_residual_distribution_range_max(residuals: np.ndarray) -> float:
+    finite = np.asarray(residuals, dtype=float)
+    finite = finite[np.isfinite(finite) & (finite >= 0.0)]
+    if finite.size == 0:
+        return 1.0e-6
+    robust_max = float(np.nanquantile(finite, IMAGE_RESIDUAL_DISTRIBUTION_RANGE_QUANTILE))
+    padded = max(robust_max * IMAGE_RESIDUAL_DISTRIBUTION_RANGE_PADDING, 1.0e-6)
+    step = IMAGE_RESIDUAL_DISTRIBUTION_RANGE_STEP_ARCSEC
+    if not np.isfinite(step) or step <= 0.0:
+        return padded
+    return float(np.ceil(padded / step) * step)
+
+
+def image_residual_distribution_summary_rows(
+    image_residual_draws_df: pd.DataFrame,
+    *,
+    bin_count: int = 24,
+) -> pd.DataFrame:
+    required = {"variant", "draw_index", "arc_aware_image_residual_arcsec"}
+    if image_residual_draws_df.empty or not required <= set(image_residual_draws_df.columns):
+        return pd.DataFrame()
+    df = image_residual_draws_df.copy()
+    if "arc_aware_recovered" in df:
+        recovered = df["arc_aware_recovered"].astype(bool).to_numpy(dtype=bool)
+    else:
+        recovered = np.ones(len(df), dtype=bool)
+    if "exact_failed" in df:
+        usable = ~df["exact_failed"].astype(bool).to_numpy(dtype=bool)
+    else:
+        usable = np.ones(len(df), dtype=bool)
+    residual = pd.to_numeric(df["arc_aware_image_residual_arcsec"], errors="coerce").to_numpy(dtype=float)
+    finite_recovered = usable & recovered & np.isfinite(residual) & (residual >= 0.0)
+    if not np.any(finite_recovered):
+        return pd.DataFrame()
+    max_residual = _image_residual_distribution_range_max(residual[finite_recovered])
+    edges = np.linspace(0.0, max(max_residual, 1.0e-6), int(bin_count) + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    group_columns = [
+        column
+        for column in ("campaign", "run_name", "seed", "variant", "stage", "stage_label", "method_label", "draw_index")
+        if column in df
+    ]
+    sample_rows: list[dict[str, Any]] = []
+    for keys, group in df.groupby(group_columns, sort=False, dropna=False):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_dict = dict(zip(group_columns, key_values))
+        group_residual = pd.to_numeric(group["arc_aware_image_residual_arcsec"], errors="coerce").to_numpy(dtype=float)
+        group_recovered = group["arc_aware_recovered"].astype(bool).to_numpy(dtype=bool) if "arc_aware_recovered" in group else np.ones(len(group), dtype=bool)
+        group_usable = ~group["exact_failed"].astype(bool).to_numpy(dtype=bool) if "exact_failed" in group else np.ones(len(group), dtype=bool)
+        denominator = int(np.count_nonzero(group_usable))
+        if denominator <= 0:
+            continue
+        value_mask = group_usable & group_recovered & np.isfinite(group_residual) & (group_residual >= 0.0)
+        counts, _ = np.histogram(group_residual[value_mask], bins=edges)
+        cumulative_counts = np.cumsum(counts).astype(float)
+        for index, center in enumerate(centers):
+            sample_rows.append(
+                {
+                    **group_dict,
+                    "bin_index": index,
+                    "bin_left": float(edges[index]),
+                    "bin_right": float(edges[index + 1]),
+                    "bin_center": float(center),
+                    "hist_count": float(counts[index]),
+                    "cumulative_fraction": float(cumulative_counts[index] / denominator),
+                    "usable_image_count": denominator,
+                }
+            )
+    sample_df = pd.DataFrame(sample_rows)
+    if sample_df.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, Any]] = []
+    summary_columns = [
+        column
+        for column in ("campaign", "run_name", "variant", "stage", "stage_label", "method_label", "bin_index")
+        if column in sample_df
+    ]
+    for keys, group in sample_df.groupby(summary_columns, sort=False, dropna=False):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        row = dict(zip(summary_columns, key_values))
+        row["bin_left"] = float(group["bin_left"].iloc[0])
+        row["bin_right"] = float(group["bin_right"].iloc[0])
+        row["bin_center"] = float(group["bin_center"].iloc[0])
+        for column in ("hist_count", "cumulative_fraction"):
+            values = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=float)
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                row[f"{column}_q16"] = np.nan
+                row[f"{column}_q50"] = np.nan
+                row[f"{column}_q84"] = np.nan
+                continue
+            q16, q50, q84 = np.nanquantile(values, [0.16, 0.50, 0.84])
+            row[f"{column}_q16"] = float(q16)
+            row[f"{column}_q50"] = float(q50)
+            row[f"{column}_q84"] = float(q84)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def joint_sigma_rcut_recovery_rows(parameter_df: pd.DataFrame, *, component: str = "potfile") -> pd.DataFrame:
@@ -1263,8 +1571,8 @@ def _sigma_rcut_recovery_output_base(output_path: Path, stage: str, primary_stag
         raise ValueError(f"component must be one of {sorted(JOINT_SIGMA_RCUT_SPECS)}.")
     filename = str(JOINT_SIGMA_RCUT_SPECS[component]["filename"])
     if str(stage) == str(primary_stage):
-        return output_path / filename
-    return output_path / f"{filename}_{stage_alias(stage)}"
+        return output_path / f"mock_{filename}"
+    return output_path / f"mock_{filename}_{stage_alias(stage)}"
 
 
 def _add_covariance_ellipses(
@@ -1409,7 +1717,13 @@ def plot_joint_sigma_rcut_recovery(
                 continue
             unique[label] = handle
         if unique:
-            ax.legend(unique.values(), unique.keys(), loc="best", frameon=False)
+            ax.legend(
+                unique.values(),
+                unique.keys(),
+                loc="best",
+                frameon=False,
+                fontsize=AGGREGATE_LEGEND_FONT_SIZE,
+            )
         fig.tight_layout()
         fig.savefig(path, dpi=300)
         plt.close(fig)
@@ -1511,7 +1825,177 @@ def plot_aggregate_magnification_recovery(
         ax.set_ylabel(r"Image $|\mu|$ (fit)")
         handles, labels = ax.get_legend_handles_labels()
         if labels:
-            ax.legend(handles, labels, loc="best", frameon=False)
+            ax.legend(handles, labels, loc="best", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
+        fig.tight_layout()
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
+        paths.append(path)
+    return tuple(paths)
+
+
+def plot_aggregate_image_residual_recovery(
+    image_residual_df: pd.DataFrame,
+    output_base: Path,
+    formats: tuple[str, ...],
+) -> tuple[Path, ...]:
+    summary_df = image_residual_seed_summary_rows(image_residual_df)
+    if summary_df.empty:
+        return tuple()
+    metric = "arc_aware_image_rms_arcsec"
+    q50_column = f"{metric}_q50"
+    if q50_column not in summary_df:
+        return tuple()
+    variants = _ordered_variants_from_df(summary_df)
+    x_positions = {variant: float(index) for index, variant in enumerate(variants)}
+    paths: list[Path] = []
+    for fmt in formats:
+        path = output_base.with_suffix(f".{fmt}")
+        fig, ax = plt.subplots(figsize=(4.8, 4.0))
+        legend_handles: dict[str, Any] = {}
+        for variant in variants:
+            group = summary_df[summary_df["variant"].astype(str) == variant].copy()
+            if group.empty:
+                continue
+            y = pd.to_numeric(group[q50_column], errors="coerce").to_numpy(dtype=float)
+            finite = np.isfinite(y)
+            if not np.any(finite):
+                continue
+            y = y[finite]
+            seed_offsets = np.linspace(-0.055, 0.055, y.size) if y.size > 1 else np.zeros(1)
+            x = np.full(y.size, x_positions[variant], dtype=float) + seed_offsets
+            color = VARIANT_COLORS.get(variant, "0.35")
+            marker = VARIANT_MARKERS.get(variant, "o")
+            ax.scatter(
+                x,
+                y,
+                s=18.0,
+                marker=marker,
+                facecolors="white",
+                edgecolors=color,
+                linewidths=0.70,
+                alpha=0.58,
+                zorder=1,
+                label="_nolegend_",
+            )
+            q16, q50, q84 = np.nanquantile(y, [0.16, 0.50, 0.84])
+            center_x = np.asarray([x_positions[variant]], dtype=float)
+            center_y = np.asarray([q50], dtype=float)
+            ax.errorbar(
+                center_x,
+                center_y,
+                yerr=[
+                    np.asarray([max(0.0, q50 - q16)], dtype=float),
+                    np.asarray([max(0.0, q84 - q50)], dtype=float),
+                ],
+                fmt="none",
+                ecolor=color,
+                elinewidth=1.15,
+                capsize=3.0,
+                capthick=1.15,
+                alpha=0.88,
+                zorder=2,
+                label="_nolegend_",
+            )
+            handle = ax.scatter(
+                center_x,
+                center_y,
+                s=56.0,
+                marker=marker,
+                facecolors=color,
+                edgecolors=_darken_color(color),
+                linewidths=0.85,
+                alpha=0.95,
+                zorder=3,
+                label=variant_label(variant),
+            )
+            legend_handles.setdefault(variant_label(variant), handle)
+        ax.set_xticks([x_positions[variant] for variant in variants])
+        ax.set_xticklabels([variant_label(variant) for variant in variants], rotation=18, ha="right")
+        ax.set_xlim(-0.5, max(0.5, len(variants) - 0.5))
+        ax.set_xlabel("Fit variant")
+        ax.set_ylabel("image RMS [arcsec]")
+        if legend_handles:
+            ax.legend(
+                legend_handles.values(),
+                legend_handles.keys(),
+                loc="best",
+                frameon=False,
+                fontsize=AGGREGATE_LEGEND_FONT_SIZE,
+            )
+        fig.tight_layout()
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
+        paths.append(path)
+    return tuple(paths)
+
+
+def plot_aggregate_image_residual_distribution(
+    image_residual_draws_df: pd.DataFrame,
+    output_base: Path,
+    formats: tuple[str, ...],
+) -> tuple[Path, ...]:
+    summary_df = image_residual_distribution_summary_rows(image_residual_draws_df)
+    if summary_df.empty:
+        return tuple()
+    variants = _ordered_variants_from_df(summary_df)
+    finite_right_edges = pd.to_numeric(summary_df["bin_right"], errors="coerce").to_numpy(dtype=float)
+    finite_right_edges = finite_right_edges[np.isfinite(finite_right_edges)]
+    x_max = float(np.nanmax(finite_right_edges)) if finite_right_edges.size else 1.0e-6
+    paths: list[Path] = []
+    for fmt in formats:
+        path = output_base.with_suffix(f".{fmt}")
+        fig, (hist_ax, cdf_ax) = plt.subplots(2, 1, figsize=(5.8, 6.2), sharex=True)
+        for variant in variants:
+            group = summary_df[summary_df["variant"].astype(str) == variant].sort_values("bin_center")
+            if group.empty:
+                continue
+            x = group["bin_center"].to_numpy(dtype=float)
+            color = VARIANT_COLORS.get(variant, "0.35")
+            hist_q16 = group["hist_count_q16"].to_numpy(dtype=float)
+            hist_q50 = group["hist_count_q50"].to_numpy(dtype=float)
+            hist_q84 = group["hist_count_q84"].to_numpy(dtype=float)
+            finite_hist = np.isfinite(x) & np.isfinite(hist_q16) & np.isfinite(hist_q50) & np.isfinite(hist_q84)
+            if np.any(finite_hist):
+                hist_ax.fill_between(
+                    x[finite_hist],
+                    hist_q16[finite_hist],
+                    hist_q84[finite_hist],
+                    color=color,
+                    alpha=0.18,
+                    step="mid",
+                    linewidth=0.0,
+                )
+                hist_ax.step(
+                    x[finite_hist],
+                    hist_q50[finite_hist],
+                    where="mid",
+                    color=color,
+                    linewidth=2.0,
+                    label=variant_label(variant),
+                )
+            cdf_q16 = group["cumulative_fraction_q16"].to_numpy(dtype=float)
+            cdf_q50 = group["cumulative_fraction_q50"].to_numpy(dtype=float)
+            cdf_q84 = group["cumulative_fraction_q84"].to_numpy(dtype=float)
+            finite_cdf = np.isfinite(x) & np.isfinite(cdf_q16) & np.isfinite(cdf_q50) & np.isfinite(cdf_q84)
+            if np.any(finite_cdf):
+                cdf_ax.fill_between(
+                    x[finite_cdf],
+                    cdf_q16[finite_cdf],
+                    cdf_q84[finite_cdf],
+                    color=color,
+                    alpha=0.18,
+                    step="mid",
+                    linewidth=0.0,
+                )
+                cdf_ax.step(x[finite_cdf], cdf_q50[finite_cdf], where="mid", color=color, linewidth=2.0)
+        hist_ax.set_ylabel("median N images")
+        cdf_ax.set_ylabel("fraction recovered")
+        cdf_ax.set_xlabel("image residual [arcsec]")
+        cdf_ax.set_xlim(0.0, x_max)
+        cdf_ax.set_ylim(-0.03, 1.03)
+        handles, labels = hist_ax.get_legend_handles_labels()
+        if labels:
+            hist_ax.legend(handles, labels, loc="best", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
         fig.tight_layout()
         fig.savefig(path, dpi=300)
         plt.close(fig)
@@ -1926,7 +2410,7 @@ def plot_subhalo_shmf_summary(
         if np.isfinite(y_ceiling) and y_ceiling > 0.0:
             top_ax.set_ylim(0.0, y_ceiling)
         top_ax.set_ylabel(r"$dN/d\log M$")
-        top_ax.legend(loc="best", frameon=False)
+        top_ax.legend(loc="best", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
         ratio_ax.axhline(1.0, color="0.25", linewidth=1.0)
         ratio_ax.set_xlabel(r"$\log(M/M_\odot)$")
         ratio_ax.set_ylabel("Recovered / Truth")
@@ -1939,8 +2423,8 @@ def plot_subhalo_shmf_summary(
 
 def _subhalo_shmf_output_base(output_path: Path, stage: str, primary_stage: str) -> Path:
     if str(stage) == str(primary_stage):
-        return output_path / "subhalo_recovery_shmf"
-    return output_path / f"subhalo_recovery_{stage_alias(stage)}_shmf"
+        return output_path / "mock_subhalo_recovery_shmf"
+    return output_path / f"mock_subhalo_recovery_{stage_alias(stage)}_shmf"
 
 
 def write_subhalo_shmf_outputs(
@@ -1992,6 +2476,535 @@ def write_subhalo_shmf_outputs(
     return seed_table, summary_table, tuple(plot_paths)
 
 
+# --------------------------------------------------------------------------------------
+# Enclosed projected mass profile M2D(<R) recovery (total + component decomposition)
+# --------------------------------------------------------------------------------------
+
+M2D_APERTURE_RADII_KPC = tuple(float(v) for v in np.geomspace(3.0, 500.0, 36))
+M2D_APERTURE_POSTERIOR_DRAWS = 24
+M2D_APERTURE_AZIMUTH_SAMPLES = 64
+M2D_APERTURE_INTEGRATION_RADII = 240
+M2D_GHOST_CHAIN_LOGPROB_DROP = 20.0
+M2D_COMPONENT_GROUPS = ("halo", "bcg", "members")
+M2D_COMPONENT_COLORS = {"halo": "#4477AA", "bcg": "#CC6677", "members": "#228833"}
+M2D_VARIANT_LINESTYLES = ("-", "--", "-.", ":")
+
+
+def _dpie_sigma0_msun_per_kpc2(v_disp: np.ndarray, core_kpc: np.ndarray, cut_kpc: np.ndarray) -> np.ndarray:
+    """Central surface density of the dPIE in the lenstool sigma convention
+    (Eliasdottir+07: Sigma0 = (3/4) sigma^2 (s^2 - a^2) / (G a s^2))."""
+    a = np.asarray(core_kpc, dtype=float)
+    s = np.asarray(cut_kpc, dtype=float)
+    v = np.asarray(v_disp, dtype=float)
+    return 0.75 * np.square(v) * (np.square(s) - np.square(a)) / (
+        DPIE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN * a * np.square(s)
+    )
+
+
+def dpie_m2d_enclosed_msun(radii_kpc: np.ndarray, v_disp: float, core_kpc: float, cut_kpc: float) -> np.ndarray:
+    """Analytic projected mass inside R for a centered circular dPIE [Msun].
+
+    M2D(<R) = 2 pi Sigma0 (a s/(s-a)) [sqrt(a^2+R^2) - a - sqrt(s^2+R^2) + s];
+    the R -> infinity limit equals the total mass (3/2) pi sigma^2 s (1-a^2/s^2)/G
+    used by `lenscluster.utils.log10_dpie_mass_msun`.
+    """
+    radii = np.asarray(radii_kpc, dtype=float)
+    a, s, v = float(core_kpc), float(cut_kpc), float(v_disp)
+    sigma0 = float(_dpie_sigma0_msun_per_kpc2(v, a, s))
+    return (
+        2.0
+        * np.pi
+        * sigma0
+        * (a * s / (s - a))
+        * (np.sqrt(a * a + radii * radii) - a - np.sqrt(s * s + radii * radii) + s)
+    )
+
+
+def _dpie_surface_density_msun_per_kpc2(
+    distance_kpc: np.ndarray,
+    v_disp: np.ndarray,
+    core_kpc: np.ndarray,
+    cut_kpc: np.ndarray,
+) -> np.ndarray:
+    """Circularized dPIE surface density at `distance_kpc` from each component center.
+
+    Broadcasts a trailing component axis: distance (..., C) with v/a/s of shape (C,).
+    """
+    a = np.asarray(core_kpc, dtype=float)
+    s = np.asarray(cut_kpc, dtype=float)
+    sigma0 = _dpie_sigma0_msun_per_kpc2(v_disp, a, s)
+    d = np.asarray(distance_kpc, dtype=float)
+    return sigma0 * (a * s / (s - a)) * (
+        1.0 / np.sqrt(np.square(a) + np.square(d)) - 1.0 / np.sqrt(np.square(s) + np.square(d))
+    )
+
+
+def aperture_m2d_profiles_msun(
+    radii_kpc: np.ndarray,
+    groups: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    integration_radii: int = M2D_APERTURE_INTEGRATION_RADII,
+    azimuth_samples: int = M2D_APERTURE_AZIMUTH_SAMPLES,
+) -> dict[str, np.ndarray]:
+    """M2D(<R) about the cluster center (0,0) per component group, numerically.
+
+    Each group maps to (v_disp, core_kpc, cut_kpc, x_kpc, y_kpc) component arrays.
+    Off-center components are handled by azimuthally averaging the circularized
+    surface density on a polar grid and integrating 2 pi r <Sigma>(r); ellipticity is
+    neglected (aperture masses are azimuthal integrals and our mock ellipticities are
+    mild). The 'total' key is the sum of the groups.
+    """
+    radii = np.asarray(radii_kpc, dtype=float)
+    r_max = float(radii.max())
+    r_grid = np.geomspace(max(1.0e-2, radii.min() / 20.0), r_max, int(integration_radii))
+    phi = np.linspace(0.0, 2.0 * np.pi, int(azimuth_samples), endpoint=False)
+    px = r_grid[:, None] * np.cos(phi)[None, :]
+    py = r_grid[:, None] * np.sin(phi)[None, :]
+    profiles: dict[str, np.ndarray] = {}
+    total_mean_sigma = np.zeros_like(r_grid)
+    for group, (v_disp, core_kpc, cut_kpc, x_kpc, y_kpc) in groups.items():
+        v = np.asarray(v_disp, dtype=float)
+        if v.size == 0:
+            profiles[group] = np.zeros_like(radii)
+            continue
+        distance = np.sqrt(
+            np.square(px[:, :, None] - np.asarray(x_kpc, dtype=float))
+            + np.square(py[:, :, None] - np.asarray(y_kpc, dtype=float))
+        )
+        sigma = _dpie_surface_density_msun_per_kpc2(distance, v, core_kpc, cut_kpc).sum(axis=-1)
+        mean_sigma = sigma.mean(axis=1)
+        total_mean_sigma += mean_sigma
+        profiles[group] = _cumulative_aperture_mass(radii, r_grid, mean_sigma)
+    profiles["total"] = _cumulative_aperture_mass(radii, r_grid, total_mean_sigma)
+    return profiles
+
+
+def _cumulative_aperture_mass(radii_kpc: np.ndarray, r_grid: np.ndarray, mean_sigma: np.ndarray) -> np.ndarray:
+    integrand = 2.0 * np.pi * r_grid * mean_sigma
+    inner_disk = np.pi * r_grid[0] ** 2 * mean_sigma[0]
+    cumulative = inner_disk + np.concatenate(
+        [[0.0], np.cumsum(0.5 * (integrand[1:] + integrand[:-1]) * np.diff(r_grid))]
+    )
+    return np.interp(np.asarray(radii_kpc, dtype=float), r_grid, cumulative)
+
+
+def _m2d_truth_groups(truth: dict[str, Any]) -> dict[str, tuple[np.ndarray, ...]]:
+    kpc = float(truth["kpc_per_arcsec"])
+    config = truth.get("config", {})
+
+    def _large(entry: dict[str, Any]) -> tuple[np.ndarray, ...]:
+        return (
+            np.asarray([float(entry["v_disp"])]),
+            np.asarray([float(entry["core_radius_arcsec"]) * kpc]),
+            np.asarray([float(entry["cut_radius_arcsec"]) * kpc]),
+            np.asarray([float(entry["x_centre"]) * kpc]),
+            np.asarray([float(entry["y_centre"]) * kpc]),
+        )
+
+    members = truth.get("subhalo_components", [])
+    return {
+        "halo": _large(config["halo"]),
+        "bcg": _large(config["bcg"]),
+        "members": (
+            np.asarray([float(m["v_disp"]) for m in members]),
+            np.asarray([float(m["core_radius_arcsec"]) * kpc for m in members]),
+            np.asarray([float(m["cut_radius_arcsec"]) * kpc for m in members]),
+            np.asarray([float(m["x_centre"]) * kpc for m in members]),
+            np.asarray([float(m["y_centre"]) * kpc for m in members]),
+        ),
+    }
+
+
+def _m2d_model_groups(
+    theta_by_name: dict[str, float],
+    member_catalog: list[dict[str, Any]],
+    kpc_per_arcsec: float,
+    *,
+    sigma_offset_width: float,
+    mass_offset_width: float,
+) -> dict[str, tuple[np.ndarray, ...]]:
+    """Physical dPIE components implied by one posterior draw.
+
+    Mirrors the packed-state mapping: members follow the scaling relation
+    (beta = 1 + gamma_ml - 2 alpha_sigma) with promoted members applying their
+    delta-unit offsets (radius delta = mass - 2 sigma, as in the sampler).
+    """
+    kpc = float(kpc_per_arcsec)
+
+    def _large(prefix: str) -> tuple[np.ndarray, ...]:
+        return (
+            np.asarray([theta_by_name[f"{prefix}.v_disp"]]),
+            np.asarray([theta_by_name[f"{prefix}.core_radius_kpc"]]),
+            np.asarray([theta_by_name[f"{prefix}.cut_radius_kpc"]]),
+            np.asarray([theta_by_name[f"{prefix}.x_centre"] * kpc]),
+            np.asarray([theta_by_name[f"{prefix}.y_centre"] * kpc]),
+        )
+
+    sigma_ref = float(theta_by_name["potfile.sigma"])
+    cut_ref = float(theta_by_name["potfile.cutkpc"])
+    core_ref = float(theta_by_name["potfile.corekpc"])
+    alpha = float(theta_by_name["potfile.alpha_sigma"])
+    gamma = float(theta_by_name["potfile.gamma_ml"])
+    beta = 1.0 + gamma - 2.0 * alpha
+    v_disp, core, cut, xs, ys = [], [], [], [], []
+    for member in member_catalog:
+        member_id = str(member["id"])
+        lum = float(member["luminosity_ratio"])
+        sigma_delta = theta_by_name.get(f"potfile.{member_id}.independent_free_log_sigma_delta_unit")
+        mass_delta = theta_by_name.get(f"potfile.{member_id}.independent_free_log_mass_delta_unit")
+        log_sigma = float(sigma_offset_width) * float(sigma_delta) if sigma_delta is not None else 0.0
+        log_mass = float(mass_offset_width) * float(mass_delta) if mass_delta is not None else 0.0
+        radius_factor = math.exp(log_mass - 2.0 * log_sigma)
+        v_disp.append(sigma_ref * lum**alpha * math.exp(log_sigma))
+        core.append(core_ref * lum**beta * radius_factor)
+        cut.append(cut_ref * lum**beta * radius_factor)
+        xs.append(float(member["x_arcsec"]) * kpc)
+        ys.append(float(member["y_arcsec"]) * kpc)
+    return {
+        "halo": _large("halo"),
+        "bcg": _large("bcg"),
+        "members": tuple(np.asarray(values, dtype=float) for values in (v_disp, core, cut, xs, ys)),
+    }
+
+
+def _m2d_posterior_draws(seed_dir: Path, variant: str, stage: str, max_draws: int) -> tuple[np.ndarray, list[str], dict[str, Any]] | None:
+    bundle_path = seed_dir / variant / "solver" / stage / "artifacts" / "plot_bundle.h5"
+    results_path = _combined_recovery_path(seed_dir, variant)
+    if not bundle_path.exists() or not results_path.exists():
+        return None
+    payload = _load_json(results_path)
+    stage_recovery = payload.get("validation", {}).get("recovery", {}).get(stage_alias(stage), {})
+    names = stage_recovery.get("parameter_names")
+    if not names:
+        return None
+    with h5py.File(bundle_path, "r") as bundle:
+        grouped = bundle["posterior/grouped_samples"][...]
+        grouped_log_prob = bundle["posterior/grouped_log_prob"][...]
+        runtime_args = json.loads(bundle["runtime_args_json"][()])
+    chain_log_prob = grouped_log_prob.mean(axis=1)
+    keep = chain_log_prob >= chain_log_prob.max() - M2D_GHOST_CHAIN_LOGPROB_DROP
+    samples = grouped[keep].reshape(-1, grouped.shape[-1])
+    if samples.shape[0] == 0:
+        return None
+    indices = np.unique(np.linspace(0, samples.shape[0] - 1, int(max_draws)).astype(int))
+    return samples[indices], list(names), runtime_args
+
+
+def collect_m2d_aperture_inputs(
+    campaign_root: str | Path,
+    *,
+    run_name: str = DEFAULT_RUN_NAME,
+    variants: tuple[str, ...] = DEFAULT_VARIANTS,
+    stage: str = "stage2_free_source_forward_fit",
+    strict: bool = False,
+    radii_kpc: tuple[float, ...] = M2D_APERTURE_RADII_KPC,
+    max_draws: int = M2D_APERTURE_POSTERIOR_DRAWS,
+) -> pd.DataFrame:
+    """Per-run M2D(<R) posterior quantiles and truth per component group."""
+    root = Path(campaign_root)
+    radii = np.asarray(radii_kpc, dtype=float)
+    rows: list[dict[str, Any]] = []
+    for seed_dir in sorted(path for path in (root / run_name).glob("seed_*") if path.is_dir()):
+        seed = _seed_from_dir(seed_dir)
+        truth_path = seed_dir / "mock" / "truth.json"
+        if not truth_path.exists():
+            message = f"Missing truth.json for M2D aperture recovery: {truth_path}"
+            if strict:
+                raise FileNotFoundError(message)
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
+            continue
+        truth = _load_json(truth_path)
+        kpc = float(truth["kpc_per_arcsec"])
+        truth_profiles = aperture_m2d_profiles_msun(radii, _m2d_truth_groups(truth))
+        member_catalog = truth.get("subhalos", [])
+        for variant in variants:
+            loaded = _m2d_posterior_draws(seed_dir, variant, stage, max_draws)
+            if loaded is None:
+                message = f"Missing posterior bundle for M2D aperture recovery: {seed_dir.name}/{variant}/{stage}"
+                if strict:
+                    raise FileNotFoundError(message)
+                warnings.warn(message, RuntimeWarning, stacklevel=2)
+                continue
+            draws, names, runtime_args = loaded
+            sigma_width = float(runtime_args.get("independent_scaling_free_log_sigma_offset_width", 0.0))
+            mass_width = float(runtime_args.get("independent_scaling_free_log_mass_offset_width", 0.0))
+            per_draw: dict[str, list[np.ndarray]] = {group: [] for group in (*M2D_COMPONENT_GROUPS, "total")}
+            for draw in draws:
+                theta_by_name = dict(zip(names, (float(value) for value in draw)))
+                groups = _m2d_model_groups(
+                    theta_by_name,
+                    member_catalog,
+                    kpc,
+                    sigma_offset_width=sigma_width,
+                    mass_offset_width=mass_width,
+                )
+                profiles = aperture_m2d_profiles_msun(radii, groups)
+                for group, profile in profiles.items():
+                    per_draw[group].append(profile)
+            for group, profile_list in per_draw.items():
+                stacked = np.stack(profile_list, axis=0)
+                q16, q50, q84 = np.percentile(stacked, [16.0, 50.0, 84.0], axis=0)
+                truth_profile = truth_profiles[group]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    ratio = np.where(truth_profile > 0.0, stacked / truth_profile, np.nan)
+                r16, r50, r84 = np.nanpercentile(ratio, [16.0, 50.0, 84.0], axis=0)
+                for k, radius in enumerate(radii):
+                    rows.append(
+                        {
+                            "campaign": root.name,
+                            "run_name": run_name,
+                            "seed": seed,
+                            "variant": variant,
+                            "stage": str(stage),
+                            "component": group,
+                            "radius_kpc": float(radius),
+                            "truth_m2d_msun": float(truth_profile[k]),
+                            "model_q16": float(q16[k]),
+                            "model_q50": float(q50[k]),
+                            "model_q84": float(q84[k]),
+                            "ratio_q16": float(r16[k]),
+                            "ratio_q50": float(r50[k]),
+                            "ratio_q84": float(r84[k]),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def build_m2d_aperture_summary(seed_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate per-run M2D quantiles across seeds.
+
+    Bands: `ratio_seed_q16/q84` = seed-to-seed spread of per-run medians (accuracy);
+    `ratio_post_q16/q84` = median per-run posterior interval (reported precision).
+    """
+    if seed_df.empty:
+        return pd.DataFrame()
+    grouped = seed_df.groupby(["stage", "variant", "component", "radius_kpc"])
+    summary = grouped.agg(
+        n_runs=("seed", "size"),
+        truth_median=("truth_m2d_msun", "median"),
+        model_median=("model_q50", "median"),
+        model_q16=("model_q16", "median"),
+        model_q84=("model_q84", "median"),
+        ratio_median=("ratio_q50", "median"),
+        ratio_seed_q16=("ratio_q50", lambda s: np.nanquantile(s, 0.16)),
+        ratio_seed_q84=("ratio_q50", lambda s: np.nanquantile(s, 0.84)),
+        ratio_post_q16=("ratio_q16", "median"),
+        ratio_post_q84=("ratio_q84", "median"),
+    ).reset_index()
+    return summary
+
+
+def _m2d_two_panel_axes() -> tuple[Any, Any, Any]:
+    fig, (top_ax, resid_ax) = plt.subplots(
+        2,
+        1,
+        figsize=(6.3, 5.4),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
+    )
+    return fig, top_ax, resid_ax
+
+
+def _m2d_finish_axes(top_ax: Any, resid_ax: Any, resid_values: np.ndarray) -> None:
+    top_ax.set_xscale("log")
+    top_ax.set_yscale("log")
+    top_ax.set_ylabel(r"$M_{\rm 2D}(<R)\ [M_\odot]$")
+    top_ax.grid(True, alpha=0.25)
+    top_ax.legend(loc="lower right", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
+    resid_ax.axhline(0.0, color="0.2", linestyle="--", linewidth=1.0)
+    finite = resid_values[np.isfinite(resid_values)]
+    limit = 0.1 if finite.size == 0 else float(min(0.5, max(0.1, 1.2 * np.max(np.abs(finite)))))
+    resid_ax.set_ylim(-limit, limit)
+    resid_ax.set_xlabel(r"$R$ [kpc]")
+    resid_ax.set_ylabel(r"$M_{\rm 2D}/M_{\rm 2D}^{\rm true} - 1$")
+    resid_ax.grid(True, alpha=0.25)
+
+
+def plot_m2d_aperture_recovery(
+    summary_df: pd.DataFrame,
+    output_base: Path,
+    formats: tuple[str, ...],
+) -> tuple[Path, ...]:
+    """Total enclosed-mass profile: truth + per-variant posterior, ratio residual below."""
+    totals = summary_df[summary_df["component"] == "total"]
+    if totals.empty:
+        return tuple()
+    paths: list[Path] = []
+    for fmt in formats:
+        path = output_base.with_suffix(f".{fmt}")
+        fig, top_ax, resid_ax = _m2d_two_panel_axes()
+        resid_collect: list[np.ndarray] = []
+        truth_drawn = False
+        for variant in _ordered_variants_from_df(totals):
+            selection = totals[totals["variant"] == variant].sort_values("radius_kpc")
+            if selection.empty:
+                continue
+            radius = selection["radius_kpc"].to_numpy(dtype=float)
+            color = VARIANT_COLORS.get(variant, "0.35")
+            if not truth_drawn:
+                top_ax.plot(
+                    radius,
+                    selection["truth_median"].to_numpy(dtype=float),
+                    color="0.2",
+                    linestyle="--",
+                    linewidth=1.4,
+                    label="truth",
+                )
+                truth_drawn = True
+            top_ax.fill_between(
+                radius,
+                selection["model_q16"].to_numpy(dtype=float),
+                selection["model_q84"].to_numpy(dtype=float),
+                color=color,
+                alpha=0.18,
+                linewidth=0.0,
+            )
+            top_ax.plot(
+                radius,
+                selection["model_median"].to_numpy(dtype=float),
+                color=color,
+                linewidth=1.8,
+                label=variant_label(variant),
+            )
+            ratio_median = selection["ratio_median"].to_numpy(dtype=float)
+            post_q16 = selection["ratio_post_q16"].to_numpy(dtype=float)
+            post_q84 = selection["ratio_post_q84"].to_numpy(dtype=float)
+            seed_q16 = selection["ratio_seed_q16"].to_numpy(dtype=float)
+            seed_q84 = selection["ratio_seed_q84"].to_numpy(dtype=float)
+            resid_ax.fill_between(radius, post_q16 - 1.0, post_q84 - 1.0, color=color, alpha=0.12, linewidth=0.0)
+            resid_ax.fill_between(radius, seed_q16 - 1.0, seed_q84 - 1.0, color=color, alpha=0.28, linewidth=0.0)
+            resid_ax.plot(radius, ratio_median - 1.0, color=color, linewidth=1.5)
+            resid_collect.extend([post_q16 - 1.0, post_q84 - 1.0, seed_q16 - 1.0, seed_q84 - 1.0])
+        _m2d_finish_axes(top_ax, resid_ax, np.concatenate(resid_collect) if resid_collect else np.asarray([]))
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        paths.append(path)
+    return tuple(paths)
+
+
+def plot_m2d_aperture_components(
+    summary_df: pd.DataFrame,
+    output_base: Path,
+    formats: tuple[str, ...],
+) -> tuple[Path, ...]:
+    """Component decomposition (halo/BCG/members): same two-panel layout, components
+    as colors and variants as line styles."""
+    components = summary_df[summary_df["component"].isin(M2D_COMPONENT_GROUPS)]
+    if components.empty:
+        return tuple()
+    variants = _ordered_variants_from_df(components)
+    paths: list[Path] = []
+    for fmt in formats:
+        path = output_base.with_suffix(f".{fmt}")
+        fig, top_ax, resid_ax = _m2d_two_panel_axes()
+        resid_collect: list[np.ndarray] = []
+        for group in M2D_COMPONENT_GROUPS:
+            color = M2D_COMPONENT_COLORS.get(group, "0.35")
+            truth_drawn = False
+            for variant_index, variant in enumerate(variants):
+                selection = components[
+                    (components["component"] == group) & (components["variant"] == variant)
+                ].sort_values("radius_kpc")
+                if selection.empty:
+                    continue
+                radius = selection["radius_kpc"].to_numpy(dtype=float)
+                if not truth_drawn:
+                    top_ax.plot(
+                        radius,
+                        selection["truth_median"].to_numpy(dtype=float),
+                        color=color,
+                        linestyle=":",
+                        linewidth=1.2,
+                        alpha=0.9,
+                    )
+                    truth_drawn = True
+                linestyle = M2D_VARIANT_LINESTYLES[variant_index % len(M2D_VARIANT_LINESTYLES)]
+                label = group if variant_index == 0 else None
+                top_ax.plot(
+                    radius,
+                    selection["model_median"].to_numpy(dtype=float),
+                    color=color,
+                    linestyle=linestyle,
+                    linewidth=1.6,
+                    label=label,
+                )
+                ratio_median = selection["ratio_median"].to_numpy(dtype=float)
+                seed_q16 = selection["ratio_seed_q16"].to_numpy(dtype=float)
+                seed_q84 = selection["ratio_seed_q84"].to_numpy(dtype=float)
+                if variant_index == 0:
+                    resid_ax.fill_between(radius, seed_q16 - 1.0, seed_q84 - 1.0, color=color, alpha=0.18, linewidth=0.0)
+                resid_ax.plot(radius, ratio_median - 1.0, color=color, linestyle=linestyle, linewidth=1.4)
+                resid_collect.extend([seed_q16 - 1.0, seed_q84 - 1.0, ratio_median - 1.0])
+        for variant_index, variant in enumerate(variants):
+            top_ax.plot(
+                [],
+                [],
+                color="0.3",
+                linestyle=M2D_VARIANT_LINESTYLES[variant_index % len(M2D_VARIANT_LINESTYLES)],
+                linewidth=1.6,
+                label=variant_label(variant),
+            )
+        top_ax.plot([], [], color="0.3", linestyle=":", linewidth=1.2, label="truth")
+        _m2d_finish_axes(top_ax, resid_ax, np.concatenate(resid_collect) if resid_collect else np.asarray([]))
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        paths.append(path)
+    return tuple(paths)
+
+
+def _m2d_output_base(output_path: Path, stage: str, primary_stage: str, *, components: bool) -> Path:
+    suffix = "_components" if components else ""
+    if str(stage) == str(primary_stage):
+        return output_path / f"mock_m2d_aperture_recovery{suffix}"
+    return output_path / f"mock_m2d_aperture_recovery_{stage_alias(stage)}{suffix}"
+
+
+def write_m2d_aperture_outputs(
+    campaign_root: str | Path,
+    output_path: Path,
+    *,
+    run_name: str = DEFAULT_RUN_NAME,
+    stages: tuple[str, ...] = DEFAULT_STAGES,
+    variants: tuple[str, ...] = DEFAULT_VARIANTS,
+    formats: tuple[str, ...] = DEFAULT_FORMATS,
+    strict: bool = False,
+) -> tuple[Path | None, tuple[Path, ...]]:
+    primary_stage = _paper_recovery_stage(stages)
+    seed_frames: list[pd.DataFrame] = []
+    plot_paths: list[Path] = []
+    for stage in tuple(str(value) for value in stages):
+        seed_df = collect_m2d_aperture_inputs(
+            campaign_root,
+            run_name=run_name,
+            variants=variants,
+            stage=stage,
+            strict=strict,
+        )
+        if seed_df.empty:
+            continue
+        seed_frames.append(seed_df)
+        summary_df = build_m2d_aperture_summary(seed_df)
+        plot_paths.extend(
+            plot_m2d_aperture_recovery(
+                summary_df,
+                _m2d_output_base(output_path, stage, primary_stage, components=False),
+                formats,
+            )
+        )
+        plot_paths.extend(
+            plot_m2d_aperture_components(
+                summary_df,
+                _m2d_output_base(output_path, stage, primary_stage, components=True),
+                formats,
+            )
+        )
+    if not seed_frames:
+        return None, tuple()
+    seed_table = output_path / "m2d_aperture_recovery_table.csv"
+    pd.concat(seed_frames, ignore_index=True).to_csv(seed_table, index=False)
+    return seed_table, tuple(plot_paths)
+
+
 def write_aggregate_plots(
     campaign_or_path: str | Path,
     *,
@@ -2029,10 +3042,26 @@ def write_aggregate_plots(
         variants=variants,
         strict=strict,
     )
+    image_residual_df, _image_residual_inventory_df = collect_image_residual_recovery(
+        campaign_root,
+        run_name=run_name,
+        stages=stages,
+        variants=variants,
+        strict=strict,
+    )
+    image_residual_draws_df, _image_residual_draws_inventory_df = collect_image_residual_draws_recovery(
+        campaign_root,
+        run_name=run_name,
+        stages=stages,
+        variants=variants,
+        strict=strict,
+    )
     parameter_table_path = output_path / "parameter_recovery_table.csv"
     aggregate_parameter_table_path = output_path / "aggregate_parameter_recovery_table.csv"
     inventory_path = output_path / "run_inventory.csv"
     magnification_table_path = output_path / "magnification_recovery_table.csv"
+    image_residual_table_path = output_path / "image_residual_recovery_table.csv"
+    image_residual_draws_table_path = output_path / "image_residual_draws_table.csv"
     aggregate_df = aggregate_parameter_recovery(
         parameter_df,
         seed_aggregation=seed_aggregation,
@@ -2044,6 +3073,10 @@ def write_aggregate_plots(
     inventory_df.to_csv(inventory_path, index=False)
     if not magnification_df.empty:
         magnification_df.to_csv(magnification_table_path, index=False)
+    if not image_residual_df.empty:
+        image_residual_df.to_csv(image_residual_table_path, index=False)
+    if not image_residual_draws_df.empty:
+        image_residual_draws_df.to_csv(image_residual_draws_table_path, index=False)
 
     apply_lenscluster_plot_style()
     paper_stage = _paper_recovery_stage(stages)
@@ -2069,14 +3102,14 @@ def write_aggregate_plots(
             _save_multipage_seed_recovery_plot(
                 seed_df,
                 seed_available_parameters,
-                output_path / "parameter_recovery_all",
+                output_path / "mock_parameter_recovery_all",
                 formats,
             )
         )
     plot_paths.extend(
         plot_parameter_bias_summary(
             aggregate_df,
-            output_path / "parameter_bias_summary",
+            output_path / "mock_parameter_bias_summary",
             formats,
             fractional_truth_floor=fractional_truth_floor,
         )
@@ -2104,6 +3137,28 @@ def write_aggregate_plots(
                     formats,
                 )
             )
+    if not image_residual_df.empty:
+        for stage in tuple(str(value) for value in stages):
+            stage_image_residual_df = image_residual_df[image_residual_df["stage"].astype(str) == stage].copy()
+            plot_paths.extend(
+                plot_aggregate_image_residual_recovery(
+                    stage_image_residual_df,
+                    _image_residual_recovery_output_base(output_path, stage, paper_stage),
+                    formats,
+                )
+            )
+    if not image_residual_draws_df.empty:
+        for stage in tuple(str(value) for value in stages):
+            stage_image_residual_draws_df = image_residual_draws_df[
+                image_residual_draws_df["stage"].astype(str) == stage
+            ].copy()
+            plot_paths.extend(
+                plot_aggregate_image_residual_distribution(
+                    stage_image_residual_draws_df,
+                    _image_residual_distribution_output_base(output_path, stage, paper_stage),
+                    formats,
+                )
+            )
     shmf_seed_table, shmf_summary_table, shmf_plot_paths = write_subhalo_shmf_outputs(
         campaign_root,
         output_path,
@@ -2114,14 +3169,27 @@ def write_aggregate_plots(
         strict=strict,
     )
     plot_paths.extend(shmf_plot_paths)
+    m2d_table, m2d_plot_paths = write_m2d_aperture_outputs(
+        campaign_root,
+        output_path,
+        run_name=run_name,
+        stages=stages,
+        variants=variants,
+        formats=formats,
+        strict=strict,
+    )
+    plot_paths.extend(m2d_plot_paths)
     return AggregatePlotOutputs(
         output_dir=output_path,
         parameter_table=parameter_table_path,
         aggregate_parameter_table=aggregate_parameter_table_path,
         inventory_table=inventory_path,
         magnification_table=magnification_table_path if not magnification_df.empty else None,
+        image_residual_table=image_residual_table_path if not image_residual_df.empty else None,
+        image_residual_draws_table=image_residual_draws_table_path if not image_residual_draws_df.empty else None,
         subhalo_shmf_seed_table=shmf_seed_table,
         subhalo_shmf_summary_table=shmf_summary_table,
+        m2d_aperture_table=m2d_table,
         plot_paths=tuple(plot_paths),
     )
 

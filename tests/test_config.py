@@ -930,6 +930,35 @@ def test_submit_mock_array_runs_anisotropic_position_and_magnitude_likelihood() 
     assert "Running anisotropic magnitude-likelihood fit" in script
 
 
+def test_submit_mock_array_campaign_name_prepends_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+    import hpc_scripts.submit_mock_array as submit_mock_array
+
+    class FrozenDateTime:
+        @classmethod
+        def now(cls) -> object:
+            from datetime import datetime
+
+            return datetime(2026, 7, 7, 14, 35)
+
+    monkeypatch.setattr(submit_mock_array, "datetime", FrozenDateTime)
+
+    assert submit_mock_array.make_campaign_name("flux_compare") == "jul7_1435_flux_compare"
+    with pytest.raises(argparse.ArgumentTypeError):
+        submit_mock_array.make_campaign_name("../bad")
+
+
+def test_submit_mock_array_requires_campaign(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import hpc_scripts.submit_mock_array as submit_mock_array
+
+    monkeypatch.setattr(sys, "argv", ["submit_mock_array.py", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        submit_mock_array.parse_args()
+    assert exc_info.value.code == 2
+
+
 def test_ff_sims_notebook_is_self_contained_and_config_native() -> None:
     notebook = nbformat.read("notebooks/run_ff_sims_fit.ipynb", as_version=4)
     source = _notebook_source("notebooks/run_ff_sims_fit.ipynb")

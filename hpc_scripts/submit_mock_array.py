@@ -40,12 +40,19 @@ def parse_seed_list(value: str) -> tuple[int, ...]:
     return tuple(seeds)
 
 
+def _validate_campaign_label(label: str) -> str:
+    if not label or label in {".", ".."} or "/" in label or "\\" in label:
+        raise argparse.ArgumentTypeError("--campaign must be a nonempty single path segment")
+    return label
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Submit mock-validation SLURM array jobs.")
     parser.add_argument(
         "--campaign",
-        default=None,
-        help="Campaign name passed to run_mock.xsh. Default: <date>_mock_validation.",
+        type=_validate_campaign_label,
+        required=True,
+        help="Campaign label. The submitted run name is always <date>_<campaign>.",
     )
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output directory passed to run_mock.xsh.")
     parser.add_argument("--preset", choices=("smoke", "production"), default=DEFAULT_PRESET)
@@ -69,9 +76,10 @@ def make_run_stamp() -> str:
     return f"{now.strftime('%b').lower()}{now.day}_{now.strftime('%I%M%p').lower()}"
 
 
-def make_campaign_name() -> str:
+def make_campaign_name(label: str) -> str:
+    label = _validate_campaign_label(str(label))
     now = datetime.now()
-    return f"{now.strftime('%b').lower()}{now.day}_{now:%H%M}_mock_validation"
+    return f"{now.strftime('%b').lower()}{now.day}_{now:%H%M}_{label}"
 
 
 def shell_array(values: tuple[int, ...]) -> str:
@@ -178,8 +186,7 @@ def submit_array(sbatch_path: Path, num_tasks: int) -> str:
 
 def main() -> None:
     args = parse_args()
-    if args.campaign is None:
-        args.campaign = make_campaign_name()
+    args.campaign = make_campaign_name(args.campaign)
     prefix = f"{args.campaign}_{args.preset}_{make_run_stamp()}"
     sbatch_path = write_sbatch_script(prefix, build_sbatch_script(prefix, args))
 
