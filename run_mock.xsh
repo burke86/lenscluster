@@ -142,7 +142,7 @@ def _solver_template(
         svi_steps = 10_000, 20_000, 20_000
         warmup = 20000, 20000
         samples = 1000, 1000
-        max_tree_depth = 8, 8
+        max_tree_depth = 8, 6
     else:
         svi_steps = 500, 20_000, 20_000
         warmup = 100, 100
