@@ -5736,6 +5736,15 @@ def run_single_bcg_validation(
                 f"catalog={paths.image_catalog_path} truth={paths.truth_path}"
             ),
         )
+        realized_mock_config = _caustic_config_from_truth(truth_payload)
+        _log(
+            config,
+            (
+                f"[load] realized large-halo positions halo=({realized_mock_config.halo.x_centre:.4g},"
+                f"{realized_mock_config.halo.y_centre:.4g}) bcg=({realized_mock_config.bcg.x_centre:.4g},"
+                f"{realized_mock_config.bcg.y_centre:.4g})"
+            ),
+        )
         if _resume_enabled(config):
             _log(config, f"[resume] refreshing validation outputs seed={seed} dir={realization_dir}")
         prefit_dir = seed_dir / "prefit"
@@ -5748,7 +5757,7 @@ def run_single_bcg_validation(
         )
         solver_output_dir = realization_dir
         solver_config = solver_config_for_single_bcg_mock(
-            replace(config, mock=mock_config),
+            replace(config, mock=realized_mock_config),
             paths=paths,
             seed=seed,
             output_dir=solver_output_dir,
@@ -5829,7 +5838,7 @@ def run_single_bcg_validation(
                     seed=seed,
                     realization_dir=realization_dir,
                     result_output_dir=stage_recovery_dir,
-                    mock_config=mock_config,
+                    mock_config=realized_mock_config,
                     paths=paths,
                     images=images,
                     truth_payload=truth_payload,
@@ -5852,7 +5861,7 @@ def run_single_bcg_validation(
                 seed=seed,
                 realization_dir=realization_dir,
                 result_output_dir=recovery_root,
-                mock_config=mock_config,
+                mock_config=realized_mock_config,
                 paths=paths,
                 images=images,
                 truth_payload=truth_payload,

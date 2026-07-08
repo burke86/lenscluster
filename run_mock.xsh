@@ -249,8 +249,6 @@ def build_config(
         subhalo_spatial_cut_radius_arcsec=180.0,
         subhalo_field_radius_arcsec=250.0,
         subhalo_force_core_count=0,
-        subhalo_alpha_sigma=0.25,
-        subhalo_gamma_ml=0.0,
         subhalo_sigma_scatter_dex=float(scatter_ln) / np.log(10.0),
         subhalo_cut_scatter_dex=0.0,
         source_magnitude_min=source_magnitude_min,

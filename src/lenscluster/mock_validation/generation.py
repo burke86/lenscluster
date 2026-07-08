@@ -107,6 +107,32 @@ class SingleBCGMockConfig:
     max_images_per_family: int | None = None
     primary_seed_grid_pixel_arcsec: float = DEFAULT_PRIMARY_SEED_GRID_PIXEL_ARCSEC
     subhalo_seed_grid_pixel_arcsec: float = DEFAULT_SUBHALO_SEED_GRID_PIXEL_ARCSEC
+    total_large_component_mass_min_msun: float = 5.0e14
+    total_large_component_mass_max_msun: float = 2.0e15
+    large_component_mass_pivot_msun: float = 7.6e14
+    halo_core_radius_pivot_kpc: float = 27.0
+    halo_core_radius_mass_slope: float = 1.0 / 3.0
+    halo_core_radius_scatter_dex: float = 0.08
+    halo_cut_radius_pivot_kpc: float = 1175.0
+    halo_cut_radius_mass_slope: float = 1.0 / 3.0
+    halo_cut_radius_scatter_dex: float = 0.08
+    bcg_mass_fraction_median: float = 0.02
+    bcg_mass_fraction_scatter_dex: float = 0.25
+    bcg_mass_fraction_min: float = 0.005
+    bcg_mass_fraction_max: float = 0.08
+    bcg_core_radius_pivot_kpc: float = 0.8
+    bcg_core_radius_mass_slope: float = 1.0 / 3.0
+    bcg_core_radius_scatter_dex: float = 0.10
+    bcg_cut_radius_pivot_kpc: float = 187.0
+    bcg_mass_pivot_msun: float = 1.7e13
+    bcg_cut_radius_mass_slope: float = 1.0 / 3.0
+    bcg_cut_radius_scatter_dex: float = 0.10
+    sampled_total_large_component_mass_msun: float | None = None
+    sampled_halo_mass_msun: float | None = None
+    sampled_bcg_mass_msun: float | None = None
+    sampled_bcg_mass_fraction: float | None = None
+    halo_position_half_width_arcsec: float = 10.0
+    bcg_position_offset_radius_arcsec: float = 2.0
     bcg_position_prior_half_width_arcsec: float = DEFAULT_BCG_POSITION_PRIOR_HALF_WIDTH_ARCSEC
     max_sources_to_try: int = 400
     caustic_compute_window_arcsec: float = DEFAULT_CAUSTIC_COMPUTE_WINDOW_ARCSEC
@@ -135,6 +161,16 @@ class SingleBCGMockConfig:
     subhalo_force_core_min_arcsec: float = 4.0
     subhalo_force_core_max_arcsec: float = 18.0
     subhalo_mag0: float = 17.0
+    subhalo_dpie_mass_ref_min_msun: float = 1.0e11
+    subhalo_dpie_mass_ref_max_msun: float = 3.0e12
+    subhalo_dpie_mass_pivot_msun: float = 1.0e12
+    subhalo_core_radius_pivot_kpc: float = 0.001
+    subhalo_core_radius_mass_slope: float = 1.0 / 3.0
+    subhalo_core_radius_scatter_dex: float = 0.0
+    subhalo_cut_radius_pivot_kpc: float = 187.0
+    subhalo_cut_radius_mass_slope: float = 1.0 / 3.0
+    subhalo_cut_radius_scatter_dex: float = 0.10
+    sampled_subhalo_dpie_mass_ref_msun: float | None = None
     subhalo_sigma_ref: float = 245.0
     subhalo_sigma_ref_std: float = 35.0
     subhalo_sigma_scatter_dex: float = 0.0
@@ -144,7 +180,11 @@ class SingleBCGMockConfig:
     subhalo_cut_upper_arcsec: float = 80.0
     subhalo_cut_scatter_dex: float = 0.0
     subhalo_alpha_sigma: float = 0.25
+    subhalo_alpha_sigma_half_width: float = 0.05
     subhalo_gamma_ml: float = 0.0
+    subhalo_gamma_ml_half_width: float = 0.10
+    sampled_subhalo_alpha_sigma: float | None = None
+    sampled_subhalo_gamma_ml: float | None = None
     source_magnitude_min: float = 24.0
     source_magnitude_max: float = 27.0
     image_magnitude_sigma_mag: float = 0.10
@@ -219,12 +259,22 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         raise ValueError("max_images_per_family must be at least min_images_per_family.")
     if not math.isfinite(float(config.pos_sigma_arcsec)) or float(config.pos_sigma_arcsec) < 0.0:
         raise ValueError("pos_sigma_arcsec must be finite and nonnegative.")
+    mass_min = float(config.total_large_component_mass_min_msun)
+    mass_max = float(config.total_large_component_mass_max_msun)
+    if not math.isfinite(mass_min) or not math.isfinite(mass_max) or mass_min <= 0.0 or mass_max <= mass_min:
+        raise ValueError("total_large_component_mass bounds must be positive and ordered.")
     for name in (
         "source_redshift",
         "source_sigma_int_arcsec",
         "primary_seed_grid_pixel_arcsec",
         "subhalo_seed_grid_pixel_arcsec",
-        "bcg_position_prior_half_width_arcsec",
+        "large_component_mass_pivot_msun",
+        "halo_core_radius_pivot_kpc",
+        "halo_cut_radius_pivot_kpc",
+        "bcg_mass_fraction_median",
+        "bcg_core_radius_pivot_kpc",
+        "bcg_cut_radius_pivot_kpc",
+        "bcg_mass_pivot_msun",
         "caustic_compute_window_arcsec",
         "caustic_grid_scale_arcsec",
         "caustic_min_area_arcsec2",
@@ -235,6 +285,52 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         value = float(getattr(config, name))
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f"{name} must be positive and finite.")
+    for name in (
+        "halo_core_radius_mass_slope",
+        "halo_core_radius_scatter_dex",
+        "halo_cut_radius_mass_slope",
+        "halo_cut_radius_scatter_dex",
+        "bcg_mass_fraction_scatter_dex",
+        "bcg_core_radius_mass_slope",
+        "bcg_core_radius_scatter_dex",
+        "bcg_cut_radius_mass_slope",
+        "bcg_cut_radius_scatter_dex",
+    ):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and nonnegative.")
+    fraction_min = float(config.bcg_mass_fraction_min)
+    fraction_max = float(config.bcg_mass_fraction_max)
+    fraction_median = float(config.bcg_mass_fraction_median)
+    if (
+        not math.isfinite(fraction_min)
+        or not math.isfinite(fraction_max)
+        or not math.isfinite(fraction_median)
+        or fraction_min <= 0.0
+        or fraction_max <= fraction_min
+        or fraction_max >= 1.0
+        or not (fraction_min <= fraction_median <= fraction_max)
+    ):
+        raise ValueError("bcg_mass_fraction bounds must be finite, ordered, within (0, 1), and contain the median.")
+    for name in (
+        "sampled_total_large_component_mass_msun",
+        "sampled_halo_mass_msun",
+        "sampled_bcg_mass_msun",
+        "sampled_bcg_mass_fraction",
+    ):
+        value = getattr(config, name)
+        if value is not None and (not math.isfinite(float(value)) or float(value) <= 0.0):
+            raise ValueError(f"{name} must be positive and finite when set.")
+    if config.sampled_bcg_mass_fraction is not None and float(config.sampled_bcg_mass_fraction) >= 1.0:
+        raise ValueError("sampled_bcg_mass_fraction must be less than 1.")
+    for name in (
+        "halo_position_half_width_arcsec",
+        "bcg_position_offset_radius_arcsec",
+        "bcg_position_prior_half_width_arcsec",
+    ):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and nonnegative.")
     for name in ("mock_image_candidate_batch_size", "mock_image_seed_cap", "mock_image_lm_max_iter", "mock_generation_workers"):
         if isinstance(getattr(config, name), bool) or int(getattr(config, name)) <= 0:
             raise ValueError(f"{name} must be a positive integer.")
@@ -246,6 +342,37 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         raise ValueError("subhalo_parent_factor must be positive.")
     if not math.isfinite(float(config.subhalo_schechter_alpha)) or float(config.subhalo_schechter_alpha) <= -1.0:
         raise ValueError("subhalo_schechter_alpha must be greater than -1.")
+    dpie_mass_min = float(config.subhalo_dpie_mass_ref_min_msun)
+    dpie_mass_max = float(config.subhalo_dpie_mass_ref_max_msun)
+    if (
+        not math.isfinite(dpie_mass_min)
+        or not math.isfinite(dpie_mass_max)
+        or dpie_mass_min <= 0.0
+        or dpie_mass_max <= dpie_mass_min
+    ):
+        raise ValueError("subhalo_dpie_mass_ref bounds must be positive and ordered.")
+    for name in (
+        "subhalo_dpie_mass_pivot_msun",
+        "subhalo_core_radius_pivot_kpc",
+        "subhalo_cut_radius_pivot_kpc",
+    ):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{name} must be positive and finite.")
+    for name in (
+        "subhalo_core_radius_mass_slope",
+        "subhalo_core_radius_scatter_dex",
+        "subhalo_cut_radius_mass_slope",
+        "subhalo_cut_radius_scatter_dex",
+    ):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and nonnegative.")
+    if config.sampled_subhalo_dpie_mass_ref_msun is not None and (
+        not math.isfinite(float(config.sampled_subhalo_dpie_mass_ref_msun))
+        or float(config.sampled_subhalo_dpie_mass_ref_msun) <= 0.0
+    ):
+        raise ValueError("sampled_subhalo_dpie_mass_ref_msun must be positive and finite when set.")
     if float(config.subhalo_mass_min) <= 0.0 or float(config.subhalo_mass_max) <= float(config.subhalo_mass_min):
         raise ValueError("subhalo_mass bounds must be positive and ordered.")
     if float(config.subhalo_mass_ref) <= 0.0:
@@ -276,6 +403,20 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
     for name in ("subhalo_alpha_sigma", "subhalo_gamma_ml"):
         if not math.isfinite(float(getattr(config, name))):
             raise ValueError(f"{name} must be finite.")
+    for name in ("subhalo_alpha_sigma_half_width", "subhalo_gamma_ml_half_width"):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and nonnegative.")
+    for name in ("sampled_subhalo_alpha_sigma", "sampled_subhalo_gamma_ml"):
+        value = getattr(config, name)
+        if value is not None and not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be finite when set.")
+    alpha_min = float(config.subhalo_alpha_sigma) - float(config.subhalo_alpha_sigma_half_width)
+    alpha_max = float(config.subhalo_alpha_sigma) + float(config.subhalo_alpha_sigma_half_width)
+    gamma_min = float(config.subhalo_gamma_ml) - float(config.subhalo_gamma_ml_half_width)
+    beta_min = 1.0 + gamma_min - 2.0 * alpha_max
+    if not np.isfinite(beta_min) or beta_min <= 0.0:
+        raise ValueError("Configured subhalo alpha/gamma windows can produce nonpositive beta_radius.")
     _subhalo_beta_radius_from_config(config)
     source_mag_min = float(config.source_magnitude_min)
     source_mag_max = float(config.source_magnitude_max)
@@ -314,6 +455,169 @@ def _config_to_jsonable(config: SingleBCGMockConfig, kpc_per_arcsec: float) -> d
 
 def _dex_scatter_to_ln(scatter_dex: float) -> float:
     return float(np.log(10.0) * max(float(scatter_dex), 0.0))
+
+
+def _sigma_from_dpie_mass(mass_msun: float, cut_radius_kpc: float) -> float:
+    log_mass_constant = float(log10_dpie_mass_msun(1.0, 1.0))
+    log_sigma = 0.5 * (math.log10(float(mass_msun)) - math.log10(float(cut_radius_kpc)) - log_mass_constant)
+    return float(10.0**log_sigma)
+
+
+def _sample_log_uniform(rng: np.random.Generator, lower: float, upper: float) -> float:
+    return float(10.0 ** rng.uniform(math.log10(float(lower)), math.log10(float(upper))))
+
+
+def _sample_lognormal_factor(rng: np.random.Generator, scatter_dex: float) -> float:
+    scatter = float(scatter_dex)
+    if scatter <= 0.0:
+        return 1.0
+    return float(10.0 ** rng.normal(0.0, scatter))
+
+
+def _realize_large_halo_masses(
+    config: SingleBCGMockConfig,
+    rng: np.random.Generator,
+    kpc_per_arcsec: float,
+) -> SingleBCGMockConfig:
+    total_mass = _sample_log_uniform(
+        rng,
+        float(config.total_large_component_mass_min_msun),
+        float(config.total_large_component_mass_max_msun),
+    )
+    bcg_fraction = float(
+        np.clip(
+            float(config.bcg_mass_fraction_median)
+            * _sample_lognormal_factor(rng, float(config.bcg_mass_fraction_scatter_dex)),
+            float(config.bcg_mass_fraction_min),
+            float(config.bcg_mass_fraction_max),
+        )
+    )
+    bcg_mass = float(total_mass * bcg_fraction)
+    halo_mass = float(total_mass - bcg_mass)
+
+    halo_core_kpc = float(
+        config.halo_core_radius_pivot_kpc
+        * (halo_mass / float(config.large_component_mass_pivot_msun)) ** float(config.halo_core_radius_mass_slope)
+        * _sample_lognormal_factor(rng, float(config.halo_core_radius_scatter_dex))
+    )
+    halo_cut_kpc = float(
+        config.halo_cut_radius_pivot_kpc
+        * (halo_mass / float(config.large_component_mass_pivot_msun)) ** float(config.halo_cut_radius_mass_slope)
+        * _sample_lognormal_factor(rng, float(config.halo_cut_radius_scatter_dex))
+    )
+    bcg_core_kpc = float(
+        config.bcg_core_radius_pivot_kpc
+        * (bcg_mass / float(config.bcg_mass_pivot_msun)) ** float(config.bcg_core_radius_mass_slope)
+        * _sample_lognormal_factor(rng, float(config.bcg_core_radius_scatter_dex))
+    )
+    bcg_cut_kpc = float(
+        config.bcg_cut_radius_pivot_kpc
+        * (bcg_mass / float(config.bcg_mass_pivot_msun)) ** float(config.bcg_cut_radius_mass_slope)
+        * _sample_lognormal_factor(rng, float(config.bcg_cut_radius_scatter_dex))
+    )
+    halo_sigma = _sigma_from_dpie_mass(halo_mass, halo_cut_kpc)
+    bcg_sigma = _sigma_from_dpie_mass(bcg_mass, bcg_cut_kpc)
+
+    return replace(
+        config,
+        halo=replace(
+            config.halo,
+            core_radius_arcsec=float(halo_core_kpc / kpc_per_arcsec),
+            cut_radius_arcsec=float(halo_cut_kpc / kpc_per_arcsec),
+            v_disp=halo_sigma,
+        ),
+        bcg=replace(
+            config.bcg,
+            core_radius_arcsec=float(bcg_core_kpc / kpc_per_arcsec),
+            cut_radius_arcsec=float(bcg_cut_kpc / kpc_per_arcsec),
+            v_disp=bcg_sigma,
+        ),
+        sampled_total_large_component_mass_msun=total_mass,
+        sampled_halo_mass_msun=halo_mass,
+        sampled_bcg_mass_msun=bcg_mass,
+        sampled_bcg_mass_fraction=bcg_fraction,
+    )
+
+
+def _realize_large_halo_positions(config: SingleBCGMockConfig, rng: np.random.Generator) -> SingleBCGMockConfig:
+    halo_half_width = float(config.halo_position_half_width_arcsec)
+    if halo_half_width > 0.0:
+        halo_x = float(config.halo.x_centre + rng.uniform(-halo_half_width, halo_half_width))
+        halo_y = float(config.halo.y_centre + rng.uniform(-halo_half_width, halo_half_width))
+    else:
+        halo_x = float(config.halo.x_centre)
+        halo_y = float(config.halo.y_centre)
+
+    offset_radius = float(config.bcg_position_offset_radius_arcsec)
+    if offset_radius > 0.0:
+        radius = float(offset_radius * math.sqrt(rng.uniform(0.0, 1.0)))
+        angle = float(rng.uniform(0.0, 2.0 * math.pi))
+        bcg_x = float(halo_x + radius * math.cos(angle))
+        bcg_y = float(halo_y + radius * math.sin(angle))
+    else:
+        bcg_x = float(halo_x)
+        bcg_y = float(halo_y)
+
+    return replace(
+        config,
+        halo=replace(config.halo, x_centre=halo_x, y_centre=halo_y),
+        bcg=replace(config.bcg, x_centre=bcg_x, y_centre=bcg_y),
+    )
+
+
+def _realize_potfile_scaling(config: SingleBCGMockConfig, rng: np.random.Generator, kpc_per_arcsec: float) -> SingleBCGMockConfig:
+    mass_ref = _sample_log_uniform(
+        rng,
+        float(config.subhalo_dpie_mass_ref_min_msun),
+        float(config.subhalo_dpie_mass_ref_max_msun),
+    )
+    core_kpc = float(
+        config.subhalo_core_radius_pivot_kpc
+        * (mass_ref / float(config.subhalo_dpie_mass_pivot_msun)) ** float(config.subhalo_core_radius_mass_slope)
+        * _sample_lognormal_factor(rng, float(config.subhalo_core_radius_scatter_dex))
+    )
+    cut_kpc = float(
+        config.subhalo_cut_radius_pivot_kpc
+        * (mass_ref / float(config.subhalo_dpie_mass_pivot_msun)) ** float(config.subhalo_cut_radius_mass_slope)
+        * _sample_lognormal_factor(rng, float(config.subhalo_cut_radius_scatter_dex))
+    )
+    sigma_ref = _sigma_from_dpie_mass(mass_ref, cut_kpc)
+    return replace(
+        config,
+        subhalo_mass_ref=mass_ref,
+        subhalo_core_radius_arcsec=float(core_kpc / kpc_per_arcsec),
+        subhalo_cut_radius_arcsec=float(cut_kpc / kpc_per_arcsec),
+        subhalo_sigma_ref=sigma_ref,
+        sampled_subhalo_dpie_mass_ref_msun=mass_ref,
+    )
+
+
+def _realize_potfile_exponents(config: SingleBCGMockConfig, rng: np.random.Generator) -> SingleBCGMockConfig:
+    alpha_width = float(config.subhalo_alpha_sigma_half_width)
+    gamma_width = float(config.subhalo_gamma_ml_half_width)
+    if alpha_width <= 0.0 and gamma_width <= 0.0:
+        return replace(
+            config,
+            sampled_subhalo_alpha_sigma=float(config.subhalo_alpha_sigma),
+            sampled_subhalo_gamma_ml=float(config.subhalo_gamma_ml),
+        )
+    alpha_sigma = (
+        float(config.subhalo_alpha_sigma)
+        if alpha_width <= 0.0
+        else float(rng.uniform(float(config.subhalo_alpha_sigma) - alpha_width, float(config.subhalo_alpha_sigma) + alpha_width))
+    )
+    gamma_ml = (
+        float(config.subhalo_gamma_ml)
+        if gamma_width <= 0.0
+        else float(rng.uniform(float(config.subhalo_gamma_ml) - gamma_width, float(config.subhalo_gamma_ml) + gamma_width))
+    )
+    return replace(
+        config,
+        subhalo_alpha_sigma=alpha_sigma,
+        subhalo_gamma_ml=gamma_ml,
+        sampled_subhalo_alpha_sigma=alpha_sigma,
+        sampled_subhalo_gamma_ml=gamma_ml,
+    )
 
 
 def _subhalo_beta_radius_from_config(config: SingleBCGMockConfig) -> float:
@@ -743,6 +1047,14 @@ def _truth_parameter_values(config: SingleBCGMockConfig, kpc_per_arcsec: float) 
         truth[f"{prefix}.core_radius_kpc"] = float(component.core_radius_arcsec) * float(kpc_per_arcsec)
         truth[f"{prefix}.cut_radius_kpc"] = float(component.cut_radius_arcsec) * float(kpc_per_arcsec)
         truth[f"{prefix}.v_disp"] = float(component.v_disp)
+    if config.sampled_total_large_component_mass_msun is not None:
+        truth["large_components.total_mass_msun"] = float(config.sampled_total_large_component_mass_msun)
+    if config.sampled_halo_mass_msun is not None:
+        truth["large_components.halo_mass_msun"] = float(config.sampled_halo_mass_msun)
+    if config.sampled_bcg_mass_msun is not None:
+        truth["large_components.bcg_mass_msun"] = float(config.sampled_bcg_mass_msun)
+    if config.sampled_bcg_mass_fraction is not None:
+        truth["large_components.bcg_mass_fraction"] = float(config.sampled_bcg_mass_fraction)
     # No truth entry for source.sigma_int: the mock never injects intrinsic source-plane
     # scatter (astrometric noise is injected via pos_sigma_arcsec and is already accounted
     # for by the likelihood's catalog sigma), so the sampled image.sigma_int has no finite
@@ -750,10 +1062,17 @@ def _truth_parameter_values(config: SingleBCGMockConfig, kpc_per_arcsec: float) 
     # produced a spurious fractional bias of -1 in the recovery tables.
     if config.n_subhalos > 0:
         truth["potfile.sigma"] = float(config.subhalo_sigma_ref)
+        truth["potfile.corekpc"] = float(config.subhalo_core_radius_arcsec) * float(kpc_per_arcsec)
         truth["potfile.cutkpc"] = float(config.subhalo_cut_radius_arcsec) * float(kpc_per_arcsec)
         truth["potfile.alpha_sigma"] = float(config.subhalo_alpha_sigma)
         truth["potfile.gamma_ml"] = float(config.subhalo_gamma_ml)
         truth["potfile.beta_radius"] = _subhalo_beta_radius_from_config(config)
+        if config.sampled_subhalo_alpha_sigma is not None:
+            truth["potfile.sampled_alpha_sigma"] = float(config.sampled_subhalo_alpha_sigma)
+        if config.sampled_subhalo_gamma_ml is not None:
+            truth["potfile.sampled_gamma_ml"] = float(config.sampled_subhalo_gamma_ml)
+        if config.sampled_subhalo_dpie_mass_ref_msun is not None:
+            truth["potfile.dpie_mass_ref_msun"] = float(config.sampled_subhalo_dpie_mass_ref_msun)
         if config.subhalo_sigma_scatter_dex > 0.0:
             truth["potfile.sigma_log_scatter"] = _dex_scatter_to_ln(config.subhalo_sigma_scatter_dex)
         if config.subhalo_cut_scatter_dex > 0.0:
@@ -833,6 +1152,7 @@ limit {component.potential_id}
     champ_dmax = _single_bcg_champ_dmax(images, subhalos)
     potfile_block = ""
     if subhalos:
+        potfile_cut_step_arcsec = max(0.01, 0.15 * float(config.subhalo_cut_radius_arcsec))
         potfile_block = f"""
 potfile
     filein 3 members.cat
@@ -841,7 +1161,7 @@ potfile
     core {config.subhalo_core_radius_arcsec:.8f}
     z_lens {config.z_lens:.8f}
     sigma 3 {config.subhalo_sigma_ref:.8f} {config.subhalo_sigma_ref_std:.8f}
-    cut 1 {config.subhalo_cut_lower_arcsec:.8f} {config.subhalo_cut_upper_arcsec:.8f}
+    cut 3 {config.subhalo_cut_radius_arcsec:.8f} {potfile_cut_step_arcsec:.8f}
     end
 """
 
@@ -1490,6 +1810,7 @@ def generate_single_bcg_mock(
     """Generate a deterministic single-BCG mock cluster on disk."""
     config = config or SingleBCGMockConfig()
     config.validate()
+    rng = np.random.default_rng(config.seed)
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     par_path = root / "single_bcg_mock.par"
@@ -1499,10 +1820,14 @@ def generate_single_bcg_mock(
     mock_images_path = root / "mock_images.json"
     if not overwrite and any(path.exists() for path in (par_path, image_catalog_path, member_catalog_path, truth_path, mock_images_path)):
         raise FileExistsError(f"Mock output already exists under {root}.")
-
-    rng = np.random.default_rng(config.seed)
     cosmo_config = flat_wcdm_config(h0=70.0, om0=0.3)
     kpc_per_arcsec = kpc_per_arcsec_from_config(config.z_lens, cosmo_config)
+    config = _realize_large_halo_masses(config, rng, float(kpc_per_arcsec))
+    config = _realize_large_halo_positions(config, rng)
+    if int(config.n_subhalos) > 0:
+        config = _realize_potfile_exponents(config, rng)
+        config.validate()
+        config = _realize_potfile_scaling(config, rng, float(kpc_per_arcsec))
     _emit_mock_progress(
         progress_callback,
         "subhalos_start",
@@ -2266,6 +2591,20 @@ def _source_redshift_tuple_from_config(raw: Any, default: tuple[float, ...]) -> 
     return values if values else default
 
 
+def _dpie_truth_from_config(raw: Any, default: DPIETruth) -> DPIETruth:
+    config = raw if isinstance(raw, dict) else {}
+    return DPIETruth(
+        potential_id=str(config.get("potential_id", default.potential_id)),
+        x_centre=float(config.get("x_centre", default.x_centre)),
+        y_centre=float(config.get("y_centre", default.y_centre)),
+        ellipticite=float(config.get("ellipticite", default.ellipticite)),
+        angle_pos=float(config.get("angle_pos", default.angle_pos)),
+        core_radius_arcsec=float(config.get("core_radius_arcsec", default.core_radius_arcsec)),
+        cut_radius_arcsec=float(config.get("cut_radius_arcsec", default.cut_radius_arcsec)),
+        v_disp=float(config.get("v_disp", default.v_disp)),
+    )
+
+
 def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
     raw = truth.get("config", {})
     config = raw if isinstance(raw, dict) else {}
@@ -2285,9 +2624,14 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
     max_images_per_family = None if max_images_raw is None else int(max_images_raw)
     return SingleBCGMockConfig(
         z_lens=float(config.get("z_lens", defaults.z_lens)),
+        reference_ra_deg=float(config.get("reference_ra_deg", defaults.reference_ra_deg)),
+        reference_dec_deg=float(config.get("reference_dec_deg", defaults.reference_dec_deg)),
+        pos_sigma_arcsec=float(config.get("pos_sigma_arcsec", defaults.pos_sigma_arcsec)),
+        seed=int(config.get("seed", defaults.seed)),
         source_redshift=float(config.get("source_redshift", defaults.source_redshift)),
         primary_source_redshifts=primary_source_redshifts,
         subhalo_source_redshifts=subhalo_source_redshifts,
+        source_sigma_int_arcsec=float(config.get("source_sigma_int_arcsec", defaults.source_sigma_int_arcsec)),
         n_primary_families=int(config.get("n_primary_families", defaults.n_primary_families)),
         n_subhalo_families=int(config.get("n_subhalo_families", defaults.n_subhalo_families)),
         min_images_per_family=int(config.get("min_images_per_family", defaults.min_images_per_family)),
@@ -2304,6 +2648,76 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
                 config.get("subhalo_image_min_distance_arcsec", defaults.subhalo_seed_grid_pixel_arcsec),
             )
         ),
+        total_large_component_mass_min_msun=float(
+            config.get("total_large_component_mass_min_msun", defaults.total_large_component_mass_min_msun)
+        ),
+        total_large_component_mass_max_msun=float(
+            config.get("total_large_component_mass_max_msun", defaults.total_large_component_mass_max_msun)
+        ),
+        large_component_mass_pivot_msun=float(
+            config.get("large_component_mass_pivot_msun", defaults.large_component_mass_pivot_msun)
+        ),
+        halo_core_radius_pivot_kpc=float(
+            config.get("halo_core_radius_pivot_kpc", defaults.halo_core_radius_pivot_kpc)
+        ),
+        halo_core_radius_mass_slope=float(
+            config.get("halo_core_radius_mass_slope", defaults.halo_core_radius_mass_slope)
+        ),
+        halo_core_radius_scatter_dex=float(
+            config.get("halo_core_radius_scatter_dex", defaults.halo_core_radius_scatter_dex)
+        ),
+        halo_cut_radius_pivot_kpc=float(
+            config.get("halo_cut_radius_pivot_kpc", defaults.halo_cut_radius_pivot_kpc)
+        ),
+        halo_cut_radius_mass_slope=float(
+            config.get("halo_cut_radius_mass_slope", defaults.halo_cut_radius_mass_slope)
+        ),
+        halo_cut_radius_scatter_dex=float(
+            config.get("halo_cut_radius_scatter_dex", defaults.halo_cut_radius_scatter_dex)
+        ),
+        bcg_mass_fraction_median=float(config.get("bcg_mass_fraction_median", defaults.bcg_mass_fraction_median)),
+        bcg_mass_fraction_scatter_dex=float(
+            config.get("bcg_mass_fraction_scatter_dex", defaults.bcg_mass_fraction_scatter_dex)
+        ),
+        bcg_mass_fraction_min=float(config.get("bcg_mass_fraction_min", defaults.bcg_mass_fraction_min)),
+        bcg_mass_fraction_max=float(config.get("bcg_mass_fraction_max", defaults.bcg_mass_fraction_max)),
+        bcg_core_radius_pivot_kpc=float(config.get("bcg_core_radius_pivot_kpc", defaults.bcg_core_radius_pivot_kpc)),
+        bcg_core_radius_mass_slope=float(
+            config.get("bcg_core_radius_mass_slope", defaults.bcg_core_radius_mass_slope)
+        ),
+        bcg_core_radius_scatter_dex=float(
+            config.get("bcg_core_radius_scatter_dex", defaults.bcg_core_radius_scatter_dex)
+        ),
+        bcg_cut_radius_pivot_kpc=float(config.get("bcg_cut_radius_pivot_kpc", defaults.bcg_cut_radius_pivot_kpc)),
+        bcg_mass_pivot_msun=float(config.get("bcg_mass_pivot_msun", defaults.bcg_mass_pivot_msun)),
+        bcg_cut_radius_mass_slope=float(
+            config.get("bcg_cut_radius_mass_slope", defaults.bcg_cut_radius_mass_slope)
+        ),
+        bcg_cut_radius_scatter_dex=float(
+            config.get("bcg_cut_radius_scatter_dex", defaults.bcg_cut_radius_scatter_dex)
+        ),
+        sampled_total_large_component_mass_msun=(
+            None
+            if config.get("sampled_total_large_component_mass_msun") is None
+            else float(config["sampled_total_large_component_mass_msun"])
+        ),
+        sampled_halo_mass_msun=(
+            None if config.get("sampled_halo_mass_msun") is None else float(config["sampled_halo_mass_msun"])
+        ),
+        sampled_bcg_mass_msun=(
+            None if config.get("sampled_bcg_mass_msun") is None else float(config["sampled_bcg_mass_msun"])
+        ),
+        sampled_bcg_mass_fraction=(
+            None
+            if config.get("sampled_bcg_mass_fraction") is None
+            else float(config["sampled_bcg_mass_fraction"])
+        ),
+        halo_position_half_width_arcsec=float(
+            config.get("halo_position_half_width_arcsec", defaults.halo_position_half_width_arcsec)
+        ),
+        bcg_position_offset_radius_arcsec=float(
+            config.get("bcg_position_offset_radius_arcsec", defaults.bcg_position_offset_radius_arcsec)
+        ),
         bcg_position_prior_half_width_arcsec=float(
             config.get("bcg_position_prior_half_width_arcsec", defaults.bcg_position_prior_half_width_arcsec)
         ),
@@ -2316,6 +2730,38 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         subhalo_mass_min=float(config.get("subhalo_mass_min", defaults.subhalo_mass_min)),
         subhalo_mass_max=float(config.get("subhalo_mass_max", defaults.subhalo_mass_max)),
         subhalo_mass_ref=float(config.get("subhalo_mass_ref", defaults.subhalo_mass_ref)),
+        subhalo_dpie_mass_ref_min_msun=float(
+            config.get("subhalo_dpie_mass_ref_min_msun", defaults.subhalo_dpie_mass_ref_min_msun)
+        ),
+        subhalo_dpie_mass_ref_max_msun=float(
+            config.get("subhalo_dpie_mass_ref_max_msun", defaults.subhalo_dpie_mass_ref_max_msun)
+        ),
+        subhalo_dpie_mass_pivot_msun=float(
+            config.get("subhalo_dpie_mass_pivot_msun", defaults.subhalo_dpie_mass_pivot_msun)
+        ),
+        subhalo_core_radius_pivot_kpc=float(
+            config.get("subhalo_core_radius_pivot_kpc", defaults.subhalo_core_radius_pivot_kpc)
+        ),
+        subhalo_core_radius_mass_slope=float(
+            config.get("subhalo_core_radius_mass_slope", defaults.subhalo_core_radius_mass_slope)
+        ),
+        subhalo_core_radius_scatter_dex=float(
+            config.get("subhalo_core_radius_scatter_dex", defaults.subhalo_core_radius_scatter_dex)
+        ),
+        subhalo_cut_radius_pivot_kpc=float(
+            config.get("subhalo_cut_radius_pivot_kpc", defaults.subhalo_cut_radius_pivot_kpc)
+        ),
+        subhalo_cut_radius_mass_slope=float(
+            config.get("subhalo_cut_radius_mass_slope", defaults.subhalo_cut_radius_mass_slope)
+        ),
+        subhalo_cut_radius_scatter_dex=float(
+            config.get("subhalo_cut_radius_scatter_dex", defaults.subhalo_cut_radius_scatter_dex)
+        ),
+        sampled_subhalo_dpie_mass_ref_msun=(
+            None
+            if config.get("sampled_subhalo_dpie_mass_ref_msun") is None
+            else float(config["sampled_subhalo_dpie_mass_ref_msun"])
+        ),
         subhalo_spatial_distribution=str(
             config.get("subhalo_spatial_distribution", defaults.subhalo_spatial_distribution)
         ),
@@ -2335,11 +2781,37 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         subhalo_force_core_max_arcsec=float(
             config.get("subhalo_force_core_max_arcsec", defaults.subhalo_force_core_max_arcsec)
         ),
+        subhalo_mag0=float(config.get("subhalo_mag0", defaults.subhalo_mag0)),
+        subhalo_sigma_ref=float(config.get("subhalo_sigma_ref", defaults.subhalo_sigma_ref)),
+        subhalo_sigma_ref_std=float(config.get("subhalo_sigma_ref_std", defaults.subhalo_sigma_ref_std)),
         subhalo_sigma_scatter_dex=float(
             config.get("subhalo_sigma_scatter_dex", defaults.subhalo_sigma_scatter_dex)
         ),
+        subhalo_core_radius_arcsec=float(
+            config.get("subhalo_core_radius_arcsec", defaults.subhalo_core_radius_arcsec)
+        ),
+        subhalo_cut_radius_arcsec=float(config.get("subhalo_cut_radius_arcsec", defaults.subhalo_cut_radius_arcsec)),
+        subhalo_cut_lower_arcsec=float(config.get("subhalo_cut_lower_arcsec", defaults.subhalo_cut_lower_arcsec)),
+        subhalo_cut_upper_arcsec=float(config.get("subhalo_cut_upper_arcsec", defaults.subhalo_cut_upper_arcsec)),
         subhalo_cut_scatter_dex=float(config.get("subhalo_cut_scatter_dex", defaults.subhalo_cut_scatter_dex)),
+        subhalo_alpha_sigma=float(config.get("subhalo_alpha_sigma", defaults.subhalo_alpha_sigma)),
+        subhalo_alpha_sigma_half_width=float(
+            config.get("subhalo_alpha_sigma_half_width", defaults.subhalo_alpha_sigma_half_width)
+        ),
         subhalo_gamma_ml=float(config.get("subhalo_gamma_ml", defaults.subhalo_gamma_ml)),
+        subhalo_gamma_ml_half_width=float(
+            config.get("subhalo_gamma_ml_half_width", defaults.subhalo_gamma_ml_half_width)
+        ),
+        sampled_subhalo_alpha_sigma=(
+            None
+            if config.get("sampled_subhalo_alpha_sigma") is None
+            else float(config["sampled_subhalo_alpha_sigma"])
+        ),
+        sampled_subhalo_gamma_ml=(
+            None
+            if config.get("sampled_subhalo_gamma_ml") is None
+            else float(config["sampled_subhalo_gamma_ml"])
+        ),
         source_magnitude_min=float(config.get("source_magnitude_min", defaults.source_magnitude_min)),
         source_magnitude_max=float(config.get("source_magnitude_max", defaults.source_magnitude_max)),
         image_magnitude_sigma_mag=float(
@@ -2369,4 +2841,6 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
             config.get("mock_image_precision_limit", defaults.mock_image_precision_limit)
         ),
         mock_generation_workers=int(config.get("mock_generation_workers", defaults.mock_generation_workers)),
+        halo=_dpie_truth_from_config(config.get("halo"), defaults.halo),
+        bcg=_dpie_truth_from_config(config.get("bcg"), defaults.bcg),
     )

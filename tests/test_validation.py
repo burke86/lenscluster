@@ -130,6 +130,64 @@ from lenscluster.mock_validation.runner import (
 from lenscluster.utils import _rich_log_text, _should_log_to_console, format_stage_banner
 
 
+def _fixed_potfile_scaling_config(
+    *,
+    sigma_ref: float = 245.0,
+    core_radius_arcsec: float = 0.0001,
+    cut_radius_arcsec: float = 35.0,
+    z_lens: float = 0.396,
+) -> dict[str, float]:
+    kpc_per_arcsec = float(
+        mock_generation.kpc_per_arcsec_from_config(
+            float(z_lens),
+            mock_generation.flat_wcdm_config(h0=70.0, om0=0.3),
+        )
+    )
+    cut_radius_kpc = float(cut_radius_arcsec) * kpc_per_arcsec
+    mass_ref = 10.0 ** float(log10_dpie_mass_msun(float(sigma_ref), cut_radius_kpc))
+    return {
+        "subhalo_dpie_mass_ref_min_msun": mass_ref,
+        "subhalo_dpie_mass_ref_max_msun": mass_ref * (1.0 + 1.0e-8),
+        "subhalo_dpie_mass_pivot_msun": mass_ref,
+        "subhalo_core_radius_pivot_kpc": float(core_radius_arcsec) * kpc_per_arcsec,
+        "subhalo_core_radius_mass_slope": 0.0,
+        "subhalo_core_radius_scatter_dex": 0.0,
+        "subhalo_cut_radius_pivot_kpc": cut_radius_kpc,
+        "subhalo_cut_radius_mass_slope": 0.0,
+        "subhalo_cut_radius_scatter_dex": 0.0,
+        "subhalo_alpha_sigma_half_width": 0.0,
+        "subhalo_gamma_ml_half_width": 0.0,
+    }
+
+
+def _fixed_large_component_mass_config() -> dict[str, float]:
+    total_mass = 7.6035e14
+    bcg_mass = 1.6639e13
+    return {
+        **_fixed_potfile_scaling_config(),
+        "total_large_component_mass_min_msun": total_mass,
+        "total_large_component_mass_max_msun": total_mass * (1.0 + 1.0e-8),
+        "large_component_mass_pivot_msun": total_mass - bcg_mass,
+        "halo_core_radius_pivot_kpc": 27.0,
+        "halo_core_radius_mass_slope": 0.0,
+        "halo_core_radius_scatter_dex": 0.0,
+        "halo_cut_radius_pivot_kpc": 1175.0,
+        "halo_cut_radius_mass_slope": 0.0,
+        "halo_cut_radius_scatter_dex": 0.0,
+        "bcg_mass_fraction_median": bcg_mass / total_mass,
+        "bcg_mass_fraction_scatter_dex": 0.0,
+        "bcg_mass_fraction_min": 0.02,
+        "bcg_mass_fraction_max": 0.024,
+        "bcg_core_radius_pivot_kpc": 0.8,
+        "bcg_core_radius_mass_slope": 0.0,
+        "bcg_core_radius_scatter_dex": 0.0,
+        "bcg_cut_radius_pivot_kpc": 187.0,
+        "bcg_mass_pivot_msun": bcg_mass,
+        "bcg_cut_radius_mass_slope": 0.0,
+        "bcg_cut_radius_scatter_dex": 0.0,
+    }
+
+
 def _locator_max_tick_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [
         record.getMessage()
@@ -264,9 +322,12 @@ def test_stage_banner_title_falls_back_to_run_name() -> None:
 
 def test_generate_single_bcg_mock_parses_and_has_finite_magnifications(tmp_path: Path) -> None:
     config = SingleBCGMockConfig(
+        **_fixed_large_component_mass_config(),
         seed=7,
         n_primary_families=2,
         pos_sigma_arcsec=0.0,
+        halo_position_half_width_arcsec=0.0,
+        bcg_position_offset_radius_arcsec=0.0,
         caustic_compute_window_arcsec=40.0,
         caustic_grid_scale_arcsec=2.0,
         mock_image_candidate_batch_size=8,
@@ -314,6 +375,41 @@ def test_generate_single_bcg_mock_parses_and_has_finite_magnifications(tmp_path:
     assert truth["config"]["image_magnitude_sigma_mag"] == pytest.approx(config.image_magnitude_sigma_mag)
     assert truth["config"]["image_magnitude_mu_floor"] == pytest.approx(config.image_magnitude_mu_floor)
     assert "source_redshifts" not in truth["config"]
+    for component_id in ("halo", "bcg"):
+        component_config = truth["config"][component_id]
+        assert truth["parameter_truth"][f"{component_id}.x_centre"] == pytest.approx(component_config["x_centre"])
+        assert truth["parameter_truth"][f"{component_id}.y_centre"] == pytest.approx(component_config["y_centre"])
+        assert truth["parameter_truth"][f"{component_id}.v_disp"] == pytest.approx(component_config["v_disp"])
+        assert truth["parameter_truth"][f"{component_id}.core_radius_kpc"] == pytest.approx(
+            component_config["core_radius_kpc"]
+        )
+        assert truth["parameter_truth"][f"{component_id}.cut_radius_kpc"] == pytest.approx(
+            component_config["cut_radius_kpc"]
+        )
+        component_record = next(
+            component for component in truth["lens_components"] if component["component_id"] == component_id
+        )
+        kwargs_record = component_record["kwargs_by_source_redshift"][f"{config.primary_source_redshifts[0]:.8f}"]
+        assert kwargs_record["center_x"] == pytest.approx(component_config["x_centre"])
+        assert kwargs_record["center_y"] == pytest.approx(component_config["y_centre"])
+        assert kwargs_record["Ra"] == pytest.approx(component_config["core_radius_arcsec"])
+        assert kwargs_record["Rs"] == pytest.approx(component_config["cut_radius_arcsec"])
+    assert 5.0e14 <= truth["config"]["sampled_total_large_component_mass_msun"] <= 2.0e15
+    assert truth["parameter_truth"]["large_components.total_mass_msun"] == pytest.approx(
+        truth["config"]["sampled_total_large_component_mass_msun"]
+    )
+    assert truth["parameter_truth"]["large_components.halo_mass_msun"] == pytest.approx(
+        truth["config"]["sampled_halo_mass_msun"]
+    )
+    assert truth["parameter_truth"]["large_components.bcg_mass_msun"] == pytest.approx(
+        truth["config"]["sampled_bcg_mass_msun"]
+    )
+    assert truth["parameter_truth"]["large_components.bcg_mass_fraction"] == pytest.approx(
+        truth["config"]["sampled_bcg_mass_fraction"]
+    )
+    assert truth["config"]["sampled_halo_mass_msun"] + truth["config"]["sampled_bcg_mass_msun"] == pytest.approx(
+        truth["config"]["sampled_total_large_component_mass_msun"]
+    )
     assert np.isfinite(images["magnification_true"].to_numpy(dtype=float)).all()
     for column in (
         "source_magnitude_true",
@@ -392,11 +488,14 @@ def test_write_single_bcg_mock_par_can_tighten_bcg_position_prior(tmp_path: Path
 
 def test_generate_single_bcg_mock_respects_max_images_per_family(tmp_path: Path) -> None:
     config = SingleBCGMockConfig(
+        **_fixed_large_component_mass_config(),
         seed=7,
         n_primary_families=1,
         min_images_per_family=2,
         max_images_per_family=3,
         pos_sigma_arcsec=0.0,
+        halo_position_half_width_arcsec=0.0,
+        bcg_position_offset_radius_arcsec=0.0,
         caustic_compute_window_arcsec=40.0,
         caustic_grid_scale_arcsec=2.0,
         mock_image_candidate_batch_size=8,
@@ -450,6 +549,7 @@ def test_caustic_config_from_truth_reads_legacy_min_distance_keys() -> None:
 
 def _jax_mock_test_config(**updates: Any) -> SingleBCGMockConfig:
     values = dict(
+        **_fixed_large_component_mass_config(),
         seed=7,
         n_primary_families=1,
         n_subhalo_families=0,
@@ -462,9 +562,232 @@ def _jax_mock_test_config(**updates: Any) -> SingleBCGMockConfig:
         mock_image_seed_cap=16,
         caustic_compute_window_arcsec=40.0,
         caustic_grid_scale_arcsec=2.0,
+        halo_position_half_width_arcsec=0.0,
+        bcg_position_offset_radius_arcsec=0.0,
     )
     values.update(updates)
     return SingleBCGMockConfig(**values)
+
+
+def test_single_bcg_mock_realizes_large_halo_positions_from_seed() -> None:
+    config = SingleBCGMockConfig(
+        seed=31,
+        n_primary_families=1,
+        halo_position_half_width_arcsec=10.0,
+        bcg_position_offset_radius_arcsec=2.0,
+    )
+    rng = np.random.default_rng(config.seed)
+
+    realized = mock_generation._realize_large_halo_positions(config, rng)
+    repeated = mock_generation._realize_large_halo_positions(config, np.random.default_rng(config.seed))
+    changed = mock_generation._realize_large_halo_positions(
+        replace(config, seed=config.seed + 1),
+        np.random.default_rng(config.seed + 1),
+    )
+
+    assert -10.0 <= realized.halo.x_centre <= 10.0
+    assert -10.0 <= realized.halo.y_centre <= 10.0
+    assert math.hypot(
+        realized.bcg.x_centre - realized.halo.x_centre,
+        realized.bcg.y_centre - realized.halo.y_centre,
+    ) <= 2.0
+    assert repeated.halo == realized.halo
+    assert repeated.bcg == realized.bcg
+    assert (changed.halo.x_centre, changed.halo.y_centre, changed.bcg.x_centre, changed.bcg.y_centre) != (
+        realized.halo.x_centre,
+        realized.halo.y_centre,
+        realized.bcg.x_centre,
+        realized.bcg.y_centre,
+    )
+
+
+def test_single_bcg_mock_realized_positions_can_be_fixed() -> None:
+    config = SingleBCGMockConfig(
+        n_primary_families=1,
+        halo_position_half_width_arcsec=0.0,
+        bcg_position_offset_radius_arcsec=0.0,
+    )
+
+    realized = mock_generation._realize_large_halo_positions(config, np.random.default_rng(4))
+
+    assert realized.halo.x_centre == pytest.approx(config.halo.x_centre)
+    assert realized.halo.y_centre == pytest.approx(config.halo.y_centre)
+    assert realized.bcg.x_centre == pytest.approx(config.halo.x_centre)
+    assert realized.bcg.y_centre == pytest.approx(config.halo.y_centre)
+
+
+def test_single_bcg_mock_realizes_large_halo_masses_from_seed() -> None:
+    config = SingleBCGMockConfig(
+        seed=37,
+        n_primary_families=1,
+        total_large_component_mass_min_msun=5.0e14,
+        total_large_component_mass_max_msun=2.0e15,
+        halo_core_radius_scatter_dex=0.0,
+        bcg_core_radius_scatter_dex=0.0,
+    )
+    kpc_per_arcsec = 5.34
+
+    realized = mock_generation._realize_large_halo_masses(config, np.random.default_rng(config.seed), kpc_per_arcsec)
+    repeated = mock_generation._realize_large_halo_masses(
+        config,
+        np.random.default_rng(config.seed),
+        kpc_per_arcsec,
+    )
+    changed = mock_generation._realize_large_halo_masses(
+        replace(config, seed=config.seed + 1),
+        np.random.default_rng(config.seed + 1),
+        kpc_per_arcsec,
+    )
+
+    assert 5.0e14 <= float(realized.sampled_total_large_component_mass_msun) <= 2.0e15
+    assert float(realized.sampled_halo_mass_msun) + float(realized.sampled_bcg_mass_msun) == pytest.approx(
+        float(realized.sampled_total_large_component_mass_msun)
+    )
+    assert config.bcg_mass_fraction_min <= float(realized.sampled_bcg_mass_fraction) <= config.bcg_mass_fraction_max
+    halo_core_kpc = float(realized.halo.core_radius_arcsec) * kpc_per_arcsec
+    halo_cut_kpc = float(realized.halo.cut_radius_arcsec) * kpc_per_arcsec
+    bcg_core_kpc = float(realized.bcg.core_radius_arcsec) * kpc_per_arcsec
+    bcg_cut_kpc = float(realized.bcg.cut_radius_arcsec) * kpc_per_arcsec
+    assert halo_core_kpc == pytest.approx(
+        config.halo_core_radius_pivot_kpc
+        * (float(realized.sampled_halo_mass_msun) / config.large_component_mass_pivot_msun)
+        ** config.halo_core_radius_mass_slope
+    )
+    assert bcg_core_kpc == pytest.approx(
+        config.bcg_core_radius_pivot_kpc
+        * (float(realized.sampled_bcg_mass_msun) / config.bcg_mass_pivot_msun)
+        ** config.bcg_core_radius_mass_slope
+    )
+    assert 10.0 ** float(log10_dpie_mass_msun(realized.halo.v_disp, halo_cut_kpc)) == pytest.approx(
+        float(realized.sampled_halo_mass_msun)
+    )
+    assert 10.0 ** float(log10_dpie_mass_msun(realized.bcg.v_disp, bcg_cut_kpc)) == pytest.approx(
+        float(realized.sampled_bcg_mass_msun)
+    )
+    assert repeated.halo == realized.halo
+    assert repeated.bcg == realized.bcg
+    assert repeated.sampled_total_large_component_mass_msun == pytest.approx(
+        float(realized.sampled_total_large_component_mass_msun)
+    )
+    assert (
+        changed.halo.v_disp,
+        changed.halo.core_radius_arcsec,
+        changed.halo.cut_radius_arcsec,
+        changed.bcg.v_disp,
+        changed.bcg.core_radius_arcsec,
+        changed.bcg.cut_radius_arcsec,
+    ) != (
+        realized.halo.v_disp,
+        realized.halo.core_radius_arcsec,
+        realized.halo.cut_radius_arcsec,
+        realized.bcg.v_disp,
+        realized.bcg.core_radius_arcsec,
+        realized.bcg.cut_radius_arcsec,
+    )
+
+
+def test_single_bcg_mock_realizes_potfile_scaling_from_seed() -> None:
+    config = SingleBCGMockConfig(
+        seed=41,
+        n_primary_families=1,
+        n_subhalos=4,
+        subhalo_dpie_mass_ref_min_msun=1.0e11,
+        subhalo_dpie_mass_ref_max_msun=3.0e12,
+        subhalo_core_radius_scatter_dex=0.0,
+        subhalo_cut_radius_scatter_dex=0.0,
+    )
+    kpc_per_arcsec = 5.34
+
+    realized = mock_generation._realize_potfile_scaling(config, np.random.default_rng(config.seed), kpc_per_arcsec)
+    repeated = mock_generation._realize_potfile_scaling(
+        config,
+        np.random.default_rng(config.seed),
+        kpc_per_arcsec,
+    )
+    changed = mock_generation._realize_potfile_scaling(
+        replace(config, seed=config.seed + 1),
+        np.random.default_rng(config.seed + 1),
+        kpc_per_arcsec,
+    )
+
+    assert 1.0e11 <= float(realized.sampled_subhalo_dpie_mass_ref_msun) <= 3.0e12
+    core_kpc = float(realized.subhalo_core_radius_arcsec) * kpc_per_arcsec
+    cut_kpc = float(realized.subhalo_cut_radius_arcsec) * kpc_per_arcsec
+    assert core_kpc == pytest.approx(
+        config.subhalo_core_radius_pivot_kpc
+        * (float(realized.sampled_subhalo_dpie_mass_ref_msun) / config.subhalo_dpie_mass_pivot_msun)
+        ** config.subhalo_core_radius_mass_slope
+    )
+    assert cut_kpc == pytest.approx(
+        config.subhalo_cut_radius_pivot_kpc
+        * (float(realized.sampled_subhalo_dpie_mass_ref_msun) / config.subhalo_dpie_mass_pivot_msun)
+        ** config.subhalo_cut_radius_mass_slope
+    )
+    assert 10.0 ** float(log10_dpie_mass_msun(realized.subhalo_sigma_ref, cut_kpc)) == pytest.approx(
+        float(realized.sampled_subhalo_dpie_mass_ref_msun)
+    )
+    assert realized.subhalo_mass_ref == pytest.approx(float(realized.sampled_subhalo_dpie_mass_ref_msun))
+    assert repeated.subhalo_sigma_ref == pytest.approx(realized.subhalo_sigma_ref)
+    assert repeated.subhalo_core_radius_arcsec == pytest.approx(realized.subhalo_core_radius_arcsec)
+    assert repeated.subhalo_cut_radius_arcsec == pytest.approx(realized.subhalo_cut_radius_arcsec)
+    assert changed.sampled_subhalo_dpie_mass_ref_msun != pytest.approx(
+        float(realized.sampled_subhalo_dpie_mass_ref_msun)
+    )
+
+
+def test_single_bcg_mock_realizes_potfile_exponents_from_seed() -> None:
+    config = SingleBCGMockConfig(
+        seed=43,
+        n_primary_families=1,
+        n_subhalos=4,
+        subhalo_alpha_sigma=0.25,
+        subhalo_alpha_sigma_half_width=0.05,
+        subhalo_gamma_ml=0.0,
+        subhalo_gamma_ml_half_width=0.10,
+    )
+
+    realized = mock_generation._realize_potfile_exponents(config, np.random.default_rng(config.seed))
+    repeated = mock_generation._realize_potfile_exponents(config, np.random.default_rng(config.seed))
+    changed = mock_generation._realize_potfile_exponents(
+        replace(config, seed=config.seed + 1),
+        np.random.default_rng(config.seed + 1),
+    )
+
+    assert 0.20 <= realized.subhalo_alpha_sigma <= 0.30
+    assert -0.10 <= realized.subhalo_gamma_ml <= 0.10
+    assert realized.sampled_subhalo_alpha_sigma == pytest.approx(realized.subhalo_alpha_sigma)
+    assert realized.sampled_subhalo_gamma_ml == pytest.approx(realized.subhalo_gamma_ml)
+    assert mock_generation._subhalo_beta_radius_from_config(realized) == pytest.approx(
+        1.0 + realized.subhalo_gamma_ml - 2.0 * realized.subhalo_alpha_sigma
+    )
+    assert mock_generation._subhalo_mass_luminosity_exponent(realized) == pytest.approx(1.0 + realized.subhalo_gamma_ml)
+    assert repeated.subhalo_alpha_sigma == pytest.approx(realized.subhalo_alpha_sigma)
+    assert repeated.subhalo_gamma_ml == pytest.approx(realized.subhalo_gamma_ml)
+    assert (
+        changed.subhalo_alpha_sigma,
+        changed.subhalo_gamma_ml,
+    ) != pytest.approx((realized.subhalo_alpha_sigma, realized.subhalo_gamma_ml))
+
+
+def test_single_bcg_mock_fixed_potfile_exponents_do_not_advance_rng() -> None:
+    config = SingleBCGMockConfig(
+        n_primary_families=1,
+        n_subhalos=4,
+        subhalo_alpha_sigma=0.24,
+        subhalo_alpha_sigma_half_width=0.0,
+        subhalo_gamma_ml=0.02,
+        subhalo_gamma_ml_half_width=0.0,
+    )
+    rng = np.random.default_rng(51)
+    expected_next = np.random.default_rng(51).uniform()
+
+    realized = mock_generation._realize_potfile_exponents(config, rng)
+
+    assert realized.subhalo_alpha_sigma == pytest.approx(0.24)
+    assert realized.subhalo_gamma_ml == pytest.approx(0.02)
+    assert realized.sampled_subhalo_alpha_sigma == pytest.approx(0.24)
+    assert realized.sampled_subhalo_gamma_ml == pytest.approx(0.02)
+    assert rng.uniform() == pytest.approx(expected_next)
 
 
 def test_generate_single_bcg_mock_emits_progress_events(tmp_path: Path) -> None:
@@ -599,8 +922,7 @@ def test_generate_single_bcg_mock_uses_family_class_seed_grid_pixels(tmp_path: P
         n_primary_families=1,
         n_subhalo_families=1,
         n_subhalos=8,
-        subhalo_sigma_ref=300.0,
-        subhalo_cut_radius_arcsec=45.0,
+        **_fixed_potfile_scaling_config(sigma_ref=300.0, cut_radius_arcsec=45.0),
         primary_source_redshifts=(2.0,),
         subhalo_source_redshifts=(2.0,),
         primary_seed_grid_pixel_arcsec=2.5,
@@ -637,8 +959,9 @@ def test_generate_single_bcg_mock_batch_size_does_not_change_seeded_output(tmp_p
 def test_generate_single_bcg_mock_refined_images_ray_shoot_to_source(tmp_path: Path) -> None:
     config = _jax_mock_test_config(mock_image_precision_limit=1.0e-7)
     _paths, images, truth = generate_single_bcg_mock(tmp_path, config)
+    realized_config = mock_generation._caustic_config_from_truth(truth)
     cosmo_config = mock_generation.flat_wcdm_config(h0=70.0, om0=0.3)
-    lens_state = mock_generation._mock_static_lens_state(config, [], 2.0, cosmo_config)
+    lens_state = mock_generation._mock_static_lens_state(realized_config, [], 2.0, cosmo_config)
 
     beta_x, beta_y = mock_generation.jax_lensing.ray_shooting(
         mock_generation.jnp.asarray(images["x_true_arcsec"].to_numpy(dtype=float), dtype=mock_generation.jnp.float64),
@@ -647,7 +970,7 @@ def test_generate_single_bcg_mock_refined_images_ray_shoot_to_source(tmp_path: P
     )
     source = truth["sources"][0]
     residual = np.hypot(np.asarray(beta_x) - source["beta_x"], np.asarray(beta_y) - source["beta_y"])
-    assert float(np.max(residual)) <= 5.0 * config.mock_image_precision_limit
+    assert float(np.max(residual)) <= 5.0 * realized_config.mock_image_precision_limit
 
 
 def test_generate_single_bcg_mock_with_subhalos_current_truth_schema(tmp_path: Path) -> None:
@@ -668,7 +991,7 @@ def test_generate_single_bcg_mock_with_subhalos_current_truth_schema(tmp_path: P
 
 
 def test_generate_single_bcg_mock_raises_when_family_exhausts_attempts(tmp_path: Path) -> None:
-    config = _jax_mock_test_config(max_sources_to_try=1, min_images_per_family=5, mock_generation_workers=2)
+    config = _jax_mock_test_config(max_sources_to_try=1, min_images_per_family=100, mock_generation_workers=2)
 
     with pytest.raises(RuntimeError, match="Failed to generate a primary source"):
         generate_single_bcg_mock(tmp_path, config)
@@ -2123,6 +2446,8 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
         n_primary_families=1,
         n_subhalos=8,
         pos_sigma_arcsec=0.0,
+        halo_position_half_width_arcsec=0.0,
+        bcg_position_offset_radius_arcsec=0.0,
         caustic_compute_window_arcsec=80.0,
         caustic_grid_scale_arcsec=2.0,
         mock_image_candidate_batch_size=8,
@@ -2133,7 +2458,12 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
 
     assert (tmp_path / "members.cat").exists()
     assert len(parsed["potfiles"]) == 1
-    assert len(parsed["potfiles"][0]["catalog_df"]) == config.n_subhalos
+    potfile = parsed["potfiles"][0]
+    realized_config = mock_generation._caustic_config_from_truth(truth)
+    assert len(potfile["catalog_df"]) == config.n_subhalos
+    assert potfile["core_arcsec"] == pytest.approx(float(realized_config.subhalo_core_radius_arcsec), abs=1.0e-8)
+    assert potfile["sigma_nominal"] == pytest.approx(realized_config.subhalo_sigma_ref)
+    assert potfile["cut_arcsec_nominal"] == pytest.approx(float(realized_config.subhalo_cut_radius_arcsec), abs=1.0e-8)
     assert parsed["grille"]["nlens"] == 2 + config.n_subhalos
     assert parsed["grille"]["nlens_opt"] == 2
     image_radii = np.hypot(images["x_obs_arcsec"].to_numpy(dtype=float), images["y_obs_arcsec"].to_numpy(dtype=float))
@@ -2178,27 +2508,42 @@ def test_generate_single_bcg_mock_with_subhalos_uses_potfile(tmp_path: Path) -> 
     assert selection["schechter_alpha"] == pytest.approx(config.subhalo_schechter_alpha)
     assert selection["luminosity_star"] == pytest.approx(1.0)
     assert selection["luminosity_peak"] == pytest.approx(config.subhalo_schechter_alpha + 1.0)
-    assert selection["mass_luminosity_exponent"] == pytest.approx(1.0)
-    assert truth["parameter_truth"]["potfile.alpha_sigma"] == pytest.approx(config.subhalo_alpha_sigma)
-    assert truth["parameter_truth"]["potfile.gamma_ml"] == pytest.approx(config.subhalo_gamma_ml)
+    assert selection["mass_luminosity_exponent"] == pytest.approx(1.0 + realized_config.subhalo_gamma_ml)
+    assert truth["parameter_truth"]["potfile.sigma"] == pytest.approx(realized_config.subhalo_sigma_ref)
+    assert truth["parameter_truth"]["potfile.corekpc"] == pytest.approx(
+        float(realized_config.subhalo_core_radius_arcsec) * truth_kpc_per_arcsec
+    )
+    assert truth["parameter_truth"]["potfile.cutkpc"] == pytest.approx(
+        float(realized_config.subhalo_cut_radius_arcsec) * truth_kpc_per_arcsec
+    )
+    assert truth["parameter_truth"]["potfile.dpie_mass_ref_msun"] == pytest.approx(
+        float(realized_config.sampled_subhalo_dpie_mass_ref_msun)
+    )
+    assert truth["parameter_truth"]["potfile.alpha_sigma"] == pytest.approx(realized_config.subhalo_alpha_sigma)
+    assert truth["parameter_truth"]["potfile.gamma_ml"] == pytest.approx(realized_config.subhalo_gamma_ml)
     assert truth["parameter_truth"]["potfile.beta_radius"] == pytest.approx(
-        mock_generation._subhalo_beta_radius_from_config(config)
+        mock_generation._subhalo_beta_radius_from_config(realized_config)
+    )
+    assert truth["parameter_truth"]["potfile.sampled_alpha_sigma"] == pytest.approx(
+        realized_config.sampled_subhalo_alpha_sigma
+    )
+    assert truth["parameter_truth"]["potfile.sampled_gamma_ml"] == pytest.approx(
+        realized_config.sampled_subhalo_gamma_ml
     )
     assert "potfile.sigma_log_scatter" not in truth["parameter_truth"]
     assert "potfile.mass_log_scatter" not in truth["parameter_truth"]
     assert selection["mass_peak"] == pytest.approx(
-        config.subhalo_mass_ref * (config.subhalo_schechter_alpha + 1.0) ** selection["mass_luminosity_exponent"]
+        realized_config.subhalo_mass_ref
+        * (realized_config.subhalo_schechter_alpha + 1.0) ** selection["mass_luminosity_exponent"]
     )
-    assert selection["mass_peak"] == pytest.approx(3.0e11)
     assert selection["dpie_mass_anchor_msun"] == pytest.approx(
-        10.0
-        ** float(
-            log10_dpie_mass_msun(
-                config.subhalo_sigma_ref,
-                float(config.subhalo_cut_radius_arcsec) * truth_kpc_per_arcsec,
-            )
-        )
+        float(realized_config.sampled_subhalo_dpie_mass_ref_msun)
     )
+    for row in truth["subhalos"]:
+        luminosity = float(row["luminosity_ratio"])
+        assert row["subhalo_dpie_mass_msun"] / selection["dpie_mass_anchor_msun"] == pytest.approx(
+            luminosity ** (1.0 + realized_config.subhalo_gamma_ml)
+        )
     assert selection["parent_count"] >= config.n_subhalos
     assert selection["selected_count"] == config.n_subhalos
     candidates = selection["candidates"]
@@ -2363,6 +2708,19 @@ def test_subhalo_spatial_dpie_is_broader_than_compact_gamma() -> None:
         ({"subhalo_force_core_count": -1}, "subhalo_force_core_count"),
         ({"subhalo_force_core_min_arcsec": 20.0, "subhalo_force_core_max_arcsec": 10.0}, "must exceed"),
         ({"subhalo_field_radius_arcsec": 10.0, "subhalo_force_core_max_arcsec": 18.0}, "must not exceed"),
+        ({"subhalo_dpie_mass_ref_min_msun": 0.0}, "subhalo_dpie_mass_ref"),
+        (
+            {"subhalo_dpie_mass_ref_min_msun": 1.0e12, "subhalo_dpie_mass_ref_max_msun": 1.0e12},
+            "subhalo_dpie_mass_ref",
+        ),
+        ({"subhalo_dpie_mass_pivot_msun": 0.0}, "subhalo_dpie_mass_pivot_msun"),
+        ({"subhalo_core_radius_pivot_kpc": float("nan")}, "subhalo_core_radius_pivot_kpc"),
+        ({"subhalo_core_radius_mass_slope": -0.1}, "subhalo_core_radius_mass_slope"),
+        ({"subhalo_core_radius_scatter_dex": -0.1}, "subhalo_core_radius_scatter_dex"),
+        ({"subhalo_cut_radius_pivot_kpc": 0.0}, "subhalo_cut_radius_pivot_kpc"),
+        ({"subhalo_cut_radius_mass_slope": -0.1}, "subhalo_cut_radius_mass_slope"),
+        ({"subhalo_cut_radius_scatter_dex": -0.1}, "subhalo_cut_radius_scatter_dex"),
+        ({"sampled_subhalo_dpie_mass_ref_msun": -1.0}, "sampled_subhalo_dpie_mass_ref_msun"),
         ({"mock_image_candidate_batch_size": 0}, "mock_image_candidate_batch_size"),
         ({"mock_image_seed_cap": 0}, "mock_image_seed_cap"),
         ({"mock_image_lm_max_iter": 0}, "mock_image_lm_max_iter"),
@@ -2375,6 +2733,14 @@ def test_subhalo_spatial_dpie_is_broader_than_compact_gamma() -> None:
         ({"mock_caustic_grid_chunk_memory_gb": float("inf")}, "mock_caustic_grid_chunk_memory_gb"),
         ({"subhalo_alpha_sigma": float("nan")}, "subhalo_alpha_sigma"),
         ({"subhalo_gamma_ml": float("nan")}, "subhalo_gamma_ml"),
+        ({"subhalo_alpha_sigma_half_width": -0.1}, "subhalo_alpha_sigma_half_width"),
+        ({"subhalo_gamma_ml_half_width": float("nan")}, "subhalo_gamma_ml_half_width"),
+        (
+            {"subhalo_alpha_sigma": 0.49, "subhalo_alpha_sigma_half_width": 0.02, "subhalo_gamma_ml": 0.0},
+            "alpha/gamma windows",
+        ),
+        ({"sampled_subhalo_alpha_sigma": float("nan")}, "sampled_subhalo_alpha_sigma"),
+        ({"sampled_subhalo_gamma_ml": float("nan")}, "sampled_subhalo_gamma_ml"),
         ({"subhalo_alpha_sigma": 0.6, "subhalo_gamma_ml": 0.0}, "Derived subhalo beta_radius"),
         ({"source_magnitude_min": float("nan")}, "source_magnitude_min/source_magnitude_max"),
         ({"source_magnitude_max": float("inf")}, "source_magnitude_min/source_magnitude_max"),
@@ -2383,6 +2749,36 @@ def test_subhalo_spatial_dpie_is_broader_than_compact_gamma() -> None:
         ({"image_magnitude_sigma_mag": float("nan")}, "image_magnitude_sigma_mag"),
         ({"image_magnitude_mu_floor": 0.0}, "image_magnitude_mu_floor"),
         ({"image_magnitude_mu_floor": float("inf")}, "image_magnitude_mu_floor"),
+        ({"halo_position_half_width_arcsec": -1.0}, "halo_position_half_width_arcsec"),
+        ({"halo_position_half_width_arcsec": float("nan")}, "halo_position_half_width_arcsec"),
+        ({"bcg_position_offset_radius_arcsec": -1.0}, "bcg_position_offset_radius_arcsec"),
+        ({"bcg_position_offset_radius_arcsec": float("inf")}, "bcg_position_offset_radius_arcsec"),
+        ({"total_large_component_mass_min_msun": 0.0}, "total_large_component_mass"),
+        (
+            {"total_large_component_mass_min_msun": 5.0e14, "total_large_component_mass_max_msun": 5.0e14},
+            "total_large_component_mass",
+        ),
+        ({"large_component_mass_pivot_msun": 0.0}, "large_component_mass_pivot_msun"),
+        ({"halo_core_radius_pivot_kpc": 0.0}, "halo_core_radius_pivot_kpc"),
+        ({"halo_core_radius_mass_slope": -0.1}, "halo_core_radius_mass_slope"),
+        ({"halo_core_radius_scatter_dex": -0.1}, "halo_core_radius_scatter_dex"),
+        ({"halo_cut_radius_pivot_kpc": float("nan")}, "halo_cut_radius_pivot_kpc"),
+        ({"halo_cut_radius_mass_slope": -0.1}, "halo_cut_radius_mass_slope"),
+        ({"halo_cut_radius_scatter_dex": -0.1}, "halo_cut_radius_scatter_dex"),
+        ({"bcg_mass_fraction_median": 0.0}, "bcg_mass_fraction"),
+        ({"bcg_mass_fraction_min": 0.1, "bcg_mass_fraction_max": 0.05}, "bcg_mass_fraction"),
+        ({"bcg_mass_fraction_min": 0.005, "bcg_mass_fraction_median": 0.2, "bcg_mass_fraction_max": 0.08}, "bcg_mass_fraction"),
+        ({"bcg_mass_fraction_max": 1.0}, "bcg_mass_fraction"),
+        ({"bcg_mass_fraction_scatter_dex": -0.1}, "bcg_mass_fraction_scatter_dex"),
+        ({"bcg_core_radius_pivot_kpc": float("nan")}, "bcg_core_radius_pivot_kpc"),
+        ({"bcg_core_radius_mass_slope": -0.1}, "bcg_core_radius_mass_slope"),
+        ({"bcg_core_radius_scatter_dex": -0.1}, "bcg_core_radius_scatter_dex"),
+        ({"bcg_cut_radius_pivot_kpc": 0.0}, "bcg_cut_radius_pivot_kpc"),
+        ({"bcg_mass_pivot_msun": float("inf")}, "bcg_mass_pivot_msun"),
+        ({"bcg_cut_radius_mass_slope": -0.1}, "bcg_cut_radius_mass_slope"),
+        ({"bcg_cut_radius_scatter_dex": -0.1}, "bcg_cut_radius_scatter_dex"),
+        ({"sampled_total_large_component_mass_msun": -1.0}, "sampled_total_large_component_mass_msun"),
+        ({"sampled_bcg_mass_fraction": 1.0}, "sampled_bcg_mass_fraction"),
     ],
 )
 def test_subhalo_spatial_invalid_config_raises(updates: dict[str, Any], message: str) -> None:
@@ -2399,11 +2795,80 @@ def test_subhalo_spatial_config_round_trips_from_truth() -> None:
     truth = {
         "config": SingleBCGMockConfig(
             n_primary_families=1,
+            halo=mock_generation.DPIETruth(
+                potential_id="halo",
+                x_centre=4.2,
+                y_centre=-3.1,
+                ellipticite=0.28,
+                angle_pos=35.0,
+                core_radius_arcsec=5.0,
+                cut_radius_arcsec=220.0,
+                v_disp=760.0,
+            ),
+            bcg=mock_generation.DPIETruth(
+                potential_id="bcg",
+                x_centre=4.8,
+                y_centre=-2.6,
+                ellipticite=0.12,
+                angle_pos=10.0,
+                core_radius_arcsec=0.15,
+                cut_radius_arcsec=35.0,
+                v_disp=285.0,
+            ),
+            halo_position_half_width_arcsec=10.0,
+            bcg_position_offset_radius_arcsec=2.0,
+            total_large_component_mass_min_msun=5.0e14,
+            total_large_component_mass_max_msun=2.0e15,
+            large_component_mass_pivot_msun=8.0e14,
+            halo_core_radius_pivot_kpc=28.0,
+            halo_core_radius_mass_slope=0.2,
+            halo_core_radius_scatter_dex=0.02,
+            halo_cut_radius_pivot_kpc=1200.0,
+            halo_cut_radius_mass_slope=0.4,
+            halo_cut_radius_scatter_dex=0.03,
+            bcg_mass_fraction_median=0.025,
+            bcg_mass_fraction_scatter_dex=0.12,
+            bcg_mass_fraction_min=0.01,
+            bcg_mass_fraction_max=0.07,
+            bcg_core_radius_pivot_kpc=0.9,
+            bcg_core_radius_mass_slope=0.15,
+            bcg_core_radius_scatter_dex=0.05,
+            bcg_cut_radius_pivot_kpc=190.0,
+            bcg_mass_pivot_msun=1.8e13,
+            bcg_cut_radius_mass_slope=0.25,
+            bcg_cut_radius_scatter_dex=0.04,
+            sampled_total_large_component_mass_msun=7.5e14,
+            sampled_halo_mass_msun=7.3e14,
+            sampled_bcg_mass_msun=2.0e13,
+            sampled_bcg_mass_fraction=2.0e13 / 7.5e14,
             subhalo_spatial_distribution="dpie",
             subhalo_field_radius_arcsec=250.0,
             subhalo_spatial_core_radius_arcsec=25.0,
             subhalo_spatial_cut_radius_arcsec=180.0,
             subhalo_force_core_count=0,
+            subhalo_dpie_mass_ref_min_msun=2.0e11,
+            subhalo_dpie_mass_ref_max_msun=2.0e12,
+            subhalo_dpie_mass_pivot_msun=8.0e11,
+            subhalo_core_radius_pivot_kpc=0.002,
+            subhalo_core_radius_mass_slope=0.2,
+            subhalo_core_radius_scatter_dex=0.03,
+            subhalo_cut_radius_pivot_kpc=120.0,
+            subhalo_cut_radius_mass_slope=0.4,
+            subhalo_cut_radius_scatter_dex=0.05,
+            sampled_subhalo_dpie_mass_ref_msun=7.0e11,
+            subhalo_mag0=18.0,
+            subhalo_sigma_ref=110.0,
+            subhalo_sigma_ref_std=12.0,
+            subhalo_core_radius_arcsec=0.0004,
+            subhalo_cut_radius_arcsec=24.0,
+            subhalo_cut_lower_arcsec=6.0,
+            subhalo_cut_upper_arcsec=90.0,
+            subhalo_alpha_sigma=0.22,
+            subhalo_alpha_sigma_half_width=0.03,
+            subhalo_gamma_ml=0.04,
+            subhalo_gamma_ml_half_width=0.06,
+            sampled_subhalo_alpha_sigma=0.23,
+            sampled_subhalo_gamma_ml=0.02,
             source_magnitude_min=23.5,
             source_magnitude_max=26.5,
             image_magnitude_sigma_mag=0.12,
@@ -2418,6 +2883,59 @@ def test_subhalo_spatial_config_round_trips_from_truth() -> None:
     assert config.subhalo_spatial_core_radius_arcsec == pytest.approx(25.0)
     assert config.subhalo_spatial_cut_radius_arcsec == pytest.approx(180.0)
     assert config.subhalo_force_core_count == 0
+    assert config.subhalo_dpie_mass_ref_min_msun == pytest.approx(2.0e11)
+    assert config.subhalo_dpie_mass_ref_max_msun == pytest.approx(2.0e12)
+    assert config.subhalo_dpie_mass_pivot_msun == pytest.approx(8.0e11)
+    assert config.subhalo_core_radius_pivot_kpc == pytest.approx(0.002)
+    assert config.subhalo_core_radius_mass_slope == pytest.approx(0.2)
+    assert config.subhalo_core_radius_scatter_dex == pytest.approx(0.03)
+    assert config.subhalo_cut_radius_pivot_kpc == pytest.approx(120.0)
+    assert config.subhalo_cut_radius_mass_slope == pytest.approx(0.4)
+    assert config.subhalo_cut_radius_scatter_dex == pytest.approx(0.05)
+    assert config.sampled_subhalo_dpie_mass_ref_msun == pytest.approx(7.0e11)
+    assert config.subhalo_mag0 == pytest.approx(18.0)
+    assert config.subhalo_sigma_ref == pytest.approx(110.0)
+    assert config.subhalo_sigma_ref_std == pytest.approx(12.0)
+    assert config.subhalo_core_radius_arcsec == pytest.approx(0.0004)
+    assert config.subhalo_cut_radius_arcsec == pytest.approx(24.0)
+    assert config.subhalo_cut_lower_arcsec == pytest.approx(6.0)
+    assert config.subhalo_cut_upper_arcsec == pytest.approx(90.0)
+    assert config.subhalo_alpha_sigma == pytest.approx(0.22)
+    assert config.subhalo_alpha_sigma_half_width == pytest.approx(0.03)
+    assert config.subhalo_gamma_ml == pytest.approx(0.04)
+    assert config.subhalo_gamma_ml_half_width == pytest.approx(0.06)
+    assert config.sampled_subhalo_alpha_sigma == pytest.approx(0.23)
+    assert config.sampled_subhalo_gamma_ml == pytest.approx(0.02)
+    assert config.halo.x_centre == pytest.approx(4.2)
+    assert config.halo.y_centre == pytest.approx(-3.1)
+    assert config.bcg.x_centre == pytest.approx(4.8)
+    assert config.bcg.y_centre == pytest.approx(-2.6)
+    assert config.halo_position_half_width_arcsec == pytest.approx(10.0)
+    assert config.bcg_position_offset_radius_arcsec == pytest.approx(2.0)
+    assert config.total_large_component_mass_min_msun == pytest.approx(5.0e14)
+    assert config.total_large_component_mass_max_msun == pytest.approx(2.0e15)
+    assert config.large_component_mass_pivot_msun == pytest.approx(8.0e14)
+    assert config.halo_core_radius_pivot_kpc == pytest.approx(28.0)
+    assert config.halo_core_radius_mass_slope == pytest.approx(0.2)
+    assert config.halo_core_radius_scatter_dex == pytest.approx(0.02)
+    assert config.halo_cut_radius_pivot_kpc == pytest.approx(1200.0)
+    assert config.halo_cut_radius_mass_slope == pytest.approx(0.4)
+    assert config.halo_cut_radius_scatter_dex == pytest.approx(0.03)
+    assert config.bcg_mass_fraction_median == pytest.approx(0.025)
+    assert config.bcg_mass_fraction_scatter_dex == pytest.approx(0.12)
+    assert config.bcg_mass_fraction_min == pytest.approx(0.01)
+    assert config.bcg_mass_fraction_max == pytest.approx(0.07)
+    assert config.bcg_core_radius_pivot_kpc == pytest.approx(0.9)
+    assert config.bcg_core_radius_mass_slope == pytest.approx(0.15)
+    assert config.bcg_core_radius_scatter_dex == pytest.approx(0.05)
+    assert config.bcg_cut_radius_pivot_kpc == pytest.approx(190.0)
+    assert config.bcg_mass_pivot_msun == pytest.approx(1.8e13)
+    assert config.bcg_cut_radius_mass_slope == pytest.approx(0.25)
+    assert config.bcg_cut_radius_scatter_dex == pytest.approx(0.04)
+    assert config.sampled_total_large_component_mass_msun == pytest.approx(7.5e14)
+    assert config.sampled_halo_mass_msun == pytest.approx(7.3e14)
+    assert config.sampled_bcg_mass_msun == pytest.approx(2.0e13)
+    assert config.sampled_bcg_mass_fraction == pytest.approx(2.0e13 / 7.5e14)
     assert config.source_magnitude_min == pytest.approx(23.5)
     assert config.source_magnitude_max == pytest.approx(26.5)
     assert config.image_magnitude_sigma_mag == pytest.approx(0.12)
@@ -4091,11 +4609,12 @@ def test_generate_single_bcg_mock_can_request_subhalo_caustic_family(tmp_path: P
         n_primary_families=1,
         n_subhalo_families=1,
         n_subhalos=8,
-        subhalo_sigma_ref=300.0,
-        subhalo_cut_radius_arcsec=45.0,
+        **_fixed_potfile_scaling_config(sigma_ref=300.0, cut_radius_arcsec=45.0),
         pos_sigma_arcsec=0.0,
         primary_source_redshifts=(2.0,),
         subhalo_source_redshifts=(2.0,),
+        halo_position_half_width_arcsec=0.0,
+        bcg_position_offset_radius_arcsec=0.0,
         caustic_compute_window_arcsec=80.0,
         caustic_grid_scale_arcsec=1.0,
         mock_image_candidate_batch_size=8,
