@@ -26666,6 +26666,10 @@ def _prior_config_to_limit_entry(prior: PriorConfig | None, *, default_fixed_val
     if kind == "normal":
         if prior.mean is None or prior.std is None:
             raise ValueError("Normal priors require mean and std.")
+        if prior.lower is not None or prior.upper is not None:
+            if prior.lower is None or prior.upper is None:
+                raise ValueError("Bounded normal priors require both lower and upper.")
+            return [9, float(prior.mean), float(prior.std), float(prior.lower), float(prior.upper)]
         return [3, float(prior.mean), float(prior.std)]
     if kind == "truncated_normal":
         if prior.mean is None or prior.std is None or prior.lower is None or prior.upper is None:

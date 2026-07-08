@@ -18,7 +18,7 @@ from ..config import (
     RuntimeConfig,
 )
 from ..jax_cosmology import flat_wcdm_config, kpc_per_arcsec_from_config
-from .generation import MockClusterPaths, SingleBCGMockConfig
+from .generation import MockClusterPaths, SingleBCGMockConfig, mock_potfile_cut_prior_parameters
 
 
 @dataclass(frozen=True)
@@ -173,17 +173,33 @@ def single_bcg_mock_lens_model_config(
         raise ValueError("image_constraints_sigma_arcsec must be positive and finite.")
     kpc_per_arcsec = float(kpc_per_arcsec_from_config(mock_config.z_lens, flat_wcdm_config(h0=70.0, om0=0.3)))
     large_halos = (
-        _dpie_halo_config(mock_config.halo, mock_config, kpc_per_arcsec, position_half_width_arcsec=8.0),
+        _dpie_halo_config(
+            mock_config.halo,
+            mock_config,
+            kpc_per_arcsec,
+            position_half_width_arcsec=8.0,
+            cut_radius_prior_fractional_half_width=float(
+                mock_config.halo_cut_radius_prior_fractional_half_width
+            ),
+        ),
         _dpie_halo_config(
             mock_config.bcg,
             mock_config,
             kpc_per_arcsec,
             position_half_width_arcsec=float(mock_config.bcg_position_prior_half_width_arcsec),
+            cut_radius_prior_fractional_half_width=float(
+                mock_config.bcg_cut_radius_prior_fractional_half_width
+            ),
         ),
     )
     member_populations: tuple[MemberPopulationConfig, ...] = ()
     member_catalog_path = paths.root / "members.cat"
     if int(mock_config.n_subhalos) > 0 and member_catalog_path.is_file():
+        potfile_cutkpc = float(mock_config.subhalo_cut_radius_arcsec) * kpc_per_arcsec
+        cut_lower, cut_upper, cut_std = mock_potfile_cut_prior_parameters(
+            potfile_cutkpc,
+            float(mock_config.subhalo_cut_radius_prior_fractional_half_width),
+        )
         member_populations = (
             MemberPopulationConfig(
                 id="potfile",
@@ -191,7 +207,7 @@ def single_bcg_mock_lens_model_config(
                 mag0=float(mock_config.subhalo_mag0),
                 corekpc=float(mock_config.subhalo_core_radius_arcsec) * kpc_per_arcsec,
                 sigma=float(mock_config.subhalo_sigma_ref),
-                cutkpc=float(mock_config.subhalo_cut_radius_arcsec) * kpc_per_arcsec,
+                cutkpc=potfile_cutkpc,
                 z_lens=float(mock_config.z_lens),
                 sigma_prior=PriorConfig(
                     "normal",
@@ -199,9 +215,11 @@ def single_bcg_mock_lens_model_config(
                     std=float(mock_config.subhalo_sigma_ref_std),
                 ),
                 cutkpc_prior=PriorConfig(
-                    "uniform",
-                    lower=float(mock_config.subhalo_cut_lower_arcsec) * kpc_per_arcsec,
-                    upper=float(mock_config.subhalo_cut_upper_arcsec) * kpc_per_arcsec,
+                    "normal",
+                    mean=potfile_cutkpc,
+                    std=cut_std,
+                    lower=cut_lower,
+                    upper=cut_upper,
                 ),
             ),
         )
@@ -258,6 +276,7 @@ def _dpie_halo_config(
     kpc_per_arcsec: float,
     *,
     position_half_width_arcsec: float,
+    cut_radius_prior_fractional_half_width: float,
 ) -> DPIEHaloConfig:
     core_radius_kpc = float(component.core_radius_arcsec) * kpc_per_arcsec
     cut_radius_kpc = float(component.cut_radius_arcsec) * kpc_per_arcsec
@@ -294,8 +313,8 @@ def _dpie_halo_config(
             ),
             "cut_radius_kpc": PriorConfig(
                 "uniform",
-                lower=float(component.cut_radius_arcsec) * 0.4 * kpc_per_arcsec,
-                upper=float(component.cut_radius_arcsec) * 2.0 * kpc_per_arcsec,
+                lower=_fractional_lower(cut_radius_kpc, cut_radius_prior_fractional_half_width),
+                upper=_fractional_upper(cut_radius_kpc, cut_radius_prior_fractional_half_width),
                 step=0.5 * kpc_per_arcsec,
             ),
             "v_disp": PriorConfig(
@@ -306,3 +325,11 @@ def _dpie_halo_config(
             ),
         },
     )
+
+
+def _fractional_lower(value: float, fractional_half_width: float) -> float:
+    return float(value) * (1.0 - float(fractional_half_width))
+
+
+def _fractional_upper(value: float, fractional_half_width: float) -> float:
+    return float(value) * (1.0 + float(fractional_half_width))

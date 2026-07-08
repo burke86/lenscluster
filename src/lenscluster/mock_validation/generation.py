@@ -24,8 +24,11 @@ from skimage.measure import find_contours
 
 from .. import jax_lensing
 from ..jax_cosmology import (
+    ARCSEC_TO_RAD,
+    C_LIGHT_KM_S,
     dpie_sigma0_from_vel_disp as _jax_dpie_sigma0_from_vel_disp,
     flat_wcdm_config,
+    flat_wcdm_lensing_efficiency,
     kpc_per_arcsec_from_config,
 )
 from ..utils import log10_dpie_mass_msun
@@ -46,6 +49,9 @@ MOCK_LOCAL_SEED_GRID_MIN_HALF_ARCSEC = 0.25
 DEFAULT_SUBHALO_SEED_GRID_PIXEL_ARCSEC = 1.0
 DEFAULT_BCG_POSITION_PRIOR_HALF_WIDTH_ARCSEC = 8.0
 SUBHALO_SELECTION_MAX_ATTEMPTS = 5
+MOCK_POTFILE_CORE_PRIOR_LOWER_KPC = 0.01
+MOCK_POTFILE_CORE_PRIOR_UPPER_KPC = 10.0
+MOCK_POTFILE_CUT_PRIOR_FRACTIONAL_SCALE = 0.25
 MockProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
@@ -116,6 +122,7 @@ class SingleBCGMockConfig:
     halo_cut_radius_pivot_kpc: float = 1175.0
     halo_cut_radius_mass_slope: float = 1.0 / 3.0
     halo_cut_radius_scatter_dex: float = 0.08
+    halo_cut_radius_prior_fractional_half_width: float = 0.10
     bcg_mass_fraction_median: float = 0.02
     bcg_mass_fraction_scatter_dex: float = 0.25
     bcg_mass_fraction_min: float = 0.005
@@ -127,6 +134,7 @@ class SingleBCGMockConfig:
     bcg_mass_pivot_msun: float = 1.7e13
     bcg_cut_radius_mass_slope: float = 1.0 / 3.0
     bcg_cut_radius_scatter_dex: float = 0.10
+    bcg_cut_radius_prior_fractional_half_width: float = 0.10
     sampled_total_large_component_mass_msun: float | None = None
     sampled_halo_mass_msun: float | None = None
     sampled_bcg_mass_msun: float | None = None
@@ -164,11 +172,11 @@ class SingleBCGMockConfig:
     subhalo_dpie_mass_ref_min_msun: float = 1.0e11
     subhalo_dpie_mass_ref_max_msun: float = 3.0e12
     subhalo_dpie_mass_pivot_msun: float = 1.0e12
-    subhalo_core_radius_pivot_kpc: float = 0.001
+    subhalo_core_radius_pivot_kpc: float = 0.15
     subhalo_core_radius_mass_slope: float = 1.0 / 3.0
     subhalo_core_radius_scatter_dex: float = 0.0
-    subhalo_cut_radius_pivot_kpc: float = 187.0
-    subhalo_cut_radius_mass_slope: float = 1.0 / 3.0
+    subhalo_cut_radius_pivot_kpc: float = 15.0
+    subhalo_cut_radius_mass_slope: float = 0.50
     subhalo_cut_radius_scatter_dex: float = 0.10
     sampled_subhalo_dpie_mass_ref_msun: float | None = None
     subhalo_sigma_ref: float = 245.0
@@ -179,6 +187,7 @@ class SingleBCGMockConfig:
     subhalo_cut_lower_arcsec: float = 8.0
     subhalo_cut_upper_arcsec: float = 80.0
     subhalo_cut_scatter_dex: float = 0.0
+    subhalo_cut_radius_prior_fractional_half_width: float = MOCK_POTFILE_CUT_PRIOR_FRACTIONAL_SCALE
     subhalo_alpha_sigma: float = 0.25
     subhalo_alpha_sigma_half_width: float = 0.05
     subhalo_gamma_ml: float = 0.0
@@ -299,6 +308,14 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         value = float(getattr(config, name))
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(f"{name} must be finite and nonnegative.")
+    for name in (
+        "halo_cut_radius_prior_fractional_half_width",
+        "bcg_cut_radius_prior_fractional_half_width",
+        "subhalo_cut_radius_prior_fractional_half_width",
+    ):
+        value = float(getattr(config, name))
+        if not math.isfinite(value) or value <= 0.0 or value >= 1.0:
+            raise ValueError(f"{name} must be finite and in the open interval (0, 1).")
     fraction_min = float(config.bcg_mass_fraction_min)
     fraction_max = float(config.bcg_mass_fraction_max)
     fraction_median = float(config.bcg_mass_fraction_median)
@@ -368,6 +385,19 @@ def validate_single_bcg_mock_config(config: SingleBCGMockConfig) -> None:
         value = float(getattr(config, name))
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(f"{name} must be finite and nonnegative.")
+    if float(config.subhalo_core_radius_scatter_dex) == 0.0:
+        core_min, core_max = _subhalo_core_radius_truth_range_kpc(config)
+        if (
+            not math.isfinite(core_min)
+            or not math.isfinite(core_max)
+            or core_min < MOCK_POTFILE_CORE_PRIOR_LOWER_KPC
+            or core_max > MOCK_POTFILE_CORE_PRIOR_UPPER_KPC
+        ):
+            raise ValueError(
+                "subhalo_core_radius_pivot_kpc and mass scaling must keep deterministic "
+                "potfile.corekpc truth inside solver prior support "
+                f"[{MOCK_POTFILE_CORE_PRIOR_LOWER_KPC}, {MOCK_POTFILE_CORE_PRIOR_UPPER_KPC}] kpc."
+            )
     if config.sampled_subhalo_dpie_mass_ref_msun is not None and (
         not math.isfinite(float(config.sampled_subhalo_dpie_mass_ref_msun))
         or float(config.sampled_subhalo_dpie_mass_ref_msun) <= 0.0
@@ -461,6 +491,56 @@ def _sigma_from_dpie_mass(mass_msun: float, cut_radius_kpc: float) -> float:
     log_mass_constant = float(log10_dpie_mass_msun(1.0, 1.0))
     log_sigma = 0.5 * (math.log10(float(mass_msun)) - math.log10(float(cut_radius_kpc)) - log_mass_constant)
     return float(10.0**log_sigma)
+
+
+def _subhalo_core_radius_truth_range_kpc(config: SingleBCGMockConfig) -> tuple[float, float]:
+    values = [
+        float(config.subhalo_core_radius_pivot_kpc)
+        * (float(mass) / float(config.subhalo_dpie_mass_pivot_msun))
+        ** float(config.subhalo_core_radius_mass_slope)
+        for mass in (float(config.subhalo_dpie_mass_ref_min_msun), float(config.subhalo_dpie_mass_ref_max_msun))
+    ]
+    return float(min(values)), float(max(values))
+
+
+def mock_potfile_cut_prior_parameters(
+    cut_kpc: float,
+    fractional_scale: float = MOCK_POTFILE_CUT_PRIOR_FRACTIONAL_SCALE,
+) -> tuple[float, float, float]:
+    cut = float(cut_kpc)
+    if not math.isfinite(cut) or cut <= 0.0:
+        raise ValueError("potfile.cutkpc truth must be positive and finite.")
+    scale = float(fractional_scale)
+    if not math.isfinite(scale) or scale <= 0.0 or scale >= 1.0:
+        raise ValueError("potfile.cutkpc prior fractional scale must be finite and in (0, 1).")
+    return scale * cut, cut / scale, scale * cut
+
+
+def _validate_realized_potfile_truth_support(config: SingleBCGMockConfig, kpc_per_arcsec: float) -> None:
+    sigma_ref = float(config.subhalo_sigma_ref)
+    core_kpc = float(config.subhalo_core_radius_arcsec) * float(kpc_per_arcsec)
+    cut_kpc = float(config.subhalo_cut_radius_arcsec) * float(kpc_per_arcsec)
+    if not math.isfinite(sigma_ref) or sigma_ref <= 0.0:
+        raise ValueError("Realized potfile.sigma truth must be positive and finite.")
+    if (
+        not math.isfinite(core_kpc)
+        or core_kpc < MOCK_POTFILE_CORE_PRIOR_LOWER_KPC
+        or core_kpc > MOCK_POTFILE_CORE_PRIOR_UPPER_KPC
+    ):
+        raise ValueError(
+            "Realized potfile.corekpc truth must be finite and inside solver prior support "
+            f"[{MOCK_POTFILE_CORE_PRIOR_LOWER_KPC}, {MOCK_POTFILE_CORE_PRIOR_UPPER_KPC}] kpc; "
+            f"got {core_kpc:.6g}."
+        )
+    cut_lower, cut_upper, _cut_std = mock_potfile_cut_prior_parameters(
+        cut_kpc,
+        float(config.subhalo_cut_radius_prior_fractional_half_width),
+    )
+    if not (cut_lower <= cut_kpc <= cut_upper):
+        raise ValueError(
+            "Realized potfile.cutkpc truth must be inside the mock fitting prior support "
+            f"[{cut_lower:.6g}, {cut_upper:.6g}] kpc; got {cut_kpc:.6g}."
+        )
 
 
 def _sample_log_uniform(rng: np.random.Generator, lower: float, upper: float) -> float:
@@ -754,6 +834,46 @@ def _subhalo_selection_payload(
     if extra_metadata:
         payload.update(extra_metadata)
     return payload
+
+
+def _member_einstein_radius_diagnostic(
+    config: SingleBCGMockConfig,
+    subhalo_components: list[DPIETruth],
+    source_redshifts: tuple[float, ...],
+    cosmo_config: dict[str, Any],
+) -> dict[str, float]:
+    if not subhalo_components or not source_redshifts:
+        max_theta = 0.0
+    else:
+        v_disp = np.asarray([float(component.v_disp) for component in subhalo_components], dtype=float)
+        z_sources = np.asarray([float(value) for value in source_redshifts], dtype=float)
+        efficiencies = np.asarray(
+            flat_wcdm_lensing_efficiency(
+                float(config.z_lens),
+                z_sources,
+                float(cosmo_config.get("H0", 70.0)),
+                float(cosmo_config.get("Om0", 0.3)),
+                float(cosmo_config.get("w0", -1.0)),
+            ),
+            dtype=float,
+        )
+        sigma0 = math.sqrt(1.5) * v_disp
+        theta_by_member_source = (
+            4.0
+            * math.pi
+            * np.square(sigma0[:, None] / float(C_LIGHT_KM_S))
+            * efficiencies[None, :]
+            / float(ARCSEC_TO_RAD)
+        )
+        finite = theta_by_member_source[np.isfinite(theta_by_member_source)]
+        max_theta = float(np.max(finite)) if finite.size else 0.0
+    pos_sigma = float(config.pos_sigma_arcsec)
+    ratio = float(max_theta / pos_sigma) if pos_sigma > 0.0 else float("inf")
+    return {
+        "max_member_theta_e_arcsec": max_theta,
+        "pos_sigma_arcsec": pos_sigma,
+        "max_member_theta_e_over_pos_sigma": ratio,
+    }
 
 
 def _subhalo_schechter_luminosity_bounds(config: SingleBCGMockConfig) -> tuple[float, float]:
@@ -1828,6 +1948,7 @@ def generate_single_bcg_mock(
         config = _realize_potfile_exponents(config, rng)
         config.validate()
         config = _realize_potfile_scaling(config, rng, float(kpc_per_arcsec))
+        _validate_realized_potfile_truth_support(config, float(kpc_per_arcsec))
     _emit_mock_progress(
         progress_callback,
         "subhalos_start",
@@ -1880,6 +2001,20 @@ def generate_single_bcg_mock(
             )
         )
     primary_family_redshifts, subhalo_family_redshifts, needed_source_redshifts = _mock_family_source_redshifts(config)
+    if subhalo_selection is not None:
+        lensing_diagnostic = _member_einstein_radius_diagnostic(
+            config,
+            subhalo_components,
+            tuple(float(value) for value in needed_source_redshifts),
+            cosmo_config,
+        )
+        subhalo_selection.update(lensing_diagnostic)
+        if (
+            float(lensing_diagnostic["pos_sigma_arcsec"]) > 0.0
+            and float(lensing_diagnostic["max_member_theta_e_arcsec"])
+            < float(lensing_diagnostic["pos_sigma_arcsec"])
+        ):
+            _emit_mock_progress(progress_callback, "subhalo_lensing_warning", **lensing_diagnostic)
     redshift_index_by_value = {float(z): index + 1 for index, z in enumerate(needed_source_redshifts)}
     caustic_num_pix = 0
     if float(config.caustic_compute_window_arcsec) > 0.0 and float(config.caustic_grid_scale_arcsec) > 0.0:
@@ -2675,6 +2810,12 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         halo_cut_radius_scatter_dex=float(
             config.get("halo_cut_radius_scatter_dex", defaults.halo_cut_radius_scatter_dex)
         ),
+        halo_cut_radius_prior_fractional_half_width=float(
+            config.get(
+                "halo_cut_radius_prior_fractional_half_width",
+                defaults.halo_cut_radius_prior_fractional_half_width,
+            )
+        ),
         bcg_mass_fraction_median=float(config.get("bcg_mass_fraction_median", defaults.bcg_mass_fraction_median)),
         bcg_mass_fraction_scatter_dex=float(
             config.get("bcg_mass_fraction_scatter_dex", defaults.bcg_mass_fraction_scatter_dex)
@@ -2695,6 +2836,12 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         ),
         bcg_cut_radius_scatter_dex=float(
             config.get("bcg_cut_radius_scatter_dex", defaults.bcg_cut_radius_scatter_dex)
+        ),
+        bcg_cut_radius_prior_fractional_half_width=float(
+            config.get(
+                "bcg_cut_radius_prior_fractional_half_width",
+                defaults.bcg_cut_radius_prior_fractional_half_width,
+            )
         ),
         sampled_total_large_component_mass_msun=(
             None
@@ -2794,6 +2941,12 @@ def _caustic_config_from_truth(truth: dict[str, Any]) -> SingleBCGMockConfig:
         subhalo_cut_lower_arcsec=float(config.get("subhalo_cut_lower_arcsec", defaults.subhalo_cut_lower_arcsec)),
         subhalo_cut_upper_arcsec=float(config.get("subhalo_cut_upper_arcsec", defaults.subhalo_cut_upper_arcsec)),
         subhalo_cut_scatter_dex=float(config.get("subhalo_cut_scatter_dex", defaults.subhalo_cut_scatter_dex)),
+        subhalo_cut_radius_prior_fractional_half_width=float(
+            config.get(
+                "subhalo_cut_radius_prior_fractional_half_width",
+                defaults.subhalo_cut_radius_prior_fractional_half_width,
+            )
+        ),
         subhalo_alpha_sigma=float(config.get("subhalo_alpha_sigma", defaults.subhalo_alpha_sigma)),
         subhalo_alpha_sigma_half_width=float(
             config.get("subhalo_alpha_sigma_half_width", defaults.subhalo_alpha_sigma_half_width)

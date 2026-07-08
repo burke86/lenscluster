@@ -126,10 +126,7 @@ from ..utils import (
     progress_context as _progress_context,
     run_logged_phase as _run_logged_phase,
 )
-from .aggregate_plots import (
-    dpie_mass_anchor_from_truth,
-    dpie_truth_subhalo_masses_from_scaling,
-)
+from .subhalo_mass import dpie_mass_anchor_from_truth, dpie_truth_subhalo_masses_from_scaling
 
 from ..runner import LensClusterRunner
 from .config import MockValidationConfig, solver_config_for_single_bcg_mock
@@ -390,6 +387,16 @@ class _ValidationMockProgress:
                     f"observable={int(payload.get('observable_count', 0))} "
                     f"retries={int(payload.get('retry_count', 0))} "
                     f"mag_cut<={float(payload.get('mag_faint_limit', np.nan)):.4g}"
+                ),
+            )
+        elif event == "subhalo_lensing_warning":
+            _log(
+                self.args,
+                (
+                    "[warning] mock member lensing signal is sub-detectable "
+                    f"max_theta_E={float(payload.get('max_member_theta_e_arcsec', np.nan)):.4g}\" "
+                    f"pos_sigma={float(payload.get('pos_sigma_arcsec', np.nan)):.4g}\" "
+                    f"ratio={float(payload.get('max_member_theta_e_over_pos_sigma', np.nan)):.4g}"
                 ),
             )
         elif event == "redshift_start":
