@@ -142,7 +142,7 @@ def _solver_template(
         svi_steps = 10_000, 20_000, 20_000
         warmup = 20000, 20000
         samples = 1000, 1000
-        max_tree_depth = 8, 6
+        max_tree_depth = 8, 8
     else:
         svi_steps = 500, 20_000, 20_000
         warmup = 100, 100
@@ -243,7 +243,7 @@ def build_config(
         n_subhalo_families=n_subhalo_families,
         # Smoke needs a member population when scatter is injected so the linearized
         # scatter likelihood path is actually exercised.
-        n_subhalos=50 if production else (10 if scatter_ln > 0.0 else 0),
+        n_subhalos=25 if production else (10 if scatter_ln > 0.0 else 0),
         subhalo_spatial_distribution="dpie",
         subhalo_spatial_core_radius_arcsec=25.0,
         subhalo_spatial_cut_radius_arcsec=180.0,
