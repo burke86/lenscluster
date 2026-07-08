@@ -2011,8 +2011,8 @@ def _plot_active_scaling_summary(
             label="p_active unavailable",
         )
     ax_map.set_title("Sky map")
-    ax_map.set_xlabel("x [arcsec]")
-    ax_map.set_ylabel("y [arcsec]")
+    ax_map.set_xlabel("x (arcsec)")
+    ax_map.set_ylabel("y (arcsec)")
     ax_map.set_aspect("equal", adjustable="datalim")
     ax_map.legend(loc="best", fontsize=8)
 
@@ -2724,8 +2724,8 @@ def _plot_free_galaxy_shape_comparison(shape_df: pd.DataFrame, path: Path) -> No
     axes[1].plot([-90.0, 90.0], [-90.0, 90.0], color="0.25", linestyle="--", linewidth=1.0)
     axes[1].set_xlim(-95.0, 95.0)
     axes[1].set_ylim(-95.0, 95.0)
-    axes[1].set_xlabel("catalog angle_pos [deg]")
-    axes[1].set_ylabel("model angle_pos [deg]")
+    axes[1].set_xlabel("catalog angle_pos (deg)")
+    axes[1].set_ylabel("model angle_pos (deg)")
     axes[1].set_title("Position Angle")
 
     if len(df) <= 30:
@@ -5587,7 +5587,7 @@ def _plot_scaling_rank_scatter(plot_dir: Path, scaling_rank_df: pd.DataFrame) ->
         for row, y_plot in zip(top_df.itertuples(index=False), top_importance.tolist()):
             ax.annotate(str(row.catalog_id), (row.min_distance_arcsec, y_plot), fontsize=7, alpha=0.8)
         ax.set_title(f"{potfile_id}: importance vs distance")
-        ax.set_xlabel("min distance to observed images [arcsec]")
+        ax.set_xlabel("min distance to observed images (arcsec)")
         ax.set_ylabel("importance")
         ax.legend(loc="best", fontsize=8)
         _apply_log_importance_axis(ax, pot_df["importance"])
@@ -5842,10 +5842,10 @@ def _plot_scaling_relation_summary(plot_dir: Path, relation_df: pd.DataFrame) ->
     catalog_color_norm = Normalize(vmin=color_min, vmax=color_max, clip=True)
     catalog_color_cmap = plt.get_cmap("coolwarm")
     fields = [
-        ("v_disp", "velocity dispersion [km/s]"),
-        ("core_radius_kpc", "core radius [kpc]"),
-        ("cut_radius_kpc", "cut radius [kpc]"),
-        ("log10_mass_msun", "log10 mass [Msun]"),
+        ("v_disp", "velocity dispersion (km/s)"),
+        ("core_radius_kpc", "core radius (kpc)"),
+        ("cut_radius_kpc", "cut radius (kpc)"),
+        ("log10_mass_msun", "log10 mass (Msun)"),
     ]
     potfile_ids = df["potfile_id"].drop_duplicates().tolist()
     fig, axes = plt.subplots(
@@ -6521,7 +6521,7 @@ def _plot_source_plane_residual_histogram(
     _plot_gaussian_component_histogram(
         axes[0],
         arcsec_component,
-        xlabel="Signed source-plane residual [arcsec]",
+        xlabel="Signed source-plane residual (arcsec)",
         title="Signed Components",
     )
     _plot_gaussian_component_histogram(
@@ -7607,8 +7607,8 @@ def _plot_image_recovery_fit_quality(
         if is_recovered and np.isfinite(x_fit) and np.isfinite(y_fit):
             ax.plot([row.x_obs_arcsec, x_fit], [row.y_obs_arcsec, y_fit], color="0.6", lw=0.7)
     ax.invert_xaxis()
-    ax.set_xlabel("x [arcsec]")
-    ax.set_ylabel("y [arcsec]")
+    ax.set_xlabel("x (arcsec)")
+    ax.set_ylabel("y (arcsec)")
     ax.set_title("Observed vs Model Image Positions")
     ax.legend(loc="best", fontsize=8)
 
@@ -7651,7 +7651,7 @@ def _plot_image_recovery_fit_quality(
             label="arc-aware",
         )
     axes[1].set_xlabel("image index")
-    axes[1].set_ylabel("image residual [arcsec]")
+    axes[1].set_ylabel("image residual (arcsec)")
     axes[1].set_title("Image Residuals")
     if finite_arc_residual.any():
         axes[1].legend(loc="best", fontsize=8)
@@ -7961,7 +7961,7 @@ def _plot_image_residual_histogram(
             "alpha": 0.88,
         },
     )
-    ax.set_xlabel("image residual [arcsec]")
+    ax.set_xlabel("image residual (arcsec)")
     ax.set_ylabel("N images")
     ax.set_title(
         "Image Residuals: Point and Arc-Aware Recovery"
@@ -8109,7 +8109,7 @@ def _plot_critical_arc_support_histogram(
         residual_ax.hist(arc_residual, bins=_histogram_bins(arc_residual), color="tab:olive", alpha=0.48, label="arc-aware")
     if not strict_residual.size and not arc_residual.size:
         _mark_panel_unavailable(residual_ax)
-    residual_ax.set_xlabel("image residual [arcsec]")
+    residual_ax.set_xlabel("image residual (arcsec)")
     residual_ax.set_ylabel("N images")
     residual_ax.set_title("Strict vs Arc-Aware Residual")
     if strict_residual.size or arc_residual.size:
@@ -8133,7 +8133,7 @@ def _plot_critical_arc_support_histogram(
         noncritical_ax.hist(curve_distance, bins=_histogram_bins(curve_distance), color="tab:green", alpha=0.75)
     else:
         _mark_panel_unavailable(noncritical_ax)
-    noncritical_ax.set_xlabel("support-curve distance [arcsec]")
+    noncritical_ax.set_xlabel("support-curve distance (arcsec)")
     noncritical_ax.set_ylabel("N images")
     noncritical_ax.set_title("Support-Curve Distance Diagnostic")
 
@@ -8142,7 +8142,7 @@ def _plot_critical_arc_support_histogram(
         critical_direction_ax.hist(critical_direction_log, bins=_histogram_bins(critical_direction_log), color="tab:purple", alpha=0.72)
     else:
         _mark_panel_unavailable(critical_direction_ax)
-    critical_direction_ax.set_xlabel("log10 critical-direction residual [arcsec]")
+    critical_direction_ax.set_xlabel("log10 critical-direction residual (arcsec)")
     critical_direction_ax.set_ylabel("N images")
     critical_direction_ax.set_title("Critical-Direction Residual")
 
@@ -8258,7 +8258,7 @@ def _plot_critical_arc_support_histogram(
     else:
         _mark_panel_unavailable(tuning_ax)
     tuning_ax.set_xlabel("log10 smallest singular value")
-    tuning_ax.set_ylabel("support-curve distance [arcsec]")
+    tuning_ax.set_ylabel("support-curve distance (arcsec)")
     tuning_ax.set_title("p_arc vs Support Distance")
 
     fig.tight_layout()
@@ -8460,7 +8460,7 @@ def _plot_residual_vs_magnification(image_df: pd.DataFrame, magnification_df: pd
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
     finite_residual = np.isfinite(abs_mu) & np.isfinite(residual)
     axes[0].scatter(abs_mu[finite_residual], residual[finite_residual], color="tab:blue", s=26)
-    axes[0].set_ylabel("image residual [arcsec]")
+    axes[0].set_ylabel("image residual (arcsec)")
     axes[0].set_title("Residual vs Magnification")
 
     finite_norm = np.isfinite(abs_mu) & np.isfinite(residual_norm)
@@ -8755,8 +8755,8 @@ def _plot_flux_magnification_ratio_consistency(pair_df: pd.DataFrame, path: Path
     ax.set_xlim(*limits)
     ax.set_ylim(*limits)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel(r"observed $m_i - m_j$ [mag]")
-    ax.set_ylabel(r"model $-2.5\log_{10}(|\mu_i|/|\mu_j|)$ [mag]")
+    ax.set_xlabel(r"observed $m_i - m_j$ (mag)")
+    ax.set_ylabel(r"model $-2.5\log_{10}(|\mu_i|/|\mu_j|)$ (mag)")
     ax.set_title("Same-Family Flux-Magnification Ratio Consistency")
     ax.legend(loc="upper left", fontsize=8, frameon=True)
     fig.tight_layout()
@@ -8768,8 +8768,8 @@ def _plot_residual_geometry_trends(image_df: pd.DataFrame, path: Path) -> None:
         return
     residual = _fit_quality_value(image_df, "image_residual_q50", "image_residual_arcsec")
     x_columns = [
-        ("radius_arcsec", "radius [arcsec]", "Residual vs Radius"),
-        ("angle_deg", "angle [deg]", "Residual vs Angle"),
+        ("radius_arcsec", "radius (arcsec)", "Residual vs Radius"),
+        ("angle_deg", "angle (deg)", "Residual vs Angle"),
         ("z_source", "source redshift", "Residual vs Redshift"),
     ]
     if not any(column in image_df.columns for column, _xlabel, _title in x_columns):
@@ -8784,7 +8784,7 @@ def _plot_residual_geometry_trends(image_df: pd.DataFrame, path: Path) -> None:
             ax.scatter(x_values[finite], residual[finite], color="tab:blue", s=24)
             plotted = True
         ax.set_xlabel(xlabel)
-        ax.set_ylabel("image residual [arcsec]")
+        ax.set_ylabel("image residual (arcsec)")
         ax.set_title(title)
     if not plotted:
         plt.close(fig)
@@ -8815,14 +8815,14 @@ def _plot_exact_vs_approx_prediction_error(family_df: pd.DataFrame, path: Path) 
         lo = float(np.nanmin(finite_pair))
         hi = float(np.nanmax(finite_pair))
         axes[0].plot([lo, hi], [lo, hi], color="black", linewidth=1.0)
-    axes[0].set_xlabel("approx image RMS [arcsec]")
-    axes[0].set_ylabel("exact image RMS [arcsec]")
+    axes[0].set_xlabel("approx image RMS (arcsec)")
+    axes[0].set_ylabel("exact image RMS (arcsec)")
     axes[0].set_title("Exact vs Approx RMS")
 
     order = np.argsort(diff)
     axes[1].bar(np.arange(len(diff)), diff[order], color="tab:orange")
     axes[1].axhline(0.0, color="black", linewidth=1.0)
-    axes[1].set_ylabel("exact - approx [arcsec]")
+    axes[1].set_ylabel("exact - approx (arcsec)")
     axes[1].set_title("RMS Difference")
 
     axes[2].bar(np.arange(len(ratio)), ratio[order], color="tab:purple")
@@ -9020,8 +9020,8 @@ def _plot_caustic_overlay(
     for idx, fam in enumerate(evaluator.state.family_data):
         image_ax.scatter(fam.x_obs, fam.y_obs, color=cmap(idx), s=14, label=fam.family_id)
     image_ax.invert_xaxis()
-    image_ax.set_xlabel("x [arcsec]")
-    image_ax.set_ylabel("y [arcsec]")
+    image_ax.set_xlabel("x (arcsec)")
+    image_ax.set_ylabel("y (arcsec)")
     image_ax.set_title(f"Tangential Critical Lines + Images (z={z_source:g})")
 
     for contour in contours:
@@ -9037,8 +9037,8 @@ def _plot_caustic_overlay(
     for idx, fam in enumerate(evaluator.state.family_data):
         pred = best_source_eval.family_predictions[fam.family_id]
         source_ax.scatter(pred["source_x"], pred["source_y"], color=cmap(idx), s=14)
-    source_ax.set_xlabel(r"$\beta_x$ [arcsec]")
-    source_ax.set_ylabel(r"$\beta_y$ [arcsec]")
+    source_ax.set_xlabel(r"$\beta_x$ (arcsec)")
+    source_ax.set_ylabel(r"$\beta_y$ (arcsec)")
     source_ax.set_title("Caustics + Source Centroids")
     fig.tight_layout()
     _finish_figure(fig, _plot_path(plot_dir, "caustic_overlay.png"), dpi=180, bbox_inches="tight")
@@ -10719,8 +10719,8 @@ def _plot_kappa_true_comparison_from_grid(
         colorbar.set_label(colorbar_label)
         if overlays:
             _plot_map_overlays(ax)
-        ax.set_xlabel("x [arcsec]")
-        ax.set_ylabel("y [arcsec]")
+        ax.set_xlabel("x (arcsec)")
+        ax.set_ylabel("y (arcsec)")
         fig.tight_layout()
         _finish_figure(fig, _plot_path(plot_dir, output_name), dpi=180, bbox_inches="tight")
 
@@ -10797,9 +10797,9 @@ def _plot_kappa_model_truth_fractional_residual_from_grid(
             **kwargs,
         )
         panel_images.append((image, ax, colorbar_label))
-        ax.set_xlabel("x [arcsec]")
+        ax.set_xlabel("x (arcsec)")
         if panel_index == 0:
-            ax.set_ylabel("y [arcsec]")
+            ax.set_ylabel("y (arcsec)")
     canvas = getattr(fig, "canvas", None)
     if canvas is not None and hasattr(canvas, "draw"):
         canvas.draw()
@@ -11087,7 +11087,7 @@ def _plot_truth_recovery_m2d_aperture_ratio(
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax_resid.set_xlim(left=5.0)
-    ax_resid.set_xlabel("R [arcsec]")
+    ax_resid.set_xlabel("R (arcsec)")
     ax_resid.set_ylabel("residual")
     ax.set_ylabel(r"enclosed $M_{\rm 2D}(<R)$")
     ax.set_title("Projected aperture mass recovery")
@@ -11469,9 +11469,9 @@ def _plot_abs_mu_model_truth_fractional_residual_from_grid(
             **kwargs,
         )
         panel_images.append((image, ax, colorbar_label))
-        ax.set_xlabel("x [arcsec]")
+        ax.set_xlabel("x (arcsec)")
         if panel_index == 0:
-            ax.set_ylabel("y [arcsec]")
+            ax.set_ylabel("y (arcsec)")
     canvas = getattr(fig, "canvas", None)
     if canvas is not None and hasattr(canvas, "draw"):
         canvas.draw()
@@ -11537,8 +11537,8 @@ def _plot_critical_line_recovery_from_grid(
     if not legend_handles:
         ax.text(0.5, 0.5, "No zero-determinant critical line in grid.", ha="center", va="center", transform=ax.transAxes)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x [arcsec]")
-    ax.set_ylabel("y [arcsec]")
+    ax.set_xlabel("x (arcsec)")
+    ax.set_ylabel("y (arcsec)")
     ax.set_title(fr"Critical-line recovery ($z_s={float(z_source):g}$)")
     if legend_handles:
         ax.legend(handles=legend_handles, loc="best", fontsize=8, frameon=True)
@@ -12002,8 +12002,8 @@ def _plot_subhalo_radial_distribution(subhalo_df: pd.DataFrame, path: Path) -> N
         color="tab:blue",
         alpha=0.75,
     )
-    ax.set_xlabel("cluster-centric radius [arcsec]")
-    ax.set_ylabel(r"$dN/dR$ [arcsec$^{-1}$]")
+    ax.set_xlabel("cluster-centric radius (arcsec)")
+    ax.set_ylabel(r"$dN/dR$ (arcsec$^{-1}$)")
     fig.tight_layout()
     _finish_figure(fig, path, dpi=180, bbox_inches="tight")
 

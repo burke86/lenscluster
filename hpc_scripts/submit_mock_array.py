@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         "--campaign",
         type=_validate_campaign_label,
         required=True,
-        help="Campaign label. The submitted run name is always <date>_<campaign>.",
+        help="Campaign label. The submitted run name is always <date>_<time>_mock_validation_<campaign>.",
     )
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output directory passed to run_mock.xsh.")
     parser.add_argument("--preset", choices=("smoke", "production"), default=DEFAULT_PRESET)
@@ -71,15 +71,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def make_run_stamp() -> str:
-    now = datetime.now()
-    return f"{now.strftime('%b').lower()}{now.day}_{now.strftime('%I%M%p').lower()}"
-
-
 def make_campaign_name(label: str) -> str:
     label = _validate_campaign_label(str(label))
     now = datetime.now()
-    return f"{now.strftime('%b').lower()}{now.day}_{now:%H%M}_{label}"
+    return f"{now.strftime('%b').lower()}{now.day}_{now:%H%M}_mock_validation_{label}"
+
+
+def make_sbatch_prefix(campaign: str, preset: str) -> str:
+    return f"{campaign}_{preset}"
 
 
 def shell_array(values: tuple[int, ...]) -> str:
@@ -187,7 +186,7 @@ def submit_array(sbatch_path: Path, num_tasks: int) -> str:
 def main() -> None:
     args = parse_args()
     args.campaign = make_campaign_name(args.campaign)
-    prefix = f"{args.campaign}_{args.preset}_{make_run_stamp()}"
+    prefix = make_sbatch_prefix(args.campaign, args.preset)
     sbatch_path = write_sbatch_script(prefix, build_sbatch_script(prefix, args))
 
     print(f"Wrote sbatch script: {sbatch_path}")

@@ -31,13 +31,16 @@ PAPER_PARAMETERS = (
     "halo.v_disp",
     "halo.core_radius_kpc",
     "halo.cut_radius_kpc",
+    "halo.log10_mass_msun",
     "bcg.x_centre",
     "bcg.y_centre",
     "bcg.v_disp",
     "bcg.core_radius_kpc",
     "bcg.cut_radius_kpc",
+    "bcg.log10_mass_msun",
     "potfile.sigma",
     "potfile.cutkpc",
+    "potfile.log10_mass_msun",
     "potfile.alpha_sigma",
     "potfile.gamma_ml",
     "cosmology_Om0",
@@ -682,21 +685,44 @@ def _axis_limits(*arrays: np.ndarray) -> tuple[float, float] | None:
 PARAMETER_DISPLAY_LABELS = {
     "bcg.core_radius_kpc": r"BCG $r_\mathrm{core}$",
     "bcg.cut_radius_kpc": r"BCG $r_\mathrm{cut}$",
+    "bcg.log10_mass_msun": r"BCG $\log_{10} M$",
     "bcg.v_disp": r"BCG $\sigma_v$",
     "bcg.x_centre": "BCG x",
     "bcg.y_centre": "BCG y",
     "halo.core_radius_kpc": r"Halo $r_\mathrm{core}$",
     "halo.cut_radius_kpc": r"Halo $r_\mathrm{cut}$",
+    "halo.log10_mass_msun": r"Halo $\log_{10} M$",
     "halo.v_disp": r"Halo $\sigma_v$",
     "halo.x_centre": "Halo x",
     "halo.y_centre": "Halo y",
     "potfile.sigma": r"Potfile $\sigma$",
     "potfile.cutkpc": r"Potfile $r_\mathrm{cut}$",
+    "potfile.log10_mass_msun": r"Potfile $\log_{10} M$",
     "potfile.alpha_sigma": r"Potfile $\alpha_\sigma$",
     "potfile.gamma_ml": r"Potfile $\gamma_\mathrm{ML}$",
     "cosmology_Om0": r"$\Omega_m$",
     "cosmology_w0": r"$w_0$",
     "source.sigma_int": r"Source $\sigma_\mathrm{int}$",
+}
+
+
+PARAMETER_UNIT_LABELS = {
+    "bcg.core_radius_kpc": "kpc",
+    "bcg.cut_radius_kpc": "kpc",
+    "bcg.log10_mass_msun": r"$M_\odot$",
+    "bcg.v_disp": r"km s$^{-1}$",
+    "bcg.x_centre": "arcsec",
+    "bcg.y_centre": "arcsec",
+    "halo.core_radius_kpc": "kpc",
+    "halo.cut_radius_kpc": "kpc",
+    "halo.log10_mass_msun": r"$M_\odot$",
+    "halo.v_disp": r"km s$^{-1}$",
+    "halo.x_centre": "arcsec",
+    "halo.y_centre": "arcsec",
+    "potfile.sigma": r"km s$^{-1}$",
+    "potfile.cutkpc": "kpc",
+    "potfile.log10_mass_msun": r"$M_\odot$",
+    "source.sigma_int": "arcsec",
 }
 
 
@@ -709,6 +735,23 @@ def _format_parameter_label(parameter: str) -> str:
     if name.startswith("source.") and name.endswith(".beta_y"):
         return r"Source $\beta_y$"
     return name.replace("_", " ")
+
+
+def _format_parameter_unit(parameter: str) -> str | None:
+    name = str(parameter)
+    if name in PARAMETER_UNIT_LABELS:
+        return PARAMETER_UNIT_LABELS[name]
+    if name.startswith("source.") and (name.endswith(".beta_x") or name.endswith(".beta_y")):
+        return "arcsec"
+    return None
+
+
+def _format_parameter_axis_label(parameter: str, role: str) -> str:
+    label = _format_parameter_label(parameter)
+    unit = _format_parameter_unit(parameter)
+    if unit is None:
+        return f"{label} ({role})"
+    return f"{label} ({role}; {unit})"
 
 
 def _plot_recovery_page(
@@ -773,9 +816,8 @@ def _plot_recovery_page(
             ax.plot(limits, limits, color="0.25", linewidth=1.0, alpha=0.7)
             ax.set_xlim(limits)
             ax.set_ylim(limits)
-        label = _format_parameter_label(parameter)
-        ax.set_xlabel(f"{label} (truth)")
-        ax.set_ylabel(f"{label} (fit)")
+        ax.set_xlabel(_format_parameter_axis_label(parameter, "truth"))
+        ax.set_ylabel(_format_parameter_axis_label(parameter, "fit"))
     for ax in axes.ravel()[len(parameters) :]:
         ax.axis("off")
     _add_method_legend(fig, variants=_ordered_variants_from_df(page_df))
@@ -792,6 +834,60 @@ def seed_recovery_rows_for_stage(
     df = finite_recovery_rows(parameter_df)
     mask = df["stage"].astype(str).eq(str(stage)) & df["variant"].astype(str).isin(variants)
     return df.loc[mask].copy()
+
+
+PAPER_MASS_PARAMETER_SPECS = (
+    ("halo.log10_mass_msun", "halo.v_disp", "halo.cut_radius_kpc"),
+    ("bcg.log10_mass_msun", "bcg.v_disp", "bcg.cut_radius_kpc"),
+    ("potfile.log10_mass_msun", "potfile.sigma", "potfile.cutkpc"),
+)
+
+
+def paper_mass_proxy_recovery_rows(parameter_df: pd.DataFrame) -> pd.DataFrame:
+    if parameter_df.empty:
+        return pd.DataFrame(columns=parameter_df.columns)
+    key_columns = [
+        column
+        for column in ("campaign", "run_name", "seed", "variant", "stage", "stage_label", "method_label", "result_path")
+        if column in parameter_df
+    ]
+    if not key_columns or "parameter" not in parameter_df:
+        return pd.DataFrame(columns=parameter_df.columns)
+    rows: list[dict[str, Any]] = []
+    grouped = parameter_df.groupby(key_columns, sort=False, dropna=False)
+    for keys, group in grouped:
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_key = dict(zip(key_columns, key_values))
+        by_parameter = {str(record["parameter"]): record for record in group.to_dict("records")}
+        for mass_parameter, sigma_parameter, rcut_parameter in PAPER_MASS_PARAMETER_SPECS:
+            sigma_row = by_parameter.get(sigma_parameter)
+            rcut_row = by_parameter.get(rcut_parameter)
+            if sigma_row is None or rcut_row is None:
+                continue
+            row = dict(group_key)
+            row["parameter"] = mass_parameter
+            for output_column, input_column in (("truth", "truth"), ("median", "median"), ("q16", "q16"), ("q84", "q84")):
+                row[output_column] = float(log10_dpie_mass_msun(sigma_row[input_column], rcut_row[input_column]))
+            row["best_fit"] = row["median"]
+            row["bias"] = float(row["median"] - row["truth"])
+            row["covered_68"] = bool(row["q16"] <= row["truth"] <= row["q84"])
+            if "truth_percentile" in parameter_df:
+                row["truth_percentile"] = np.nan
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame(columns=parameter_df.columns)
+    mass_df = pd.DataFrame(rows)
+    for column in parameter_df.columns:
+        if column not in mass_df:
+            mass_df[column] = np.nan
+    return mass_df.loc[:, list(parameter_df.columns)]
+
+
+def paper_parameter_recovery_rows(parameter_df: pd.DataFrame) -> pd.DataFrame:
+    mass_df = paper_mass_proxy_recovery_rows(parameter_df)
+    if mass_df.empty:
+        return parameter_df.copy()
+    return pd.concat([parameter_df, mass_df], ignore_index=True, sort=False)
 
 
 def stage2_seed_recovery_rows(
@@ -891,9 +987,8 @@ def _draw_seed_parameter_axis(ax: plt.Axes, page_df: pd.DataFrame, parameter: st
         ax.plot(limits, limits, color="0.25", linewidth=1.0, alpha=0.7)
         ax.set_xlim(limits)
         ax.set_ylim(limits)
-    label = _format_parameter_label(parameter)
-    ax.set_xlabel(f"{label} (truth)")
-    ax.set_ylabel(f"{label} (fit)")
+    ax.set_xlabel(_format_parameter_axis_label(parameter, "truth"))
+    ax.set_ylabel(_format_parameter_axis_label(parameter, "fit"))
 
 
 def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame, *, include_legend: bool = True) -> bool:
@@ -948,8 +1043,8 @@ def _draw_source_position_recovery_axis(ax: plt.Axes, parameter_df: pd.DataFrame
         ax.plot(limits, limits, color="0.25", linewidth=1.0, alpha=0.75)
         ax.set_xlim(limits)
         ax.set_ylim(limits)
-    ax.set_xlabel("Source Position (truth)")
-    ax.set_ylabel("Source Position (fit)")
+    ax.set_xlabel("Source Position (truth; arcsec)")
+    ax.set_ylabel("Source Position (fit; arcsec)")
     if include_legend:
         handles = [
             Line2D(
@@ -1913,7 +2008,7 @@ def plot_aggregate_image_residual_recovery(
         ax.set_xticklabels([variant_label(variant) for variant in variants], rotation=18, ha="right")
         ax.set_xlim(-0.5, max(0.5, len(variants) - 0.5))
         ax.set_xlabel("Fit variant")
-        ax.set_ylabel("image RMS [arcsec]")
+        ax.set_ylabel("image RMS (arcsec)")
         if legend_handles:
             ax.legend(
                 legend_handles.values(),
@@ -1944,7 +2039,7 @@ def plot_aggregate_image_residual_distribution(
     paths: list[Path] = []
     for fmt in formats:
         path = output_base.with_suffix(f".{fmt}")
-        fig, (hist_ax, cdf_ax) = plt.subplots(2, 1, figsize=(5.8, 6.2), sharex=True)
+        fig, ax = plt.subplots(figsize=(5.8, 3.6))
         for variant in variants:
             group = summary_df[summary_df["variant"].astype(str) == variant].sort_values("bin_center")
             if group.empty:
@@ -1956,7 +2051,7 @@ def plot_aggregate_image_residual_distribution(
             hist_q84 = group["hist_count_q84"].to_numpy(dtype=float)
             finite_hist = np.isfinite(x) & np.isfinite(hist_q16) & np.isfinite(hist_q50) & np.isfinite(hist_q84)
             if np.any(finite_hist):
-                hist_ax.fill_between(
+                ax.fill_between(
                     x[finite_hist],
                     hist_q16[finite_hist],
                     hist_q84[finite_hist],
@@ -1965,7 +2060,7 @@ def plot_aggregate_image_residual_distribution(
                     step="mid",
                     linewidth=0.0,
                 )
-                hist_ax.step(
+                ax.step(
                     x[finite_hist],
                     hist_q50[finite_hist],
                     where="mid",
@@ -1973,29 +2068,12 @@ def plot_aggregate_image_residual_distribution(
                     linewidth=2.0,
                     label=variant_label(variant),
                 )
-            cdf_q16 = group["cumulative_fraction_q16"].to_numpy(dtype=float)
-            cdf_q50 = group["cumulative_fraction_q50"].to_numpy(dtype=float)
-            cdf_q84 = group["cumulative_fraction_q84"].to_numpy(dtype=float)
-            finite_cdf = np.isfinite(x) & np.isfinite(cdf_q16) & np.isfinite(cdf_q50) & np.isfinite(cdf_q84)
-            if np.any(finite_cdf):
-                cdf_ax.fill_between(
-                    x[finite_cdf],
-                    cdf_q16[finite_cdf],
-                    cdf_q84[finite_cdf],
-                    color=color,
-                    alpha=0.18,
-                    step="mid",
-                    linewidth=0.0,
-                )
-                cdf_ax.step(x[finite_cdf], cdf_q50[finite_cdf], where="mid", color=color, linewidth=2.0)
-        hist_ax.set_ylabel("median N images")
-        cdf_ax.set_ylabel("fraction recovered")
-        cdf_ax.set_xlabel("image residual [arcsec]")
-        cdf_ax.set_xlim(0.0, x_max)
-        cdf_ax.set_ylim(-0.03, 1.03)
-        handles, labels = hist_ax.get_legend_handles_labels()
+        ax.set_ylabel("N images")
+        ax.set_xlabel("image residual (arcsec)")
+        ax.set_xlim(0.0, x_max)
+        handles, labels = ax.get_legend_handles_labels()
         if labels:
-            hist_ax.legend(handles, labels, loc="best", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
+            ax.legend(handles, labels, loc="best", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
         fig.tight_layout()
         fig.savefig(path, dpi=300)
         plt.close(fig)
@@ -2808,14 +2886,14 @@ def _m2d_two_panel_axes() -> tuple[Any, Any, Any]:
 def _m2d_finish_axes(top_ax: Any, resid_ax: Any, resid_values: np.ndarray) -> None:
     top_ax.set_xscale("log")
     top_ax.set_yscale("log")
-    top_ax.set_ylabel(r"$M_{\rm 2D}(<R)\ [M_\odot]$")
+    top_ax.set_ylabel(r"$M_{\rm 2D}(<R)$ ($M_\odot$)")
     top_ax.grid(True, alpha=0.25)
     top_ax.legend(loc="lower right", frameon=False, fontsize=AGGREGATE_LEGEND_FONT_SIZE)
     resid_ax.axhline(0.0, color="0.2", linestyle="--", linewidth=1.0)
     finite = resid_values[np.isfinite(resid_values)]
     limit = 0.1 if finite.size == 0 else float(min(0.5, max(0.1, 1.2 * np.max(np.abs(finite)))))
     resid_ax.set_ylim(-limit, limit)
-    resid_ax.set_xlabel(r"$R$ [kpc]")
+    resid_ax.set_xlabel(r"$R$ (kpc)")
     resid_ax.set_ylabel(r"$M_{\rm 2D}/M_{\rm 2D}^{\rm true} - 1$")
     resid_ax.grid(True, alpha=0.25)
 
@@ -3086,11 +3164,12 @@ def write_aggregate_plots(
     if parameter_set in {"paper", "both"}:
         for stage in tuple(str(value) for value in stages):
             stage_seed_df = seed_recovery_rows_for_stage(parameter_df, stage=stage, variants=variants)
-            stage_available_parameters = stage_seed_df["parameter"].dropna().astype(str).drop_duplicates().tolist()
+            stage_paper_df = paper_parameter_recovery_rows(stage_seed_df)
+            stage_available_parameters = stage_paper_df["parameter"].dropna().astype(str).drop_duplicates().tolist()
             paper_parameters = [parameter for parameter in PAPER_PARAMETERS if parameter in set(stage_available_parameters)]
             plot_paths.extend(
                 _save_multipage_seed_recovery_plot(
-                    stage_seed_df,
+                    stage_paper_df,
                     paper_parameters,
                     _paper_plot_output_base(output_path, stage, paper_stage),
                     formats,

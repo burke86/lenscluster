@@ -3580,7 +3580,7 @@ def _plot_mass_profile_recovery(profile_df: pd.DataFrame, path: Path) -> None:
         )
         ratio_ax.plot(radius, ratio_median, color=color, linewidth=line_width)
 
-    ax.set_ylabel("deflection magnitude [arcsec]")
+    ax.set_ylabel("deflection magnitude (arcsec)")
     ax.legend(loc="best", fontsize=8)
     if narrow_messages:
         ax.text(
@@ -3594,7 +3594,7 @@ def _plot_mass_profile_recovery(profile_df: pd.DataFrame, path: Path) -> None:
             color="0.35",
         )
     ratio_ax.axhline(0.0, color="black", linestyle="--", linewidth=1.0)
-    ratio_ax.set_xlabel("radius [arcsec]")
+    ratio_ax.set_xlabel("radius (arcsec)")
     ratio_ax.set_ylabel("(post. - truth) / truth")
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -3675,7 +3675,7 @@ def _plot_surface_density_recovery(profile_df: pd.DataFrame, path: Path) -> None
         )
         ratio_ax.plot(radius, ratio_median, color=color, linewidth=line_width)
 
-    ax.set_ylabel(r"$\Sigma$ [M$_\odot$ arcsec$^{-2}$]")
+    ax.set_ylabel(r"$\Sigma$ (M$_\odot$ arcsec$^{-2}$)")
     if positive_values:
         all_values = profile_df[["truth", "q16", "median", "q84"]].to_numpy(dtype=float).reshape(-1)
         finite_values = all_values[np.isfinite(all_values)]
@@ -3683,7 +3683,7 @@ def _plot_surface_density_recovery(profile_df: pd.DataFrame, path: Path) -> None
             ax.set_yscale("log")
     ax.legend(loc="best", fontsize=8)
     ratio_ax.axhline(0.0, color="black", linestyle="--", linewidth=1.0)
-    ratio_ax.set_xlabel("radius [arcsec]")
+    ratio_ax.set_xlabel("radius (arcsec)")
     ratio_ax.set_ylabel("(post. - truth) / truth")
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -3944,10 +3944,10 @@ def _plot_absolute_magnification_recovery(
 
     for ax in axes:
         ax.invert_xaxis()
-        ax.set_ylabel("y [arcsec]")
+        ax.set_ylabel("y (arcsec)")
         _limit_recovery_axis_ticks(ax)
     axes[0].tick_params(axis="x", labelbottom=False)
-    axes[1].set_xlabel("x [arcsec]")
+    axes[1].set_xlabel("x (arcsec)")
     fig.tight_layout()
     fig.savefig(path, dpi=180)
     plt.close(fig)
@@ -4018,8 +4018,8 @@ def _plot_image_recovery(image_df: pd.DataFrame, path: Path) -> None:
         if np.isfinite(x_fit) and np.isfinite(y_fit):
             ax.plot([row.x_obs_arcsec, x_fit], [row.y_obs_arcsec, y_fit], color="0.6", lw=0.8)
     ax.invert_xaxis()
-    ax.set_xlabel("x [arcsec]")
-    ax.set_ylabel("y [arcsec]")
+    ax.set_xlabel("x (arcsec)")
+    ax.set_ylabel("y (arcsec)")
     ax.set_title("Image positions")
     ax.legend(loc="best", fontsize=8)
 
@@ -4059,7 +4059,7 @@ def _plot_image_recovery(image_df: pd.DataFrame, path: Path) -> None:
             label="arc-aware",
         )
     axes[1].set_xlabel("image index")
-    axes[1].set_ylabel("image residual [arcsec]")
+    axes[1].set_ylabel("image residual (arcsec)")
     axes[1].set_title("Image residuals with 1 sigma intervals")
     axes[1].legend(loc="best", fontsize=8)
     fig.tight_layout()
@@ -4345,7 +4345,7 @@ def _plot_image_residual_histogram(
             "alpha": 0.9,
         },
     )
-    ax.set_xlabel("image residual [arcsec]")
+    ax.set_xlabel("image residual (arcsec)")
     ax.set_ylabel("posterior median N images" if has_posterior_histogram else "N images")
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
@@ -4438,8 +4438,8 @@ def _plot_source_recovery(source_df: pd.DataFrame, path: Path) -> None:
         for row, sx_fit, sy_fit in zip(source_df.itertuples(index=False), sx, sy):
             if np.isfinite(sx_fit) and np.isfinite(sy_fit):
                 ax.plot([row.beta_x, sx_fit], [row.beta_y, sy_fit], color="0.6", lw=0.8)
-    ax.set_xlabel(r"$\beta_x$ [arcsec]")
-    ax.set_ylabel(r"$\beta_y$ [arcsec]")
+    ax.set_xlabel(r"$\beta_x$ (arcsec)")
+    ax.set_ylabel(r"$\beta_y$ (arcsec)")
     ax.set_title("Source positions")
     ax.legend(loc="best", fontsize=8)
 
@@ -4465,7 +4465,7 @@ def _plot_source_recovery(source_df: pd.DataFrame, path: Path) -> None:
         else:
             axes[1].scatter(x_index, values, color="tab:blue")
         axes[1].set_xlabel("family index")
-        axes[1].set_ylabel("source position error [arcsec]")
+        axes[1].set_ylabel("source position error (arcsec)")
     else:
         values = (
             source_df["source_plane_rms_q50"].to_numpy(dtype=float)
@@ -4488,7 +4488,7 @@ def _plot_source_recovery(source_df: pd.DataFrame, path: Path) -> None:
         else:
             axes[1].scatter(x_index, values, color="tab:blue")
         axes[1].set_xlabel("family index")
-        axes[1].set_ylabel("source-plane RMS [arcsec]")
+        axes[1].set_ylabel("source-plane RMS (arcsec)")
     axes[1].set_title("Source recovery with 1 sigma intervals")
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -4620,7 +4620,7 @@ def _plot_subhalo_selection(truth: dict[str, Any], path: Path) -> None:
         mag_ax.axhline(faint_limit, color="black", linestyle="--", linewidth=1.0, label="faint limit")
     mag_ax.set_xscale("log")
     mag_ax.invert_yaxis()
-    mag_ax.set_xlabel(r"$M_{\rm sub}\ [M_\odot]$")
+    mag_ax.set_xlabel(r"$M_{\rm sub}$ ($M_\odot$)")
     mag_ax.set_ylabel("catalog magnitude")
     mag_ax.set_title("Count-matched selection")
     mag_ax.legend(loc="best", fontsize=8)
@@ -4976,8 +4976,8 @@ def _plot_subhalo_recovery_radial(truth: dict[str, Any], recovered_subhalo_df: p
     ax.xaxis.set_minor_locator(AutoMinorLocator(5))
     ax.tick_params(axis="x", which="minor", length=3.0)
     ax.tick_params(axis="both", which="major", labelsize=12)
-    ax.set_xlabel(r"$R_{\rm sub}$ [arcsec]", fontsize=14)
-    ax.set_ylabel(r"$dN/dR$ [arcsec$^{-1}$]", fontsize=14)
+    ax.set_xlabel(r"$R_{\rm sub}$ (arcsec)", fontsize=14)
+    ax.set_ylabel(r"$dN/dR$ (arcsec$^{-1}$)", fontsize=14)
     ax.legend(loc="upper left", fontsize=11)
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -5052,8 +5052,8 @@ def _plot_prefit_subhalo_spatial_distribution(subhalo_df: pd.DataFrame, images: 
     ax.scatter([0.0], [0.0], color="tab:red", marker="+", s=80, label="BCG")
     ax.invert_xaxis()
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x [arcsec]")
-    ax.set_ylabel("y [arcsec]")
+    ax.set_xlabel("x (arcsec)")
+    ax.set_ylabel("y (arcsec)")
     ax.set_title("Pre-fit subhalo field")
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
@@ -5131,13 +5131,13 @@ def _plot_prefit_critical_lines(truth: dict[str, Any], path: Path) -> None:
 
     image_ax.invert_xaxis()
     image_ax.set_aspect("equal", adjustable="box")
-    image_ax.set_xlabel("x [arcsec]")
-    image_ax.set_ylabel("y [arcsec]")
+    image_ax.set_xlabel("x (arcsec)")
+    image_ax.set_ylabel("y (arcsec)")
     image_ax.set_title(fr"Truth image plane, $z_s={z_display}$")
     image_ax.legend(loc="best", fontsize=7)
     source_ax.set_aspect("equal", adjustable="box")
-    source_ax.set_xlabel(r"$\beta_x$ [arcsec]")
-    source_ax.set_ylabel(r"$\beta_y$ [arcsec]")
+    source_ax.set_xlabel(r"$\beta_x$ (arcsec)")
+    source_ax.set_ylabel(r"$\beta_y$ (arcsec)")
     source_ax.set_title(fr"Truth source plane, $z_s={z_display}$")
     source_ax.legend(loc="best", fontsize=7)
     for ax in axes:
@@ -5206,8 +5206,8 @@ def _plot_critical_caustic_recovery(
 
     image_ax.invert_xaxis()
     image_ax.set_aspect("equal", adjustable="box")
-    image_ax.set_xlabel("x [arcsec]")
-    image_ax.set_ylabel("y [arcsec]")
+    image_ax.set_xlabel("x (arcsec)")
+    image_ax.set_ylabel("y (arcsec)")
     image_ax.set_title(r"Image plane, $z_s=7$")
     image_ax.legend(loc="best", fontsize=7)
 
@@ -5239,8 +5239,8 @@ def _plot_critical_caustic_recovery(
             recovered_caustic_labeled = True
 
     source_ax.set_aspect("equal", adjustable="box")
-    source_ax.set_xlabel(r"$\beta_x$ [arcsec]")
-    source_ax.set_ylabel(r"$\beta_y$ [arcsec]")
+    source_ax.set_xlabel(r"$\beta_x$ (arcsec)")
+    source_ax.set_ylabel(r"$\beta_y$ (arcsec)")
     source_ax.set_title(r"Source plane, $z_s=7$")
     source_ax.legend(loc="best", fontsize=7)
     for ax in axes:

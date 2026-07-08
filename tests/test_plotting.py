@@ -4883,8 +4883,8 @@ def test_kappa_model_truth_fractional_residual_three_panel_plot(monkeypatch: Any
     ]
     for axis_index, axis in enumerate(axes):
         assert axis.inverted is False
-        assert axis.xlabel == "x [arcsec]"
-        assert axis.ylabel == ("y [arcsec]" if axis_index == 0 else None)
+        assert axis.xlabel == "x (arcsec)"
+        assert axis.ylabel == ("y (arcsec)" if axis_index == 0 else None)
         assert len(axis.pcolormesh_calls) == 1
         np.testing.assert_allclose(axis.pcolormesh_calls[0][0], x_arcsec)
         np.testing.assert_allclose(axis.pcolormesh_calls[0][1], y_arcsec)
@@ -6535,8 +6535,8 @@ def test_abs_mu_model_truth_fractional_residual_three_panel_plot(monkeypatch: An
     ]
     for axis_index, axis in enumerate(axes):
         assert axis.inverted is False
-        assert axis.xlabel == "x [arcsec]"
-        assert axis.ylabel == ("y [arcsec]" if axis_index == 0 else None)
+        assert axis.xlabel == "x (arcsec)"
+        assert axis.ylabel == ("y (arcsec)" if axis_index == 0 else None)
         assert len(axis.pcolormesh_calls) == 1
         np.testing.assert_allclose(axis.pcolormesh_calls[0][0], x_arcsec)
         np.testing.assert_allclose(axis.pcolormesh_calls[0][1], y_arcsec)

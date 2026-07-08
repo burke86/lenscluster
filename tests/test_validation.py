@@ -2726,10 +2726,10 @@ def test_plot_absolute_magnification_recovery_uses_capped_viridis_and_centered_r
     panel_xlabels = [(ax, label) for ax, label in xlabels if ax in layout_axes]
     panel_ylabels = [(ax, label) for ax, label in ylabels if ax in layout_axes]
     assert layout_axes[0].get_xlabel() == ""
-    assert layout_axes[1].get_xlabel() == "x [arcsec]"
-    assert not any(ax is layout_axes[0] and label == "x [arcsec]" for ax, label in panel_xlabels)
-    assert any(ax is layout_axes[1] and label == "x [arcsec]" for ax, label in panel_xlabels)
-    assert panel_ylabels == [(layout_axes[0], "y [arcsec]"), (layout_axes[1], "y [arcsec]")]
+    assert layout_axes[1].get_xlabel() == "x (arcsec)"
+    assert not any(ax is layout_axes[0] and label == "x (arcsec)" for ax, label in panel_xlabels)
+    assert any(ax is layout_axes[1] and label == "x (arcsec)" for ax, label in panel_xlabels)
+    assert panel_ylabels == [(layout_axes[0], "y (arcsec)"), (layout_axes[1], "y (arcsec)")]
     assert any(
         ax is layout_axes[0]
         and kwargs.get("axis") == "x"
@@ -2832,7 +2832,7 @@ def test_plot_image_residual_histogram_reports_point_and_arc_aware_counts(
     assert axvline_values[1] == pytest.approx(float(np.sqrt(np.mean(np.square(hist_values[1])))))
     assert any("Point RMS" in text and "(2/4)" in text and "Arc-aware RMS" in text and "(3/4)" in text for text in texts)
     assert any("arc-supported = 1/4" in text and "missed = 1/4" in text for text in texts)
-    assert xlabels == ["image residual [arcsec]"]
+    assert xlabels == ["image residual (arcsec)"]
     assert ylabels == ["N images"]
 
 
@@ -19617,7 +19617,7 @@ def test_aggregate_image_residual_recovery_plot_summarizes_seed_posterior_rms(
         assert len(saved_figures) == 1
         axes = saved_figures[0].axes
         assert len(axes) == 1
-        assert axes[0].get_ylabel() == "image RMS [arcsec]"
+        assert axes[0].get_ylabel() == "image RMS (arcsec)"
         assert axes[0].get_title() == ""
         assert axes[0].get_xlabel() == "Fit variant"
         legend = axes[0].get_legend()
@@ -19640,7 +19640,7 @@ def test_aggregate_image_residual_recovery_plot_summarizes_seed_posterior_rms(
         plt.close("all")
 
 
-def test_aggregate_image_residual_distribution_plot_draws_histogram_and_cumulative(
+def test_aggregate_image_residual_distribution_plot_draws_histogram_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -19706,16 +19706,13 @@ def test_aggregate_image_residual_distribution_plot_draws_histogram_and_cumulati
         assert paths == (tmp_path / "mock_image_residual_distribution.pdf",)
         assert len(saved_figures) == 1
         axes = saved_figures[0].axes
-        assert len(axes) == 2
-        assert axes[0].get_ylabel() == "median N images"
-        assert axes[1].get_ylabel() == "fraction recovered"
-        assert axes[1].get_xlabel() == "image residual [arcsec]"
-        assert axes[1].get_xlim() == pytest.approx((0.0, 0.60))
+        assert len(axes) == 1
+        assert axes[0].get_ylabel() == "N images"
+        assert axes[0].get_xlabel() == "image residual (arcsec)"
+        assert axes[0].get_xlim() == pytest.approx((0.0, 0.60))
         legend = axes[0].get_legend()
         assert legend is not None
         assert [text.get_text() for text in legend.get_texts()] == ["No flux", "Flux"]
-        assert axes[1].get_ylim()[0] <= 0.0
-        assert axes[1].get_ylim()[1] >= 1.0
     finally:
         plt.close("all")
 
@@ -19962,6 +19959,10 @@ def test_aggregate_seed_parameter_axis_uses_polished_variant_markers(monkeypatch
         assert mag_scatter["kwargs"]["linewidths"] == pytest.approx(0.75)
         assert mag_scatter["kwargs"]["alpha"] == pytest.approx(aggregate_plots.AGGREGATE_PARAMETER_POINT_ALPHA)
         assert mag_scatter["kwargs"]["zorder"] == 2
+        assert ax.get_xlabel() == r"Halo $\sigma_v$ (truth; km s$^{-1}$)"
+        assert ax.get_ylabel() == r"Halo $\sigma_v$ (fit; km s$^{-1}$)"
+        assert "[" not in ax.get_xlabel()
+        assert "[" not in ax.get_ylabel()
     finally:
         plt.close(fig)
 
@@ -20146,6 +20147,77 @@ def test_aggregate_parameter_recovery_bias_quantiles_use_per_seed_biases(tmp_pat
     assert pd.isna(gamma_row["fractional_bias_q16"])
     assert pd.isna(gamma_row["fractional_bias_median"])
     assert pd.isna(gamma_row["fractional_bias_q84"])
+
+
+def test_paper_mass_proxy_recovery_rows_derive_log10_mass_panels() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+    from lenscluster.utils import log10_dpie_mass_msun
+
+    base = {
+        "campaign": "mock",
+        "run_name": "single_bcg",
+        "seed": 12345,
+        "variant": "anisotropic",
+        "stage": "stage2_free_source_forward_fit",
+        "stage_label": "Stage 2",
+        "method_label": "Stage 2 No flux",
+        "result_path": "results.json",
+        "truth_percentile": 0.5,
+        "covered_68": True,
+    }
+    rows = []
+    for parameter, truth, q16, median, q84 in (
+        ("halo.v_disp", 760.0, 720.0, 770.0, 805.0),
+        ("halo.cut_radius_kpc", 950.0, 920.0, 970.0, 1030.0),
+        ("bcg.v_disp", 285.0, 270.0, 280.0, 295.0),
+        ("bcg.cut_radius_kpc", 75.0, 65.0, 80.0, 95.0),
+        ("potfile.sigma", 245.0, 236.0, 242.0, 250.0),
+        ("potfile.cutkpc", 187.0, 170.0, 195.0, 225.0),
+    ):
+        rows.append(
+            {
+                **base,
+                "parameter": parameter,
+                "truth": truth,
+                "best_fit": median,
+                "q16": q16,
+                "median": median,
+                "q84": q84,
+                "bias": median - truth,
+            }
+        )
+    parameter_df = pd.DataFrame(rows)
+
+    mass_df = aggregate_plots.paper_mass_proxy_recovery_rows(parameter_df)
+
+    assert set(mass_df["parameter"]) == {
+        "halo.log10_mass_msun",
+        "bcg.log10_mass_msun",
+        "potfile.log10_mass_msun",
+    }
+    halo_row = mass_df[mass_df["parameter"] == "halo.log10_mass_msun"].iloc[0]
+    assert float(halo_row["truth"]) == pytest.approx(float(log10_dpie_mass_msun(760.0, 950.0)))
+    assert float(halo_row["median"]) == pytest.approx(float(log10_dpie_mass_msun(770.0, 970.0)))
+    assert float(halo_row["q16"]) == pytest.approx(float(log10_dpie_mass_msun(720.0, 920.0)))
+    assert float(halo_row["q84"]) == pytest.approx(float(log10_dpie_mass_msun(805.0, 1030.0)))
+    assert float(halo_row["bias"]) == pytest.approx(float(halo_row["median"] - halo_row["truth"]))
+    assert bool(halo_row["covered_68"]) is True
+
+    missing_cut_df = parameter_df[parameter_df["parameter"] != "potfile.cutkpc"].copy()
+    missing_mass_df = aggregate_plots.paper_mass_proxy_recovery_rows(missing_cut_df)
+    assert "potfile.log10_mass_msun" not in set(missing_mass_df["parameter"])
+
+
+def test_paper_parameters_place_log10_mass_panels_near_sigma_and_rcut() -> None:
+    import lenscluster.mock_validation.aggregate_plots as aggregate_plots
+
+    paper_parameters = list(aggregate_plots.PAPER_PARAMETERS)
+    assert paper_parameters.index("halo.log10_mass_msun") == paper_parameters.index("halo.cut_radius_kpc") + 1
+    assert paper_parameters.index("bcg.log10_mass_msun") == paper_parameters.index("bcg.cut_radius_kpc") + 1
+    assert paper_parameters.index("potfile.log10_mass_msun") == paper_parameters.index("potfile.cutkpc") + 1
+    assert aggregate_plots._format_parameter_label("halo.log10_mass_msun") == r"Halo $\log_{10} M$"
+    assert aggregate_plots._format_parameter_label("bcg.log10_mass_msun") == r"BCG $\log_{10} M$"
+    assert aggregate_plots._format_parameter_label("potfile.log10_mass_msun") == r"Potfile $\log_{10} M$"
 
 
 def test_aggregate_bias_parameter_classification_keeps_gamma_ml_absolute() -> None:
@@ -20613,6 +20685,16 @@ def test_aggregate_plot_parameter_display_labels_are_paper_friendly() -> None:
     assert aggregate_plots._format_parameter_label("halo.cut_radius_kpc") == r"Halo $r_\mathrm{cut}$"
     assert aggregate_plots._format_parameter_label("source.12.beta_x") == r"Source $\beta_x$"
     assert aggregate_plots._format_parameter_label("source.12.beta_y") == r"Source $\beta_y$"
+    assert aggregate_plots._format_parameter_axis_label("bcg.core_radius_kpc", "truth") == (
+        r"BCG $r_\mathrm{core}$ (truth; kpc)"
+    )
+    assert aggregate_plots._format_parameter_axis_label("halo.x_centre", "fit") == "Halo x (fit; arcsec)"
+    assert aggregate_plots._format_parameter_axis_label("potfile.gamma_ml", "fit") == (
+        r"Potfile $\gamma_\mathrm{ML}$ (fit)"
+    )
+    assert aggregate_plots._format_parameter_axis_label("potfile.log10_mass_msun", "truth") == (
+        r"Potfile $\log_{10} M$ (truth; $M_\odot$)"
+    )
 
 
 def test_aggregate_bias_summary_splits_fractional_and_absolute_parameters(tmp_path: Path) -> None:

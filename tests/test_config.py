@@ -943,7 +943,11 @@ def test_submit_mock_array_campaign_name_prepends_date(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(submit_mock_array, "datetime", FrozenDateTime)
 
-    assert submit_mock_array.make_campaign_name("flux_compare") == "jul7_1435_flux_compare"
+    campaign = submit_mock_array.make_campaign_name("flux_compare")
+    assert campaign == "jul7_1435_mock_validation_flux_compare"
+    assert submit_mock_array.make_sbatch_prefix(campaign, "production") == (
+        "jul7_1435_mock_validation_flux_compare_production"
+    )
     with pytest.raises(argparse.ArgumentTypeError):
         submit_mock_array.make_campaign_name("../bad")
 
