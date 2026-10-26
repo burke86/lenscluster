@@ -10,6 +10,7 @@ plots/
 *.dat
 *.par
 *.json
+!scripts/m0416_redshift_sources.json
 *.html
 *.log
 *.txt
@@ -30,3 +31,12 @@ notebooks/*
 paper/*
 *.out
 .agents/*
+
+.DS_Store
+.claude-octopus/
+tmp/
+output
+docs/
+AGENTS.md
+
+validation_runs/

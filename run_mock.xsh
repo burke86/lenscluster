@@ -1,32 +1,27 @@
 $XONSH_SHOW_TRACEBACK = True
 $MPLBACKEND = "Agg"
 
+import json
 import os
 os.environ["MPLBACKEND"] = "Agg"
 import sys
 import time
 from pathlib import Path
-import numpy as np
 
-cores = 4  # Fixed to match JAX CPU devices and NUTS chains.
+cores = 4  # NUTS chains; one JAX CPU device per chain (same budget as run.xsh).
 seed_default = 12345
-output_dir_default = "validation_runs/mock_recovery"
-mock_caustic_grid_chunk_memory_gb = 8.0
-# Single source of truth for the astrometric noise: the mock generation injects Gaussian
-# position scatter of this size AND the likelihood assumes the same catalog sigma, so the
-# 68% coverage test is meaningful.
-pos_sigma_arcsec = 0.05
-# Injected member scaling-relation scatter in ln(sigma) units (recovered by the linearized
-# sigma_log_scatter mechanism). Set to 0 for the no-scatter A/B campaign.
-scatter_ln = 0.05
-source_magnitude_min = 24.0
-source_magnitude_max = 27.0
-image_magnitude_sigma_mag = 0.10
-image_magnitude_mu_floor = 1.0e-3
+output_dir_default = "validation_runs"
+# What the mock injects.  The astrometric noise is also the solver's catalog error (the floor under the sampled
+# sigma_obs_extra); the source-plane scatter is the truth of sigma_src; the member scatters are the truths of the two
+# population scatters (0.10 is the median of the solver's dispersion-scatter prior).  Unmodelled members are subhalos
+# present in the truth but missing from the catalog, the misspecification experiment.
+pos_sigma_arcsec = 0.10
+source_scatter_arcsec = 0.05
+scatter_ln = 0.10
+cut_scatter_ln = 0.0
+unmodelled_members = 0
 
-$JAX_NUM_CPU_DEVICES = str(cores)
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster-mock"
-os.environ["JAX_NUM_CPU_DEVICES"] = str(cores)
 os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib-lenscluster-mock"
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
@@ -34,64 +29,40 @@ from lenscluster.config import (
     ImageDiagnosticsConfig,
     LensClusterSolverConfig,
     LikelihoodConfig,
-    PerturbationDiscoveryConfig,
     RuntimeConfig,
-    StageScheduleConfig,
+    SamplingConfig,
+    ScalingModelConfig,
+    SearchConfig,
     TruthRecoveryConfig,
-    WorkflowConfig,
-    ScalingModelConfig
 )
-from lenscluster.mock_validation import (
-    MockValidationConfig,
-    MockValidationPathsConfig,
-    MockValidationRuntimeConfig,
-    MockValidationSolverConfig,
-    SingleBCGMockConfig,
-    run_single_bcg_validation,
-)
+from lenscluster.cpu_runtime import configure_cpu_runtime, resolve_cpu_plan
 
 VALID_PRESETS = ("smoke", "production")
-VALID_COVARIANCE_MODES = ("anisotropic", "isotropic")
-VALID_MAGNITUDE_LIKELIHOOD_MODES = ("off", "on")
 
 
 def _usage() -> str:
-    return (
-        "Usage: xonsh run_mock.xsh --campaign NAME "
-        "[--preset smoke|production] [--seed INT] "
-        "[--covariance anisotropic|isotropic] [--magnitude-likelihood on|off] "
-        "[--output-dir PATH]"
-    )
+    return ("Usage: xonsh run_mock.xsh --campaign NAME [--preset smoke|production] [--mode production|idealized] [--seed INT] "
+            "[--realizations INT] [--output-dir PATH] [--aggregate-only] [--rescore] [--dry-run]\n"
+            "  --mode production: the solver uses the same priors as the real clusters (halo on the BCG light, Bergamini et al. 2019 member relation);\n"
+            "  --mode idealized: priors centred on each realization's truth, which isolates the sampler and the likelihood")
 
 
-def _parse_args(argv: list[str]) -> tuple[str, int, str, bool, str, str]:
-    values = {
-        "campaign": None,
-        "preset": "smoke",
-        "seed": str(seed_default),
-        "covariance": "anisotropic",
-        "magnitude_likelihood": "off",
-        "output_dir": output_dir_default,
-    }
-    flag_to_key = {
-        "--campaign": "campaign",
-        "--preset": "preset",
-        "--seed": "seed",
-        "--covariance": "covariance",
-        "--magnitude-likelihood": "magnitude_likelihood",
-        "--output-dir": "output_dir",
-    }
+def _parse_args(argv: list[str]) -> dict:
+    values = {"campaign": None, "preset": "smoke", "mode": "production", "seed": str(seed_default), "realizations": "1",
+              "output_dir": output_dir_default, "aggregate_only": False, "rescore": False, "dry_run": False}
+    flag_to_key = {"--campaign": "campaign", "--preset": "preset", "--mode": "mode", "--seed": "seed", "--realizations": "realizations", "--output-dir": "output_dir"}
     index = 1
     while index < len(argv):
         flag = argv[index]
         if flag in {"--help", "-h"}:
             print(_usage())
             raise SystemExit(0)
-        if flag not in flag_to_key:
-            print(f"Unknown argument: {flag!r}\n{_usage()}")
-            raise SystemExit(2)
-        if index + 1 >= len(argv):
-            print(f"Missing value for {flag}.\n{_usage()}")
+        if flag in {"--aggregate-only", "--rescore", "--dry-run"}:
+            values[flag.lstrip("-").replace("-", "_")] = True
+            index += 1
+            continue
+        if flag not in flag_to_key or index + 1 >= len(argv):
+            print(f"Unknown argument or missing value: {flag!r}\n{_usage()}")
             raise SystemExit(2)
         values[flag_to_key[flag]] = argv[index + 1]
         index += 2
@@ -102,239 +73,88 @@ def _parse_args(argv: list[str]) -> tuple[str, int, str, bool, str, str]:
     if preset not in VALID_PRESETS:
         print(f"Preset must be 'smoke' or 'production'; got {values['preset']!r}.\n{_usage()}")
         raise SystemExit(2)
-    try:
-        seed = int(str(values["seed"]))
-    except ValueError:
-        print(f"Seed must be an integer; got {values['seed']!r}.\n{_usage()}")
+    if values["mode"] not in {"production", "idealized"}:
+        print(f"Mode must be 'production' or 'idealized'; got {values['mode']!r}.\n{_usage()}")
         raise SystemExit(2)
-    if seed < 0:
-        print(f"Seed must be nonnegative; got {seed}.\n{_usage()}")
+    seed, realizations = int(values["seed"]), int(values["realizations"])
+    if seed < 0 or realizations <= 0:
+        print("Seed must be nonnegative and realizations positive.")
         raise SystemExit(2)
-    covariance_mode = str(values["covariance"]).strip().lower()
-    if covariance_mode not in VALID_COVARIANCE_MODES:
-        print(f"Covariance mode must be 'anisotropic' or 'isotropic'; got {values['covariance']!r}.\n{_usage()}")
-        raise SystemExit(2)
-    magnitude_likelihood_mode = str(values["magnitude_likelihood"]).strip().lower()
-    if magnitude_likelihood_mode not in VALID_MAGNITUDE_LIKELIHOOD_MODES:
-        print(
-            "Magnitude likelihood must be 'on' or 'off'; "
-            f"got {values['magnitude_likelihood']!r}.\n{_usage()}"
-        )
-        raise SystemExit(2)
-    use_magnitude_likelihood = magnitude_likelihood_mode == "on"
-    if use_magnitude_likelihood and covariance_mode != "anisotropic":
-        print("--magnitude-likelihood on is only supported with --covariance anisotropic.")
-        raise SystemExit(2)
-    campaign = str(values["campaign"]).strip()
-    output_dir = str(values["output_dir"])
-    return preset, seed, covariance_mode, use_magnitude_likelihood, campaign, output_dir
+    return dict(preset=preset, mode=values["mode"], seed=seed, realizations=realizations, campaign=str(values["campaign"]).strip(),
+                output_dir=str(values["output_dir"]), aggregate_only=values["aggregate_only"], rescore=values["rescore"], dry_run=values["dry_run"])
 
 
-def _solver_template(
-    *,
-    production: bool,
-    seed: int,
-    critical_arc_anisotropic_covariance: bool,
-    use_magnitude_likelihood: bool,
-    scatter_ln: float,
-) -> LensClusterSolverConfig:
-    if production:
-        svi_steps = 10_000, 20_000, 20_000
-        warmup = 20000, 20000
-        samples = 1000, 1000
-        max_tree_depth = 8, 8
-    else:
-        svi_steps = 500, 20_000, 20_000
-        warmup = 100, 100
-        samples = 100, 100
-        max_tree_depth = 6, 6
+def build_runtime(seed: int) -> RuntimeConfig:
+    return RuntimeConfig(seed=seed, chains=cores, resume=True, numpyro_print_summary=True, nuts_chain_method="parallel",
+                         cpu_threads_per_chain=2)   # same CPU budget as run.xsh: chains * 2 cores, chosen to avoid other runs
 
+
+def _solver(*, production: bool, seed: int) -> LensClusterSolverConfig:
+    """The solver template: library defaults (the tuned Hera settings) plus what the mock needs.  The lens model, with
+    priors centred on the mock's truth, is attached per realization by the mock-validation pipeline."""
     return LensClusterSolverConfig(
-        runtime=RuntimeConfig(
-            seed=seed,
-            chains=4,
-            resume="all",
-            quick_diagnostics=False,
-            debug_sampler_diagnostics=True,
-            numpyro_print_summary=True,
-            nuts_chain_method="parallel",
-            dense_mass="full",
-            jax_clear_caches_after_svi_refresh=False,
-        ),
-        workflow=WorkflowConfig(
-            fit_mode="sequential",
-            stage0_likelihood="source",
-            stage1_likelihood="source",
-            stage2_forward_mode="critical-arc-anisotropic",
-            stage1_sampling_engine="full_flat",
-            stage2_sampling_engine="full_flat",
-            stage2_fresh_process=True,
-            exact_image_diagnostics_stage2=True,
-            best_value="maximum-likelihood",
-            image_plane_newton_steps=0,
-            linearized_beta_prior_sigma_arcsec=3.0,
-            source_position_parameterization="prior-whitened",
-        ),
-        schedule=StageScheduleConfig(
-            fit_method=("svi+nuts", "svi+nuts"),
-            refresh_every=(None, 2000, 2000),
-            svi_steps=svi_steps,
-            warmup=warmup,
-            samples=samples,
-            sampling_refresh_runs=(1, 1),
-            max_tree_depth=max_tree_depth,
-            # 0.65 measured optimal on the real stage-2 posterior: at full tree-depth
-            # saturation the target only sets trajectory length, and lower targets give
-            # ~1.3-1.6x ESS per gradient with zero divergences (see target_accept A/B).
-            target_accept=0.65,
-            z_bin_efficiency_tol=0.0,
-            svi_learning_rate=0.0005,
-        ),
-        likelihood=LikelihoodConfig(
-            pos_sigma_arcsec=pos_sigma_arcsec,
-            critical_arc_anisotropic_covariance=critical_arc_anisotropic_covariance,
-            use_magnitude_likelihood=use_magnitude_likelihood,
-        ),
-        image_diagnostics=ImageDiagnosticsConfig(
-            posterior_image_diagnostic_draws=64,
-            posterior_image_diagnostic_mode="exact",
-            exact_image_finder="local-lm-adaptive",
-            exact_image_min_distance_arcsec=0.5,
-            exact_image_precision_limit=1.0e-2,
-            exact_image_num_iter_max=100,
-            exact_image_displacement_tol_arcsec=1.0e-4,
-            exact_image_identification_tol_arcsec=1.0e-3,
-            match_tolerance_arcsec=3.0,
-        ),
-        truth=TruthRecoveryConfig(
-            posterior_truth_recovery_draws=64,
-            caustic_plot_grid_scale_arcsec=0.2,
-        ),
-        perturbation=PerturbationDiscoveryConfig(
-            perturbation_discovery_jacobian_weight=1.0,
-            # The detection-referenced threshold decides which members are promoted to
-            # independent; top_k=None applies no cap on the threshold passers.
-            perturbation_discovery_top_k=None,
-        ),
-        scaling=ScalingModelConfig(
-            # Sample the linearized population-scatter amplitudes only when the mock
-            # actually injects scatter; otherwise the model matches the truth exactly.
-            scaling_scatter=scatter_ln > 0.0,
-        ),
+        runtime=build_runtime(seed),
+        search=SearchConfig() if production else SearchConfig(n_starts=8),
+        sampling=(SamplingConfig(warmup=5000, samples=2000, max_tree_depth=8, target_accept=0.85) if production
+                  else SamplingConfig(warmup=100, samples=100, max_tree_depth=6, target_accept=0.85)),
+        likelihood=LikelihoodConfig(pos_sigma_arcsec=pos_sigma_arcsec),
+        scaling=ScalingModelConfig(fit_corekpc=False),   # the 0.15 kpc member core is not a lensing observable; fixed at the truth value
+        image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=64 if production else 8, match_tolerance_arcsec=3.0),
+        truth=TruthRecoveryConfig(posterior_truth_recovery_draws=0),
     )
 
-def build_config(
-    preset: str,
-    *,
-    seed: int,
-    covariance_mode: str,
-    use_magnitude_likelihood: bool,
-    campaign_name: str,
-    output_dir: str,
-    scatter_ln: float,
-) -> MockValidationConfig:
+
+def build_config(preset: str, *, seed: int, realizations: int, campaign_name: str, output_dir: str, mode: str):
+    from lenscluster.mock_validation import MockConfig, MockValidationConfig, MockValidationPathsConfig, MockValidationRuntimeConfig
     production = preset == "production"
-    critical_arc_anisotropic_covariance = covariance_mode == "anisotropic"
-    n_primary_families = 15 if production else 5
-    n_subhalo_families = 5 if production else 0
-    mock = SingleBCGMockConfig(
+    mock = MockConfig(
         seed=seed,
-        n_primary_families=n_primary_families,
-        n_subhalo_families=n_subhalo_families,
-        # Smoke needs a member population when scatter is injected so the linearized
-        # scatter likelihood path is actually exercised.
-        n_subhalos=25 if production else (10 if scatter_ln > 0.0 else 0),
-        subhalo_spatial_distribution="dpie",
-        subhalo_spatial_core_radius_arcsec=25.0,
-        subhalo_spatial_cut_radius_arcsec=180.0,
-        subhalo_field_radius_arcsec=250.0,
-        subhalo_force_core_count=0,
-        subhalo_sigma_scatter_dex=float(scatter_ln) / np.log(10.0),
-        subhalo_cut_scatter_dex=0.0,
-        source_magnitude_min=source_magnitude_min,
-        source_magnitude_max=source_magnitude_max,
-        image_magnitude_sigma_mag=image_magnitude_sigma_mag,
-        image_magnitude_mu_floor=image_magnitude_mu_floor,
-        min_images_per_family=3,
-        max_images_per_family=None,
-        primary_source_redshifts=np.linspace(1.5, 9.0, n_primary_families),
-        subhalo_source_redshifts=np.linspace(1.5, 9.0, n_subhalo_families),
+        mode=mode,
+        n_members=200 if production else 10,   # Hera has 332 members, AS1063 222; far-field approximation for the distant ones (library default)
+        n_primary_families=15 if production else 4,
+        n_member_families=15 if production else 1,   # galaxy-galaxy families are what constrain sigma* and r_cut*
         pos_sigma_arcsec=pos_sigma_arcsec,
-        mock_caustic_grid_chunk_memory_gb=mock_caustic_grid_chunk_memory_gb,
-        # Production caustics and image finding are the expensive generation
-        # step; denser seeds avoid high-redshift family failures with 0 images.
-        mock_image_candidate_batch_size=1024,
-        mock_image_seed_cap=64,
-        mock_image_search_window_arcsec=80.0,
-        # 1" resolves merging image pairs near critical curves (the high-mu images).
-        primary_seed_grid_pixel_arcsec=1.0,
-        subhalo_seed_grid_pixel_arcsec=1.0,
-        max_sources_to_try=400,
-        mock_generation_workers=min(cores, 16) if production else 1,
+        source_scatter_arcsec=source_scatter_arcsec,
+        sigma_scatter_ln=scatter_ln,
+        cut_scatter_ln=cut_scatter_ln,
+        unmodelled_members=unmodelled_members,
     )
     return MockValidationConfig(
         mock=mock,
-        paths=MockValidationPathsConfig(
-            output_dir=output_dir,
-            run_name=f"single_bcg_{preset}",
-            campaign_name=campaign_name,
-            variant_name=f"{covariance_mode}_maglikelihood" if use_magnitude_likelihood else covariance_mode,
-        ),
-        runtime=MockValidationRuntimeConfig(
-            realizations=1,
-            seed=seed,
-            resume="all",
-            quiet=False,
-        ),
-        solver=MockValidationSolverConfig(
-            template=_solver_template(
-                production=production,
-                seed=seed,
-                critical_arc_anisotropic_covariance=critical_arc_anisotropic_covariance,
-                use_magnitude_likelihood=use_magnitude_likelihood,
-                scatter_ln=scatter_ln,
-            ),
-            run_name="solver",
-            recovery_stages=("stage1", "stage2"),
-        ),
+        paths=MockValidationPathsConfig(output_dir=output_dir, campaign_name=campaign_name, run_name=f"analytic_{mode}_{preset}"),
+        runtime=MockValidationRuntimeConfig(realizations=realizations, seed=seed, resume=True, quiet=False),
+        solver=_solver(production=production, seed=seed),
     )
 
 
-preset, seed, covariance_mode, use_magnitude_likelihood, campaign_name, output_dir = _parse_args(sys.argv)
-config = build_config(
-    preset,
-    seed=seed,
-    covariance_mode=covariance_mode,
-    use_magnitude_likelihood=use_magnitude_likelihood,
-    campaign_name=campaign_name,
-    output_dir=output_dir,
-    scatter_ln=scatter_ln,
-).validate()
+def main(argv=None):
+    options = _parse_args(sys.argv if argv is None else argv)
+    runtime = build_runtime(options["seed"])
+    cpu_plan = resolve_cpu_plan(runtime.chains, runtime.nuts_chain_method, runtime.cpu_threads_per_chain)
+    if not options["dry_run"]:
+        configure_cpu_runtime(runtime.chains, runtime.nuts_chain_method, runtime.cpu_threads_per_chain)
+    config = build_config(options["preset"], seed=options["seed"], realizations=options["realizations"],
+                          campaign_name=options["campaign"], output_dir=options["output_dir"], mode=options["mode"]).validate()
+    campaign_dir = Path(config.paths.output_dir) / config.paths.campaign_name / config.paths.run_name
+    if options["dry_run"]:
+        print(json.dumps({"dry_run": True, "cpu_plan": cpu_plan.to_dict(), "campaign_dir": str(campaign_dir), **config.to_json_dict()}, indent=2, default=str))
+        return 0
+    from lenscluster.mock_validation import rescore_mock_validation, run_mock_validation, write_aggregate_plots
+    print(f"[config] preset={options['preset']} mode={options['mode']} seed={options['seed']} realizations={options['realizations']} "
+          f"scatter_ln={scatter_ln} pos_sigma_arcsec={pos_sigma_arcsec} source_scatter_arcsec={source_scatter_arcsec} members={config.mock.n_members} "
+          f"n_starts={config.solver.search.n_starts} chains={cores} cpus={cpu_plan.selected_cpu_ids} campaign_dir={campaign_dir}")
+    start = time.monotonic()
+    try:
+        if options["rescore"]:
+            rescore_mock_validation(config)
+        elif not options["aggregate_only"]:
+            run_mock_validation(config)
+        for path in write_aggregate_plots(campaign_dir):
+            print(f"[aggregate] {path}")
+    finally:
+        print(f"[timing] elapsed={time.monotonic() - start:.2f}s")
+    return 0
 
-print(
-    f"[config] preset={preset} seed={seed} "
-    f"covariance={covariance_mode} "
-    f"use_magnitude_likelihood={config.solver.template.likelihood.use_magnitude_likelihood} "
-    f"scatter_ln={scatter_ln} scaling_scatter={config.solver.template.scaling.scaling_scatter} "
-    f"subhalo_sigma_scatter_dex={config.mock.subhalo_sigma_scatter_dex:.6f} "
-    f"pos_sigma_arcsec={config.mock.pos_sigma_arcsec} "
-    f"source_magnitude_range=({config.mock.source_magnitude_min}, {config.mock.source_magnitude_max}) "
-    f"image_magnitude_sigma_mag={config.mock.image_magnitude_sigma_mag} "
-    f"image_magnitude_mu_floor={config.mock.image_magnitude_mu_floor} "
-    f"critical_arc_anisotropic_covariance={config.solver.template.likelihood.critical_arc_anisotropic_covariance} "
-    f"mock_caustic_grid_chunk_memory_gb={config.mock.mock_caustic_grid_chunk_memory_gb} "
-    f"mock_generation_workers={config.mock.mock_generation_workers} "
-    f"mock_image_candidate_batch_size={config.mock.mock_image_candidate_batch_size} "
-    f"mock_image_seed_cap={config.mock.mock_image_seed_cap} "
-    f"mock_image_search_window_arcsec={config.mock.mock_image_search_window_arcsec} "
-    f"primary_seed_grid_pixel_arcsec={config.mock.primary_seed_grid_pixel_arcsec} "
-    f"max_sources_to_try={config.mock.max_sources_to_try} "
-    f"output_dir={config.paths.output_dir} campaign={config.paths.campaign_name} "
-    f"run_name={config.paths.run_name} variant={config.paths.variant_name} chains=4"
-)
 
-start = time.monotonic()
-try:
-    run_single_bcg_validation(config)
-finally:
-    print(f"[timing] elapsed={time.monotonic() - start:.2f}s")
+if __name__ == "__main__":
+    raise SystemExit(main())

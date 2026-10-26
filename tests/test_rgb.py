@@ -12,14 +12,8 @@ from lenscluster import rgb
 
 
 def _load_literature_cutout_plotter() -> Any:
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "plot_literature_family_cutouts.py"
-    spec = importlib.util.spec_from_file_location("plot_literature_family_cutouts_rgb_test", script_path)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    from lenscluster import cutouts
+    return cutouts
 
 
 def test_rgb_display_defaults_match_clustertag() -> None:
@@ -282,7 +276,7 @@ def test_make_multiband_rgb_rejects_missing_source_band() -> None:
         rgb.make_multiband_rgb(cutouts, display=display)
 
 
-def test_literature_cutout_rgb_display_wrapper_forwards_simple_controls() -> None:
+def test_cutout_rgb_display_wrapper_forwards_simple_controls() -> None:
     plotter = _load_literature_cutout_plotter()
 
     display = plotter.build_rgb_display(
@@ -301,7 +295,7 @@ def test_literature_cutout_rgb_display_wrapper_forwards_simple_controls() -> Non
     assert display.minimum == -0.04
 
 
-def test_literature_cutout_rgb_display_wrapper_uses_calibrated_defaults() -> None:
+def test_cutout_rgb_display_wrapper_uses_calibrated_defaults() -> None:
     plotter = _load_literature_cutout_plotter()
     bands = ("F435W", "F606W", "F814W")
     band_images = {band: object() for band in bands}
@@ -317,7 +311,7 @@ def test_literature_cutout_rgb_display_wrapper_uses_calibrated_defaults() -> Non
     assert dict(display.band_backgrounds) == {band: 0.0 for band in bands}
 
 
-def test_literature_cutout_rgb_display_wrapper_uses_hff_seven_band_defaults() -> None:
+def test_cutout_rgb_display_wrapper_uses_hff_seven_band_defaults() -> None:
     plotter = _load_literature_cutout_plotter()
     band_images = {band: object() for band in rgb.DEFAULT_HFF_RGB_BANDS}
 
@@ -337,7 +331,7 @@ def test_literature_cutout_rgb_display_wrapper_uses_hff_seven_band_defaults() ->
     assert dict(display.band_backgrounds) == {band: 0.0 for band in rgb.DEFAULT_HFF_RGB_BANDS}
 
 
-def test_literature_cutout_rgb_display_uses_band_photometry() -> None:
+def test_cutout_rgb_display_uses_band_photometry() -> None:
     plotter = _load_literature_cutout_plotter()
 
     class FakeBandImage:

@@ -33,12 +33,53 @@ DEFAULT_HFF_RGB_BANDS = ("F435W", "F606W", "F814W", "F105W", "F125W", "F140W", "
 DEFAULT_HFF_RGB_REFERENCE_BAND = "F814W"
 DEFAULT_HFF_RGB_Q = 6.4
 DEFAULT_HFF_RGB_STRETCH = 0.0145
-DEFAULT_HFF_RGB_MINIMUM = -5.5e-4
+DEFAULT_HFF_RGB_MINIMUM = 0.0
+# Colour balance.  Lupton et al. 2004 put the bands on an f_nu (AB) scale and leave the channel scaling as a stated
+# choice.  On the Frontier Fields mosaics an AB-flat source is neutral at gains (1, 0.83, 0.86) and the median bright
+# cluster member (F435W - F160W ~ 2.9 AB) is neutral at (1, 1.9, 11.8).  These defaults sit between the two in log, so
+# the red sequence renders golden yellow with white cores, blue lensed galaxies blue-white rather than violet, and the
+# sky neutral; the old (0.47, 0.91, 3.95) was the member-white balance and turned every faint blue source violet.
 DEFAULT_HFF_RGB_CHANNEL_GAINS = {
-    "red": 0.47,
-    "green": 0.91,
-    "blue": 3.95,
+    "red": 1.0,
+    "green": 1.6,
+    "blue": 6.5,
 }
+DEFAULT_HFF_RGB_CHANNEL_FLOOR_SIGMA = 1.0     # per channel, subtract this many sigma of its sky noise before the stretch
+# JWST NIRCam.  The public cluster composites (STScI: MACS J1423, PLCK G165.7; UNCOVER Abell 2744, Furtak et al. 2023)
+# assign blue = F115W + F150W, green = F200W + F277W, red = F356W + F410M + F444W.  With the four CANUCS/DJA bands we hold
+# that is blue = F115W + F150W, green = F150W + F200W, red = F444W.  The mosaics are in nJy per pixel at 20 mas (SW) and
+# 40 mas (LW); the display works in nJy per arcsec^2 (the band flux scales carry the pixel-area ratio) and the LW band is
+# resampled onto the SW grid of the reference band.
+DEFAULT_JWST_RGB_BANDS = ("F115W", "F150W", "F200W", "F444W")
+DEFAULT_JWST_RGB_REFERENCE_BAND = "F200W"
+DEFAULT_JWST_RGB_CHANNEL_WEIGHTS = {
+    "blue": {"F115W": 1.0, "F150W": 0.5},
+    "green": {"F150W": 0.5, "F200W": 1.0},
+    "red": {"F200W": 0.5, "F444W": 1.0},     # F200W bridges the 2 to 4.4 micron gap that F277W and F356W fill in the release images;
+}                                            # red alone from F444W turned every dusty or high-redshift source saturated red
+# The JWST recipe was fitted against the STScI release image of MACS0416, registered onto the CANUCS mosaics (55 matched
+# sources, 0.1" rms): the tone curve of the release is asinh with Q 55 and a saturation level of 70 nJy per 20 mas pixel,
+# followed by gamma 0.55 and a 4.3% grey pedestal; its colour balance in display space gives these channel gains; and its
+# colour saturation by luminance is 0.11/0.25/0.21/0.09 (median for luminance bins 0.1-0.25/0.25-0.5/0.5-0.75/0.75-0.95)
+# against 0.11/0.24/0.21/0.16 for this recipe on the same field.  Half of the stretch scales each channel on its own
+# (neutral sky, cores that run to white) and half preserves the hue (Lupton); a mild unsharp mask restores the local
+# contrast that the compressive curve removes (compact sources measure 0.26" FWHM in the release and 0.29" here);
+# colour fades to neutral below a quarter of full scale (the release's intracluster light is grey, not brown); and
+# highlights roll off softly above the knee instead of clipping.  The CANUCS mosaics are background-subtracted already,
+# so the display keeps the mosaic sky and no channel floor: a sky re-estimated on a cluster cutout is biased high by the
+# intracluster light and clips it along a hard contour.
+DEFAULT_JWST_RGB_CHANNEL_GAINS = {"red": 1.0, "green": 0.63, "blue": 0.76}
+DEFAULT_JWST_RGB_Q = 55.0
+DEFAULT_JWST_RGB_STRETCH = 70.0       # nJy per 20 mas reference pixel: the saturation level
+DEFAULT_JWST_RGB_MINIMUM = 0.0
+DEFAULT_JWST_RGB_PEDESTAL = 0.043
+DEFAULT_JWST_RGB_GAMMA = 0.55
+DEFAULT_JWST_RGB_CHROMA = 1.5
+DEFAULT_JWST_RGB_HUE_MIX = 0.5                 # fraction of Lupton's hue-preserving scaling blended into the per-channel stretch
+DEFAULT_JWST_RGB_UNSHARP_SIGMA_ARCSEC = 0.15   # unsharp mask on the luminance after the stretch
+DEFAULT_JWST_RGB_UNSHARP_AMOUNT = 0.6
+DEFAULT_JWST_RGB_SHADOW_LUMINANCE = 0.25       # colour fades linearly to neutral below this luminance
+DEFAULT_JWST_RGB_HIGHLIGHT_KNEE = 0.8          # soft roll-off of the per-channel stretch above this level
 DEFAULT_HFF_RGB_CHANNEL_WEIGHTS = {
     "blue": {
         "F435W": 0.92,
@@ -57,9 +98,11 @@ DEFAULT_HFF_RGB_CHANNEL_WEIGHTS = {
         "F160W": 0.32,
     },
 }
-DEFAULT_HFF_RGB_WARM_HIGHLIGHT_DESATURATION = 0.20
+# Bright cores saturate to white as in Lupton et al. 2004 (every pixel keeps its colour until a channel clips); the
+# earlier knee/ceiling compression flattened the cluster ellipticals into uniform discs.
+DEFAULT_HFF_RGB_WARM_HIGHLIGHT_DESATURATION = 0.0
 DEFAULT_HFF_RGB_HIGHLIGHT_KNEE = 0.58
-DEFAULT_HFF_RGB_HIGHLIGHT_CEILING = 0.88
+DEFAULT_HFF_RGB_HIGHLIGHT_CEILING = 1.0
 DEFAULT_HFF_RGB_HIGHLIGHT_SOFTNESS = 0.44
 SPEED_OF_LIGHT_ANGSTROM_PER_S = 2.99792458e18
 
@@ -91,6 +134,19 @@ class CalibratedRGBDisplayConfig(RGBDisplayConfig):
     highlight_knee: float = 1.0
     highlight_ceiling: float = 1.0
     highlight_softness: float = DEFAULT_HFF_RGB_HIGHLIGHT_SOFTNESS
+    local_background: bool = False       # re-estimate each band's sky on the cutout itself (sigma-clipped) instead of the mosaic value
+    channel_floor_sigma: float = 0.0     # subtract this many sigma of each channel's sky noise before the stretch (neutral, dark sky)
+    smooth_pixels: int = 0               # box-smooth each band by this many pixels before the stretch (fine-pixel mosaics)
+    per_channel_stretch: bool = False    # stretch each channel on its own, asinh(Q x / stretch) / asinh(Q), saturating at ``stretch``
+                                         # (the STScI release look: peaked cores that run to white) instead of Lupton's shared
+                                         # intensity scaling, which preserves colour but turns bright galaxies into plateaus
+    hue_mix: float = 0.0                 # per-channel stretch only: fraction of Lupton's hue-preserving scaling blended in
+    unsharp_sigma_pixels: float = 0.0    # per-channel stretch only: unsharp mask of the luminance (Gaussian sigma; 0 disables)
+    unsharp_amount: float = 0.0
+    shadow_luminance: float = 0.0        # per-channel stretch only: colour fades to neutral below this luminance
+    pedestal: float = 0.0                # grey level of the sky in the output, as a fraction of full scale
+    gamma: float = 1.0                   # applied to the stretched channels (below 1 lifts the faint sources)
+    chroma: float = 1.0                  # scales each pixel's colour difference about its luminance after the stretch
 
 
 @dataclass(frozen=True)
@@ -361,10 +417,40 @@ def _calibrated_source_band(
     finite = np.isfinite(values)
     if not np.any(finite):
         raise ValueError(f"Cannot render calibrated RGB: no finite {role} channel pixels.")
+    if getattr(display, "local_background", False):
+        background = _sigma_clipped_sky(values[finite])
     filled = np.array(values, copy=True)
     filled[~finite] = background
+    smooth = int(getattr(display, "smooth_pixels", 0) or 0)
+    if smooth > 1:
+        from scipy.ndimage import uniform_filter
+        filled = uniform_filter(filled, size=smooth, mode="nearest")
     fluxscale = float(display.band_fluxscales.get(str(band), 1.0))
     return (filled - background) * fluxscale
+
+
+def _sigma_clipped_sky(values: np.ndarray, *, iterations: int = 5) -> float:
+    """Sky level of a cutout: the median after iterated 3-sigma clipping about the median (robust to sources and ICL)."""
+    kept = np.asarray(values, dtype=np.float64).ravel()
+    kept = kept[np.isfinite(kept)]
+    if kept.size == 0:
+        return 0.0
+    for _ in range(iterations):
+        median = float(np.median(kept))
+        sigma = 1.4826 * float(np.median(np.abs(kept - median)))
+        if sigma <= 0.0:
+            break
+        inside = kept[np.abs(kept - median) < 3.0 * sigma]
+        if inside.size in (0, kept.size):
+            break
+        kept = inside
+    return float(np.median(kept))
+
+
+def _robust_sigma(values: np.ndarray) -> float:
+    kept = np.asarray(values, dtype=np.float64).ravel()
+    kept = kept[np.isfinite(kept)]
+    return 1.4826 * float(np.median(np.abs(kept - np.median(kept)))) if kept.size else 0.0
 
 
 def _calibrated_weighted_channel(
@@ -463,6 +549,41 @@ def _calibrated_channel_weights_for_bands(bands: Sequence[str]) -> dict[str, dic
     return weights
 
 
+def _per_channel_stretch(channels: np.ndarray, display: CalibratedRGBDisplayConfig) -> np.ndarray:
+    """Each channel stretched on its own, optionally blended with the hue-preserving scaling, then sharpened, colour-scaled,
+    rolled off above the highlight knee and lifted onto the pedestal.  ``channels`` is (3, ny, nx), non-negative."""
+    q, stretch = float(display.q), float(display.stretch)
+    gamma, pedestal = float(getattr(display, "gamma", 1.0)), float(getattr(display, "pedestal", 0.0))
+
+    def curve(values: np.ndarray) -> np.ndarray:
+        return (np.arcsinh(q * values / stretch) / np.arcsinh(q)) ** gamma
+
+    scaled = curve(channels)
+    mix = float(getattr(display, "hue_mix", 0.0))
+    if mix > 0.0:
+        intensity = np.mean(channels, axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            hue_preserving = np.where(intensity > 0.0, channels * (curve(intensity) / intensity), 0.0)
+        scaled = (1.0 - mix) * scaled + mix * hue_preserving
+    sigma, amount = float(getattr(display, "unsharp_sigma_pixels", 0.0)), float(getattr(display, "unsharp_amount", 0.0))
+    if sigma > 0.0 and amount > 0.0:
+        from scipy.ndimage import gaussian_filter
+        luminance = np.mean(scaled, axis=0, keepdims=True)
+        scaled = np.clip(scaled + amount * (luminance - gaussian_filter(luminance, (0.0, sigma, sigma), mode="nearest")), 0.0, None)
+    luminance = np.mean(scaled, axis=0, keepdims=True)
+    chroma = float(getattr(display, "chroma", 1.0)) * np.ones_like(luminance)
+    shadow = float(getattr(display, "shadow_luminance", 0.0))
+    if shadow > 0.0:
+        chroma = chroma * np.clip(luminance / shadow, 0.0, 1.0)
+    scaled = np.clip(luminance + chroma * (scaled - luminance), 0.0, None)
+    knee = float(display.highlight_knee)
+    if knee < 1.0:
+        over = np.clip(scaled - knee, 0.0, None)
+        scaled = np.where(scaled > knee, knee + (1.0 - knee) * (1.0 - np.exp(-over / (1.0 - knee))), scaled)
+    scaled = pedestal + (1.0 - pedestal) * np.clip(scaled, 0.0, 1.0)
+    return np.round(np.moveaxis(np.clip(scaled, 0.0, 1.0), 0, -1) * 255.0).astype(np.uint8)
+
+
 def make_calibrated_rgb(
     cutouts_by_band: Mapping[str, np.ndarray],
     *,
@@ -491,7 +612,16 @@ def make_calibrated_rgb(
                 _calibrated_channel(cutouts_by_band, red_band, "red", display),
             ]
         )
-    channels = np.clip(np.stack([red, green, blue], axis=0) - float(display.minimum), 0.0, None)
+    channels = np.stack([red, green, blue], axis=0) - float(display.minimum)
+    floor_sigma = float(getattr(display, "channel_floor_sigma", 0.0))
+    if floor_sigma > 0.0:
+        # Each channel's sky noise differs (a boosted blue channel is the noisiest); clipping each at the same number of
+        # its own sigma keeps the sky dark and neutral instead of coloured by the noisiest channel.
+        floors = np.asarray([floor_sigma * _robust_sigma(c) for c in channels], dtype=np.float32)
+        channels = channels - floors[:, None, None]
+    channels = np.clip(channels, 0.0, None)
+    if getattr(display, "per_channel_stretch", False):
+        return _per_channel_stretch(channels, display)
     intensity = np.mean(channels, axis=0)
     stretch_fn = LuptonAsinhStretch(stretch=float(display.stretch), Q=float(display.q))
     stretched = stretch_fn(np.clip(intensity, 0.0, None), clip=False)

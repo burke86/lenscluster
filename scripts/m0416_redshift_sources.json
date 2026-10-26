@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-10-25",
+  "scope": "Public M0416 cluster-field and adjacent-field redshift catalogs located in the cited releases. Not a claim of exhaustive coverage or automatic discovery of future releases.",
+  "sources": [
+    {
+      "id": "canucs_dr1",
+      "release": "CANUCS DR1 (2025)",
+      "source_page": "https://archive.stsci.edu/hlsp/canucs",
+      "redshift_kind": "mixed",
+      "notes": "EAzY photometric redshifts plus available ancillary/NIRSpec spectroscopy. Retain quality flags; BAGPIPES/Dense Basis are not independent redshift measurements. Includes cluster and NIRCam flanking field.",
+      "files": [
+        {
+          "url": "https://archive.stsci.edu/hlsps/canucs/dr1/macs0416/clu/hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz",
+          "filename": "hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz",
+          "format": "fits"
+        },
+        {
+          "url": "https://archive.stsci.edu/hlsps/canucs/dr1/macs0416/ncf/hlsp_canucs_jwst-hst_multi_macs0416-ncf_multi_v1_photometry-cat.fits.gz",
+          "filename": "hlsp_canucs_jwst-hst_multi_macs0416-ncf_multi_v1_photometry-cat.fits.gz",
+          "format": "fits"
+        },
+        {
+          "url": "https://archive.stsci.edu/hlsps/canucs/dr1/webpage/hlsp_canucs_jwst-hst_multi_v1_photometry-cat_readme.txt",
+          "filename": "hlsp_canucs_jwst-hst_multi_v1_photometry-cat_readme.txt",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "canucs_images_2025",
+      "release": "Rihtarsic et al. 2025 / CANUCS DR1",
+      "source_page": "https://niriss.github.io/data_release1.html",
+      "redshift_kind": "mixed",
+      "notes": "Full multiple-image candidates and secure lensing input list. A family/system redshift is not necessarily spectroscopy measured at each counterimage. Includes candidates without confirmed redshifts.",
+      "files": [
+        {
+          "url": "https://archive.stsci.edu/hlsps/canucs/dr1/macs0416/model/hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt",
+          "filename": "hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/hlsps/canucs/dr1/macs0416/model/hlsp_canucs_jwst-hst_multi_macs0416-lenstool-multim_multi_v1_model.txt",
+          "filename": "hlsp_canucs_jwst-hst_multi_macs0416-lenstool-multim_multi_v1_model.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/hlsps/canucs/dr1/macs0416/model/hlsp_canucs_jwst-hst_multi_macs0416-lenstool-readme_multi_v1_model.txt",
+          "filename": "hlsp_canucs_jwst-hst_multi_macs0416-lenstool-readme_multi_v1_model.txt",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "dja_nirspec",
+      "release": "DJA NIRSpec v4.4 (September 2025)",
+      "source_page": "https://dawn-cph.github.io/dja/blog/2025/05/01/nirspec-merged-table-v4/",
+      "redshift_kind": "spectroscopic",
+      "notes": "Full public compilation (133 MB compressed), including M0416 programs. Retains repeated spectra, all grades, failed fits and quality flags. Do not equate a finite automated fit with confirmed spectroscopy. Coordinates are target positions; inspect the spectrum and grade.",
+      "files": [
+        {
+          "url": "https://zenodo.org/records/15472354/files/dja_msaexp_emission_lines_v4.4.csv.gz",
+          "filename": "dja_msaexp_emission_lines_v4.4.csv.gz",
+          "format": "csv"
+        },
+        {
+          "url": "https://zenodo.org/records/15472354/files/dja_msaexp_emission_lines_v4.4.columns.csv",
+          "filename": "dja_msaexp_emission_lines_v4.4.columns.csv",
+          "format": "csv"
+        }
+      ]
+    },
+    {
+      "id": "buffalo",
+      "release": "Pagul et al. / MAST v2.0",
+      "source_page": "https://archive.stsci.edu/hlsp/buffalo",
+      "redshift_kind": "photometric",
+      "notes": "LePhare photometric estimates, not spectroscopic confirmations.",
+      "files": [
+        {
+          "url": "https://archive.stsci.edu/hlsps/buffalo/macs0416/catalogs/pagul-v2.0/hlsp_buffalo_hst_ir-weighted_macs0416_multi_v2.0_catalog.fits",
+          "filename": "hlsp_buffalo_hst_ir-weighted_macs0416_multi_v2.0_catalog.fits",
+          "format": "fits"
+        },
+        {
+          "url": "https://archive.stsci.edu/hlsps/buffalo/macs0416/catalogs/pagul-v2.0/hlsp_buffalo_hst_ir-weighted_macs0416_multi_v2.0_readme.txt",
+          "filename": "hlsp_buffalo_hst_ir-weighted_macs0416_multi_v2.0_readme.txt",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "alcs_charge",
+      "release": "Kokorev et al. 2022 v1.0",
+      "source_page": "https://github.com/dawn-cph/alcs-clusters",
+      "redshift_kind": "photometric",
+      "notes": "HST+IRAC EAZY catalog; preserve fit diagnostics and redshift intervals.",
+      "files": [
+        {
+          "url": "https://alcs-data.s3.amazonaws.com/IRAC/HFF/hff-j041620m2406/hff-j041620m2406_master.fits",
+          "filename": "hff-j041620m2406_master.fits",
+          "format": "fits"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/dawn-cph/alcs-clusters/master/v1.0/master_columns.md",
+          "filename": "master_columns.md",
+          "format": "text"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/dawn-cph/alcs-clusters/master/v1.0/zout_columns.md",
+          "filename": "zout_columns.md",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "muse_richard",
+      "release": "Richard et al. 2021, NE v1.2 / S v1.1",
+      "source_page": "https://cral-perso.univ-lyon1.fr/labo/perso/johan.richard/MUSE_data_release/",
+      "redshift_kind": "spectroscopic",
+      "notes": "Separate NE and S pointings with native zconf and emission-line measurements. Preserve duplicate objects across pointings.",
+      "files": [
+        {
+          "url": "https://cral-perso.univ-lyon1.fr/labo/perso/johan.richard/MUSE_data_release/catalogs/MACS0416NE_v1.2.fits",
+          "filename": "MACS0416NE_v1.2.fits",
+          "format": "fits"
+        },
+        {
+          "url": "https://cral-perso.univ-lyon1.fr/labo/perso/johan.richard/MUSE_data_release/catalogs/MACS0416NE_v1.2_lines.fits",
+          "filename": "MACS0416NE_v1.2_lines.fits",
+          "format": "fits"
+        },
+        {
+          "url": "https://cral-perso.univ-lyon1.fr/labo/perso/johan.richard/MUSE_data_release/catalogs/MACS0416S_v1.1.fits",
+          "filename": "MACS0416S_v1.1.fits",
+          "format": "fits"
+        },
+        {
+          "url": "https://cral-perso.univ-lyon1.fr/labo/perso/johan.richard/MUSE_data_release/catalogs/MACS0416S_v1.1_lines.fits",
+          "filename": "MACS0416S_v1.1_lines.fits",
+          "format": "fits"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/646/A83/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "glass",
+      "release": "HST GLASS redshift v002 / master corrected 2019",
+      "source_page": "https://archive.stsci.edu/prepds/glass/",
+      "redshift_kind": "mixed",
+      "notes": "Matched grism catalog plus master redshifts and ID crosswalk. Preserve native quality codes; master values may come from other surveys.",
+      "files": [
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/glass/macs0416/hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v002_redshiftcatalog-rmatch0p1.txt",
+          "filename": "hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v002_redshiftcatalog-rmatch0p1.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/glass/macs0416/hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v001_redshiftcatalog.txt",
+          "filename": "hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v001_redshiftcatalog.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/glass/macs0416/hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v001_redshiftcatalog-xmatchglassv001.txt",
+          "filename": "hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v001_redshiftcatalog-xmatchglassv001.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/glass/macs0416/hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v001_glassmaster.cat",
+          "filename": "hlsp_glass_hst_wfc3_macs0416-fullfov-pa999_ir_v001_glassmaster.cat",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/glass/hlsp_glass_hst_wfc3_all_all_v001_readme.txt",
+          "filename": "hlsp_glass_hst_wfc3_all_all_v001_readme.txt",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "clash",
+      "release": "CLASH HST archive catalogs",
+      "source_page": "https://archive.stsci.edu/hlsp/clash",
+      "redshift_kind": "photometric",
+      "notes": "Both IR and ACS+IR detections; preserve BPZ intervals and quality.",
+      "files": [
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/clash/macs0416/catalogs/hst/hlsp_clash_hst_acs-ir_macs0416_cat.txt",
+          "filename": "hlsp_clash_hst_acs-ir_macs0416_cat.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/clash/macs0416/catalogs/hst/hlsp_clash_hst_ir_macs0416_cat.txt",
+          "filename": "hlsp_clash_hst_ir_macs0416_cat.txt",
+          "format": "text"
+        },
+        {
+          "url": "https://archive.stsci.edu/missions/hlsp/clash/macs0416/catalogs/hst/hlsp_clash_hst_catalog_readme.txt",
+          "filename": "hlsp_clash_hst_catalog_readme.txt",
+          "format": "text"
+        }
+      ]
+    },
+    {
+      "id": "caminha_2017",
+      "release": "Caminha et al. 2017, CDS updated 2019",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/600/A90",
+      "redshift_kind": "spectroscopic",
+      "notes": "Full VIMOS/MUSE catalog and multiple-image list. Retain native quality flags.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/600/A90/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/600/A90/catalog.dat.gz",
+          "filename": "catalog.dat.gz",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/600/A90/tablea1.dat",
+          "filename": "tablea1.dat",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "vanzella_2021",
+      "release": "Vanzella et al. 2021 MUSE Deep Lensed Field",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/646/A57",
+      "redshift_kind": "spectroscopic",
+      "notes": "q_z: 2 likely, 3 secure, 9 single-line. Preserve these distinctions.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/646/A57/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/646/A57/tablea2.dat",
+          "filename": "tablea2.dat",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "bergamini_2023",
+      "release": "Bergamini et al. 2023",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/674/A79",
+      "redshift_kind": "spectroscopic",
+      "notes": "Multiple-image list; distinguish family redshift from direct spectroscopy of each image.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/674/A79/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/674/A79/tablea1.dat",
+          "filename": "tablea1.dat",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "rihtarsic_2025",
+      "release": "Rihtarsic et al. 2025 CDS appendices",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/696/A15",
+      "redshift_kind": "mixed",
+      "notes": "New spectroscopic and photometric candidates; retains gold/silver/bronze and measurement notes. Full list also in CANUCS product.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/696/A15/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/696/A15/tablea1.dat",
+          "filename": "tablea1.dat",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/696/A15/tablea2.dat",
+          "filename": "tablea2.dat",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/696/A15/tablea3.dat",
+          "filename": "tablea3.dat",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "hff_deepspace",
+      "release": "Shipley et al. 2018 v3.9",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/ApJS/235/14",
+      "redshift_kind": "mixed",
+      "notes": "Cluster and parallel fields. Preserve photometric estimates, spectroscopic fields and use flags.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/ApJS/235/14/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/ApJS/235/14/clm0416.dat.gz",
+          "filename": "clm0416.dat.gz",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/ApJS/235/14/parm0416.dat.gz",
+          "filename": "parm0416.dat.gz",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "astrodeep",
+      "release": "Merlin/Castellano et al. 2016",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/590/A31",
+      "redshift_kind": "mixed",
+      "notes": "Join positions, redshift and diagnostic tables by native ID within field, never by row. ZBEST can be photometric or spectroscopic; retain ZSPECFLAG.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/m0416cla.dat.gz",
+          "filename": "m0416cla.dat.gz",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/m0416clz.dat.gz",
+          "filename": "m0416clz.dat.gz",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/m0416clc.dat",
+          "filename": "m0416clc.dat",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/m0416pfa.dat.gz",
+          "filename": "m0416pfa.dat.gz",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/m0416pfz.dat.gz",
+          "filename": "m0416pfz.dat.gz",
+          "format": "cds"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/A+A/590/A31/m0416pfc.dat",
+          "filename": "m0416pfc.dat",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "clash_molino",
+      "release": "Molino et al. 2017",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/MNRAS/470/95",
+      "redshift_kind": "photometric",
+      "notes": "Independent CLASH photometric reanalysis, not spectroscopic confirmation.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/MNRAS/470/95/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/MNRAS/470/95/macs0416.dat.gz",
+          "filename": "macs0416.dat.gz",
+          "format": "cds"
+        }
+      ]
+    },
+    {
+      "id": "ebeling_2014",
+      "release": "Ebeling et al. 2014",
+      "source_page": "https://cdsarc.cds.unistra.fr/viz-bin/cat/J/ApJS/211/21",
+      "redshift_kind": "spectroscopic",
+      "notes": "M0416 spectroscopy; older measurements may repeat in newer compilations.",
+      "files": [
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/ApJS/211/21/ReadMe",
+          "filename": "ReadMe",
+          "format": "text"
+        },
+        {
+          "url": "https://cdsarc.cds.unistra.fr/ftp/J/ApJS/211/21/table3.dat",
+          "filename": "table3.dat",
+          "format": "cds"
+        }
+      ]
+    }
+  ],
+  "coverage_notes": [
+    "SAPPHIRES EDR targets the separate M0416 parallel field; not included as evidence for cluster-core extra images.",
+    "CANUCS BAGPIPES/Dense Basis inherit the catalog redshift prior; they are not additional independent redshift confirmations.",
+    "NED/SIMBAD aggregates, unpublished/private data, and individual-object papers are not exhaustively harvested. No catalog match does not imply no measured redshift exists.",
+    "No automatic confirmation or coordinate crossmatch is performed by this downloader. Inspect astrometric offsets, blending, spectral quality and whether spectroscopy belongs to the image itself or another family member."
+  ]
+}

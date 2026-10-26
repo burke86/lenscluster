@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from lenscluster.cluster_solver import _build_parameter_specs, _build_scaling_parameter_specs
+from lenscluster.config import ScalingModelConfig
+from lenscluster.state import build_halo_parameter_specs, build_scaling_parameter_specs
 from lenscluster.jax_cosmology import cosmology_config_from_parsed
 from lenscluster.lenstool_parser import load_best_par
 
@@ -280,15 +281,13 @@ def test_render_converts_catalogs_and_writes_loadable_pars(tmp_path: Path) -> No
     assert "potentiel S1" not in ares_par_text
     assert "profil 14" not in ares_par_text
     assert "potentiel G" not in ares_par_text
-    ares_specs, _ares_assignments, _ares_lens_models = _build_parameter_specs(potentials_with_priors)
+    ares_specs, _ares_assignments, _ares_lens_models = build_halo_parameter_specs(potentials_with_priors, softening_length_kpc=0.0)
     ares_sample_names = {spec.sample_name for spec in ares_specs}
     assert {"O1_x_centre", "O1_y_centre", "O2_x_centre", "O2_y_centre"} <= ares_sample_names
     assert not any(sample_name.startswith("G") for sample_name in ares_sample_names)
-    ares_scaling_specs, _ares_scaling_indices, _ares_scaling_models = _build_scaling_parameter_specs(
-        parsed["potfiles"]
-    )
-    assert {"alpha_sigma", "gamma_ml"} <= {spec.field for spec in ares_scaling_specs}
-    assert {"vdslope", "slope", "beta_radius"}.isdisjoint({spec.field for spec in ares_scaling_specs})
+    ares_scaling_specs, _ares_scaling_indices, _ares_scaling_models = build_scaling_parameter_specs(parsed["potfiles"], ScalingModelConfig())
+    assert {"alpha_sigma", "beta_radius"} <= {spec.field for spec in ares_scaling_specs}
+    assert {"vdslope", "slope", "gamma_ml"}.isdisjoint({spec.field for spec in ares_scaling_specs})
 
     hera_par = output / "hera" / "hera_lenscluster.par"
     _hera_parsed, _hera_potentials_df, _hera_images_df, _hera_arcs_df, hera_potentials_with_priors = load_best_par(hera_par)
@@ -333,14 +332,12 @@ def test_render_converts_catalogs_and_writes_loadable_pars(tmp_path: Path) -> No
     assert "slope   " not in hera_par_text
     assert {item["id"] for item in hera_potentials_with_priors} == {"O1", "O2"}
     assert len(_hera_parsed["potfiles"][0]["catalog_df"]) == 10
-    hera_specs, _hera_assignments, _hera_lens_models = _build_parameter_specs(hera_potentials_with_priors)
+    hera_specs, _hera_assignments, _hera_lens_models = build_halo_parameter_specs(hera_potentials_with_priors, softening_length_kpc=0.0)
     hera_sample_names = {spec.sample_name for spec in hera_specs}
     assert {"O1_x_centre", "O1_y_centre", "O2_x_centre", "O2_y_centre"} <= hera_sample_names
-    hera_scaling_specs, _hera_scaling_indices, _hera_scaling_models = _build_scaling_parameter_specs(
-        _hera_parsed["potfiles"]
-    )
-    assert {"alpha_sigma", "gamma_ml"} <= {spec.field for spec in hera_scaling_specs}
-    assert {"vdslope", "slope", "beta_radius"}.isdisjoint({spec.field for spec in hera_scaling_specs})
+    hera_scaling_specs, _hera_scaling_indices, _hera_scaling_models = build_scaling_parameter_specs(_hera_parsed["potfiles"], ScalingModelConfig())
+    assert {"alpha_sigma", "beta_radius"} <= {spec.field for spec in hera_scaling_specs}
+    assert {"vdslope", "slope", "gamma_ml"}.isdisjoint({spec.field for spec in hera_scaling_specs})
     assert not (
         {
             "G1_x_centre",

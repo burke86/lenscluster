@@ -1,11 +1,19 @@
 font.size: 16
+font.weight: normal
 axes.labelsize: 16
 axes.titlesize: 16
-legend.fontsize: 16
+axes.titleweight: normal
+legend.fontsize: 14
+legend.title_fontsize: 14
+legend.frameon: False
+legend.handletextpad: 0.2
+legend.labelspacing: 0.5
+legend.markerscale: 1.5
 xtick.labelsize: 14
 ytick.labelsize: 14
 figure.titlesize: 16
 text.usetex: False
+mathtext.default: regular
 
 figure.figsize: 6, 6
 axes.linewidth: 1.8

@@ -14,6 +14,8 @@ from .jax_cosmology import cosmology_config_from_parsed, kpc_per_arcsec_from_con
 
 DP_IE_PROFILE = 81
 SHEAR_PROFILE = 14
+NFW_PROFILE = 12
+MASS_SHEET_PROFILE = 101
 DEFAULT_POTFILE_SCALING_EXPONENT = 4.0
 STRICT_IMAGE_LABEL_RE = re.compile(r"^([A-Z0-9]+)\.([a-z]+)$")
 STRICT_IMAGE_LABEL_FORMAT = "FAMILY.image with FAMILY matching [A-Z0-9]+ and image matching [a-z]+"
@@ -208,11 +210,15 @@ def _normalize_potential_definition(
         normalized_priors["profil"] = normalized_priors.pop("profile")
     profile_type = int(normalized.get("profil"))
 
-    if profile_type == DP_IE_PROFILE:
+    if profile_type in (DP_IE_PROFILE, NFW_PROFILE):
         if "ellipticite" not in normalized and "ellipticity" in normalized:
             normalized["ellipticite"] = normalized.pop("ellipticity")
         if "ellipticite" not in normalized_priors and "ellipticity" in normalized_priors:
             normalized_priors["ellipticite"] = normalized_priors.pop("ellipticity")
+    if profile_type == NFW_PROFILE:
+        for field_name in ("x_centre", "y_centre", "ellipticite", "angle_pos", "log10_m200", "scale_radius_kpc", "z_lens"):
+            _require_numeric_field(normalized, field_name, potential_id)
+    elif profile_type == DP_IE_PROFILE:
         for field_name in ("x_centre", "y_centre", "ellipticite", "angle_pos", "v_disp", "z_lens"):
             _require_numeric_field(normalized, field_name, potential_id)
         z_lens = _require_numeric_field(normalized, "z_lens", potential_id)
@@ -240,6 +246,8 @@ def _normalize_potential_definition(
     elif profile_type == SHEAR_PROFILE:
         for field_name in ("gamma", "angle_pos"):
             _require_numeric_field(normalized, field_name, potential_id)
+    elif profile_type == MASS_SHEET_PROFILE:
+        _require_numeric_field(normalized, "kappa", potential_id)
 
     return normalized, normalized_priors
 
@@ -491,6 +499,10 @@ def _validate_image_family_redshifts(
 def _load_multiple_images_catalog(
     filepath: str | Path,
     par_reference: tuple[int, float, float] | None,
+    *,
+    metadata_path: str | Path | None = None,
+    sigma_arcsec: float | None = None,
+    sigma_floor_arcsec: float = 0.0,
 ) -> pd.DataFrame:
     catalog_df = _load_dat_catalog(filepath, par_reference, catalog_kind="multiple_images")
     if catalog_df.empty:
@@ -542,6 +554,66 @@ def _load_multiple_images_catalog(
                 )
     result = result.reset_index(drop=True)
     _validate_image_family_redshifts(result, filepath)
+    if metadata_path is not None or sigma_arcsec is not None:
+        result = _merge_image_metadata(
+            result, metadata_path=metadata_path,
+            sigma_arcsec=0.5 if sigma_arcsec is None else sigma_arcsec,
+            sigma_floor_arcsec=sigma_floor_arcsec,
+        )
+    return result
+
+
+def _merge_image_metadata(
+    images: pd.DataFrame,
+    *,
+    metadata_path: str | Path | None,
+    sigma_arcsec: float,
+    sigma_floor_arcsec: float,
+) -> pd.DataFrame:
+    """Attach measured astrometry/parity by label, never from lens predictions.
+
+    Missing metadata rows or blank values use the configured astrometric error
+    and unknown parity (zero). Supplied nonblank values must be valid.
+    """
+    if not np.isfinite(sigma_arcsec) or sigma_arcsec <= 0.0:
+        raise ValueError("sigma_arcsec must be finite and positive.")
+    if not np.isfinite(sigma_floor_arcsec) or sigma_floor_arcsec < 0.0:
+        raise ValueError("sigma_floor_arcsec must be finite and nonnegative.")
+    result = images.copy()
+    result["sigma_obs_arcsec"] = max(float(sigma_arcsec), float(sigma_floor_arcsec))
+    result["parity"] = np.zeros(len(result), dtype=np.int8)
+    if metadata_path is None:
+        return result
+    path = Path(metadata_path)
+    if not path.is_file():
+        raise ValueError(f"image metadata does not exist: {path}")
+    metadata = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if "image_label" not in metadata:
+        raise ValueError("image metadata requires image_label.")
+    supported = {"sigma_obs_arcsec", "parity"}.intersection(metadata.columns)
+    if not supported:
+        raise ValueError("image metadata requires sigma_obs_arcsec or parity.")
+    labels = metadata["image_label"].str.strip()
+    if labels.eq("").any() or labels.duplicated().any():
+        raise ValueError("image metadata labels must be nonempty and unique.")
+    unknown = sorted(set(labels) - set(result["image_label"].astype(str)))
+    if unknown:
+        raise ValueError(f"image metadata contains unknown image labels: {unknown}")
+    metadata = metadata.assign(image_label=labels).set_index("image_label")
+    for field in sorted(supported):
+        raw = metadata[field].str.strip()
+        supplied = raw.ne("")
+        numeric = pd.to_numeric(raw.where(supplied), errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        valid = finite & ((numeric > 0.0).to_numpy() if field == "sigma_obs_arcsec" else numeric.isin([-1, 0, 1]).to_numpy())
+        if np.any(supplied.to_numpy() & ~valid):
+            bad = raw.index[supplied.to_numpy() & ~valid].tolist()
+            raise ValueError(f"Invalid {field} in image metadata for {bad}.")
+        mapped = result["image_label"].map(numeric)
+        if field == "sigma_obs_arcsec":
+            result[field] = np.maximum(mapped.fillna(float(sigma_arcsec)), float(sigma_floor_arcsec))
+        else:
+            result[field] = mapped.fillna(0).astype(np.int8)
     return result
 
 
