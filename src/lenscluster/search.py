@@ -179,6 +179,45 @@ def run_adam(objective: Objective, starts_g: np.ndarray, steps: int, learning_ra
                 evaluations=np.full(len(starts_g), steps), traces=traces)
 
 
+def run_optax_lbfgs(objective: Objective, starts_g: np.ndarray, max_iter: int, memory: int = 20) -> dict[str, Any]:
+    """Vmapped optax L-BFGS with the zoom line search on the active block, every start in one jitted scan; keeps the best
+    iterate per start.  Invalid models (the BAD_POTENTIAL sentinel) are given a finite large value and a zero gradient so
+    the line search backs off instead of stepping through them."""
+    max_iter = int(max_iter)
+    optimizer = optax.lbfgs(memory_size=int(memory), linesearch=optax.scale_by_zoom_linesearch(max_linesearch_steps=25))
+
+    def safe_value(g):
+        value = objective.reduced(g)
+        return jnp.where(jnp.isfinite(value) & (value < BAD_POTENTIAL), value, 1.0e12)
+
+    value_and_grad = optax.value_and_grad_from_state(safe_value)
+
+    def step(carry, _):
+        g, opt_state, best_g, best_value = carry
+        value, grad = value_and_grad(g, state=opt_state)
+        grad = jnp.where(jnp.isfinite(grad), grad, 0.0)
+        improved = value < best_value
+        best_g = jnp.where(improved, g, best_g)
+        best_value = jnp.where(improved, value, best_value)
+        updates, opt_state = optimizer.update(grad, opt_state, g, value=value, grad=grad, value_fn=safe_value)
+        return (optax.apply_updates(g, updates), opt_state, best_g, best_value), value
+
+    chunk, chunks = _chunking(max_iter, target=50)
+    run_chunk = jax.jit(jax.vmap(lambda carry: jax.lax.scan(step, carry, None, length=chunk)))
+    g0 = jnp.asarray(starts_g)
+    carry = (g0, jax.vmap(optimizer.init)(g0), g0, jnp.full(len(starts_g), jnp.inf))
+    values = []
+    with progress(total=max_iter, desc=f"optax L-BFGS x{len(starts_g)}") as bar:
+        for _ in range(chunks):
+            carry, chunk_values = run_chunk(carry)
+            values.append(np.asarray(chunk_values))
+            bar.update(chunk)
+    traces = np.concatenate(values, axis=1)[:, :max_iter]
+    potential = np.where(np.asarray(carry[3]) >= 1.0e12, np.inf, np.asarray(carry[3]))
+    return dict(final=np.asarray(carry[2]), potential=potential, iterations=np.full(len(starts_g), max_iter),
+                evaluations=np.full(len(starts_g), max_iter), traces=traces)
+
+
 def _chunking(steps: int, target: int = 100) -> tuple[int, int]:
     """Chunk length and count so that a progress bar can tick between jitted scans."""
     chunk = max(1, min(int(target), int(steps)))
