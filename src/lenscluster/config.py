@@ -205,34 +205,26 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class SearchConfig:
-    """Multi-start MAP of the global block from prior draws, then mode clustering and a full-dimension polish.
-
-    method: "lbfgs" (scipy L-BFGS-B per start), "adam" (vmapped Adam) or "svi" (vmapped mean-field
-    Gaussian guide trained with Adam; the guide mean is the point estimate).
-    """
+    """The init search, in two stages: the large-scale model without the member population from ``n_starts`` prior
+    starts (``halo_method``); then, from each carried mode, the members with the large family frozen, started from
+    ``member_starts`` prior draws of the member block (``member_method``); then a full-dimension L-BFGS polish of the
+    modes that can seed chains.  Methods: "lbfgs" (scipy L-BFGS-B per start), "optax-lbfgs" (vmapped optax L-BFGS,
+    for GPUs), "adam" (vmapped Adam) or "svi" (vmapped mean-field Gaussian guide, the guide mean as the estimate)."""
     n_starts: int = 32
-    strategy: str = "multistart"            # "multistart": one L-BFGS/Adam/SVI search of the active block from prior draws;
-                                            # "hybrid": Adam on the lens block, then L-BFGS on everything from each mode; "staged": big halos -> free halos -> all
-    method: str = "lbfgs"
-    staged_method: str = "adam"             # optimizer of the staged strategy: "adam" or "svi"
-    staged_starts: int = 8                  # prior starts in the first stage of the staged strategy
-    staged_steps: int = 500
-    staged_learning_rate: float = 0.01
-    svi_particles: int = 1                  # ELBO samples per step for the staged SVI
-    staged_pin_scatter: bool = False        # pin the member scatter (polish_scatter) in the staged stages too
+    halo_method: str = "lbfgs"
+    member_method: str = "lbfgs"
+    member_starts: int = 8
     lbfgs_max_iter: int = 400
     adam_steps: int = 2000
     adam_learning_rate: float = 0.05
     svi_steps: int = 2000
     svi_learning_rate: float = 0.05
-    polish_max_iter: int = 100
+    polish_max_iter: int = 2000             # the only full-dimension optimization: AS1063 needs 400 iterations to reach the joint
+                                            # optimum, M0416 passes the one-stage multistart after 2000 (400 left it 27 short)
     polish_scatter: float | None = 0.1      # pin the member scatter (ln sigma) at this value while optimizing; None keeps the prior median
-    search_latent: bool = True              # also optimize member deviations and source offsets during the multi-start search
     mode_margin: float = 10.0
     mode_parameter_tolerance: float = 0.05
     max_chain_modes: int = 4
-    escalate: bool = True                   # multistart only: when just the configured start reaches the best basin, also run
-                                            # the hybrid Adam-then-L-BFGS search and keep the better of the two
 
 
 @dataclass(frozen=True)
@@ -445,16 +437,10 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     search = config.search
     _positive_int("search.n_starts", search.n_starts)
     _positive_int("search.lbfgs_max_iter", search.lbfgs_max_iter)
-    if search.method not in {"lbfgs", "adam", "svi"}:
-        raise ValueError("search.method must be 'lbfgs', 'adam' or 'svi'.")
-    if search.strategy not in {"multistart", "staged", "hybrid"}:
-        raise ValueError("search.strategy must be 'multistart', 'staged' or 'hybrid'.")
-    if search.staged_method not in {"adam", "svi"}:
-        raise ValueError("search.staged_method must be 'adam' or 'svi'.")
-    _positive_int("search.staged_starts", search.staged_starts)
-    _positive_int("search.staged_steps", search.staged_steps)
-    _positive("search.staged_learning_rate", search.staged_learning_rate)
-    _positive_int("search.svi_particles", search.svi_particles)
+    for label in ("halo_method", "member_method"):
+        if getattr(search, label) not in {"lbfgs", "optax-lbfgs", "adam", "svi"}:
+            raise ValueError(f"search.{label} must be 'lbfgs', 'optax-lbfgs', 'adam' or 'svi'.")
+    _positive_int("search.member_starts", search.member_starts)
     _positive_int("search.adam_steps", search.adam_steps)
     _positive_int("search.svi_steps", search.svi_steps)
     _positive("search.adam_learning_rate", search.adam_learning_rate)

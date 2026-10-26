@@ -1,8 +1,8 @@
-"""Multi-start MAP of the global block in NumPyro's unconstrained coordinates, with mode clustering.
+"""Multi-start MAP in NumPyro's unconstrained coordinates, with mode clustering.
 
-Three optimizers share the same reduced objective (member deviations and source offsets held at
-zero): scipy L-BFGS-B per start, vmapped Adam, and vmapped mean-field SVI.  The best modes are
-then polished in full dimension with L-BFGS-B so the Hessian mass seed is taken at the MAP.
+Four optimizers share the same objective on the active block (scipy L-BFGS-B per start, vmapped optax L-BFGS,
+vmapped Adam, vmapped mean-field SVI).  The best modes are then polished in full dimension with L-BFGS-B so the
+Hessian mass seed is taken at the MAP.  The two-stage init that drives this lives in search_split.
 """
 from __future__ import annotations
 
@@ -291,22 +291,25 @@ def cluster_modes(final_g: np.ndarray, potential: np.ndarray, finite: np.ndarray
     return modes, assignment
 
 
-def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, config: SearchConfig, *, seed: int = 0,
-                   log=print) -> dict[str, Any]:
-    """Optimize the global block from every start, cluster the end points into modes, polish the best modes."""
+def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, config: SearchConfig, *, method: str, seed: int = 0,
+                   log=print, active_sites: set[str] | None = None) -> dict[str, Any]:
+    """Optimize from every start with ``method``, cluster the end points into modes, polish the best modes with L-BFGS in
+    full dimension.  ``active_sites`` restricts the search to those sample sites (the polish still frees everything)."""
     pinned = pinned_scatter_values(state, config.polish_scatter)
-    objective = Objective(state, evaluator, starts[0], include_latent=bool(config.search_latent), pinned=pinned)
-    polish_objective = objective if config.search_latent else Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned)
+    objective = Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned, active_sites=active_sites)
+    polish_objective = objective if active_sites is None else Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned)
     starts_g = np.stack([objective.flatten(s)[np.asarray(objective.global_index)] for s in starts])
     started = time.perf_counter()
-    if config.method == "lbfgs":
+    if method == "lbfgs":
         out = run_lbfgs(objective, starts_g, config)
-    elif config.method == "adam":
+    elif method == "optax-lbfgs":
+        out = run_optax_lbfgs(objective, starts_g, config.lbfgs_max_iter)
+    elif method == "adam":
         out = run_adam(objective, starts_g, config.adam_steps, config.adam_learning_rate)
-    elif config.method == "svi":
-        out = run_svi(objective, starts_g, config.svi_steps, config.svi_learning_rate, seed, config.svi_particles)
+    elif method == "svi":
+        out = run_svi(objective, starts_g, config.svi_steps, config.svi_learning_rate, seed)
     else:
-        raise ValueError(f"unknown search method {config.method!r}")
+        raise ValueError(f"unknown search method {method!r}")
     search_seconds = time.perf_counter() - started
     final_g, potential = out["final"], out["potential"]
     finite = np.isfinite(potential) & np.isfinite(final_g).all(axis=1) & (potential < BAD_POTENTIAL)
@@ -333,10 +336,10 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
     polish_seconds = time.perf_counter() - started
     modes.sort(key=lambda m: m["potential_polished"])
     best = modes[0]
-    log(f"[search] {config.method}: {len(starts)} starts, {int(finite.sum())} finite, {len(modes)} modes, "
+    log(f"[search] {method}: {len(starts)} starts, {int(finite.sum())} finite, {len(modes)} modes, "
         f"{sum(m['within_margin'] for m in modes)} within margin; active block {objective.n_global} of {objective.base.size} "
-        f"(latent {'free' if config.search_latent else 'at zero'}, scatter {'pinned at %.3g' % config.polish_scatter if config.polish_scatter else 'free'}); "
-        f"parameters; search {search_seconds:.1f}s, polish {polish_seconds:.1f}s; best log posterior {-best['potential_polished']:.2f} "
+        f"(scatter {'pinned at %.3g' % config.polish_scatter if config.polish_scatter else 'free'}); "
+        f"search {search_seconds:.1f}s, polish {polish_seconds:.1f}s; best log posterior {-best['potential_polished']:.2f} "
         f"(before polish {-best['potential']:.2f}); mean iterations {out['iterations'].mean():.0f}, mean evaluations {out['evaluations'].mean():.0f}")
     theta_best = np.asarray(best["theta"], dtype=float)
     for mode in modes:
@@ -346,7 +349,7 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
     starts_in_basin = int(sum(m["count"] for m in modes if m["within_margin"]))
     configured_in_basin = any(0 in m["members"] and m["within_margin"] for m in modes)
     return dict(theta=theta_best, modes=modes, assignment=assignment.tolist(), potential=potential.tolist(),
-                iterations=out["iterations"].tolist(), evaluations=out["evaluations"].tolist(), method=config.method,
+                iterations=out["iterations"].tolist(), evaluations=out["evaluations"].tolist(), method=method,
                 starts_in_basin=starts_in_basin, configured_in_basin=bool(configured_in_basin),
                 traces=out["traces"], final_theta=final_theta, global_index=np.asarray(objective.global_index).tolist(),
                 search_seconds=float(search_seconds), polish_seconds=float(polish_seconds), n_finite=int(finite.sum()),

@@ -54,8 +54,9 @@ FF_RGB_DISPLAY = RGBDisplayConfig(q=6.8, stretch=0.0158, minimum=0.00105, red_ga
 
 def _usage() -> str:
     return (
-        "Usage: xonsh run.xsh <cluster> [--campaign NAME] [--run-label NAME] [--image-metadata PATH] [--init hybrid|multistart|staged] [--search lbfgs|adam|svi] [--stage init|final|both] [--imaging hst|jwst] [--fast] [--dry-run]\n"
+        "Usage: xonsh run.xsh <cluster> [--campaign NAME] [--run-label NAME] [--image-metadata PATH] [--halo-search lbfgs|optax-lbfgs|adam|svi] [--member-search lbfgs|optax-lbfgs|adam|svi] [--stage init|final|both] [--imaging hst|jwst] [--fast] [--dry-run]\n"
         "  --imaging jwst: draw the cluster mass figure on the NIRCam mosaics (file suffix _jwst) instead of the HST ones\n"
+        "  --halo-search, --member-search: optimizer of the large-scale stage and of the member stage of the init (default lbfgs)\n"
         "  --fast: exploratory settings: members deflecting every image by < 0.03\" are dropped, far-field members allowed down to\n"
         "          2 cut radii from an image, classification at the current model, 16 search starts, 300+150 draws at tree depth 7\n"
         "          (check the audit's far-field error before trusting a fast run)\n"
@@ -71,8 +72,10 @@ def _parse_args(argv: list[str]) -> dict:
         print(_usage())
         raise SystemExit(2)
     cluster = str(argv[1]).strip().upper()
-    values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "image_metadata": None, "dry_run": False, "fast": False, "search": "lbfgs", "stage": "both", "init": "multistart", "imaging": "hst"}
-    flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--image-metadata": "image_metadata", "--search": "search", "--stage": "stage", "--init": "init", "--imaging": "imaging"}
+    values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "image_metadata": None, "dry_run": False, "fast": False, "stage": "both", "imaging": "hst",
+              "halo_search": "lbfgs", "member_search": "lbfgs"}
+    flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--image-metadata": "image_metadata", "--stage": "stage", "--imaging": "imaging",
+                   "--halo-search": "halo_search", "--member-search": "member_search"}
     index = 2
     while index < len(argv):
         flag = argv[index]
@@ -93,23 +96,18 @@ def _parse_args(argv: list[str]) -> dict:
         if value is not None and (not str(value).strip() or str(value) in {".", ".."} or "/" in str(value) or "\\" in str(value)):
             print(f"--{key.replace('_', '-')} must be a nonempty single path segment.")
             raise SystemExit(2)
-    if values["search"] not in {"lbfgs", "adam", "svi"}:
-        print("--search must be lbfgs, adam or svi.")
-        raise SystemExit(2)
-    if values["init"] not in {"hybrid", "multistart", "staged"}:
-        print("--init must be hybrid, multistart or staged.")
-        raise SystemExit(2)
-    if values["init"] == "staged" and values["search"] == "lbfgs":
-        values["search"] = "adam"
     if values["stage"] not in {"init", "final", "both"}:
         print("--stage must be init, final or both.")
+        raise SystemExit(2)
+    if values["halo_search"] not in {"lbfgs", "optax-lbfgs", "adam", "svi"} or values["member_search"] not in {"lbfgs", "optax-lbfgs", "adam", "svi"}:
+        print("--halo-search and --member-search must be lbfgs, optax-lbfgs, adam or svi.")
         raise SystemExit(2)
     if values["imaging"] not in {"hst", "jwst"}:
         print("--imaging must be hst or jwst.")
         raise SystemExit(2)
     return dict(cluster=cluster, campaign_name=str(values["campaign"]).strip(), run_label=values["run_label"],
-                dry_run=values["dry_run"], fast=values["fast"], image_metadata=values["image_metadata"], search_method=values["search"], stage=values["stage"], init_strategy=values["init"],
-                imaging=values["imaging"])
+                dry_run=values["dry_run"], fast=values["fast"], image_metadata=values["image_metadata"], stage=values["stage"], imaging=values["imaging"],
+                halo_search=values["halo_search"], member_search=values["member_search"])
 
 
 # The solver's tuned defaults live in lenscluster.config; a cluster entry carries only what is specific to it: the
@@ -353,10 +351,10 @@ def build_config(
     run_label: str | None = None,
     image_metadata: str | None = None,
     runtime: RuntimeConfig | None = None,
-    search_method: str = "lbfgs",
-    init_strategy: str = "multistart",
     fast: bool = False,
     imaging: str = "hst",
+    halo_search: str = "lbfgs",
+    member_search: str = "lbfgs",
 ) -> LensClusterSolverConfig:
     """The solver configuration for one cluster: library defaults plus the cluster entry, the command-line choices and,
     with ``fast``, the exploratory overrides."""
@@ -378,7 +376,7 @@ def build_config(
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
         runtime=runtime if runtime is not None else build_runtime(cores),
-        search=SearchConfig(n_starts=256, strategy=init_strategy, method=search_method, staged_method=search_method if search_method != "lbfgs" else "adam"),
+        search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search),
         sampling=SamplingConfig(warmup=2000, samples=1000, max_tree_depth=8, target_accept=0.85),
         scaling=replace(cluster_config.get("scaling", ScalingModelConfig()), softening_length_kpc=float(cluster_config.get("softening_length_kpc", 0.0))),
         members=MemberConfig(far_field_cut_radii=float(cluster_config.get("far_field_cut_radii", MemberConfig.far_field_cut_radii)),
@@ -416,15 +414,15 @@ def main(argv=None):
     if not options["dry_run"]:
         configure_cpu_runtime(runtime.chains, runtime.nuts_chain_method, runtime.cpu_threads_per_chain)
     config = build_config(cluster, cores=cores, campaign_name=options["campaign_name"], run_label=options["run_label"],
-                          image_metadata=options["image_metadata"], runtime=runtime, search_method=options["search_method"],
-                          init_strategy=options["init_strategy"], fast=options["fast"], imaging=options["imaging"]).validate()
+                          image_metadata=options["image_metadata"], runtime=runtime, fast=options["fast"], imaging=options["imaging"],
+                          halo_search=options["halo_search"], member_search=options["member_search"]).validate()
     if options["dry_run"]:
         from lenscluster.pipeline import dry_run
         print(json.dumps({"dry_run": True, "cpu_plan": cpu_plan.to_dict(), **dry_run(config)}, indent=2, default=str))
         return 0
     from lenscluster.pipeline import run
     print(f"[config] cluster={cluster} run_name={config.paths.run_name} output_dir={config.paths.output_dir} "
-          f"stage={options['stage']} init={config.search.strategy} chains={runtime.chains} search={config.search.method}/{config.search.staged_method} "
+          f"stage={options['stage']} chains={runtime.chains} search={config.search.halo_method}+{config.search.member_method} "
           f"n_starts={config.search.n_starts} fast={options['fast']} sigma_obs_arcsec={config.model.image_constraints.sigma_arcsec}")
     start = time.monotonic()
     try:

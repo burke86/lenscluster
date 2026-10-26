@@ -46,7 +46,7 @@ def plot_convergence(search: dict[str, Any], path: Path, *, margin: float) -> Pa
     return path
 
 
-def plot_staged_convergence(search: dict[str, Any], path: Path) -> Path:
+def plot_stage_convergence(search: dict[str, Any], path: Path) -> Path:
     """One panel per stage: log posterior of the carried starts against optimizer step."""
     traces = search["stage_traces"]
     fig, axes = plt.subplots(1, len(traces), figsize=(4.6 * len(traces), 4.0), squeeze=False)
@@ -214,7 +214,7 @@ def write_init_plots(state: ModelState, evaluator: Evaluator, search: dict[str, 
     figures_dir.mkdir(parents=True, exist_ok=True)
     plot_convergence(search, figure_path(figures_dir, "init_convergence.pdf", prefix), margin=margin)
     if search.get("stage_traces"):
-        plot_staged_convergence(search, figure_path(figures_dir, "init_staged_convergence.pdf", prefix))
+        plot_stage_convergence(search, figure_path(figures_dir, "init_stage_convergence.pdf", prefix))
     plot_modes(state, search, figure_path(figures_dir, "init_modes.pdf", prefix), margin=margin)
     _, fit = plot_fit_at_start(state, evaluator, theta, figure_path(figures_dir, "init_fit.pdf", prefix))
     _, scaling = plot_scaling_at_start(state, evaluator, theta, figure_path(figures_dir, "init_scaling_relation.pdf", prefix))

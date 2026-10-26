@@ -75,8 +75,7 @@ def save_search(directory: Path, search: dict[str, Any]) -> None:
                                            "method": search["method"], "n_global": search["n_global"], "search_seconds": search["search_seconds"],
                                            "polish_seconds": search["polish_seconds"], "n_finite": search["n_finite"],
                                            "stages": search.get("stages"), "stage_traces": search.get("stage_traces"),
-                                           "starts_in_basin": search.get("starts_in_basin"), "configured_in_basin": search.get("configured_in_basin"),
-                                           "escalated_from": search.get("escalated_from")})
+                                           "starts_in_basin": search.get("starts_in_basin"), "configured_in_basin": search.get("configured_in_basin")})
 
 
 def save_posterior(directory: Path, posterior: PosteriorResults) -> None:

@@ -22,8 +22,8 @@ from .model import ModelState, PosteriorResults
 from .outputs import write_outputs
 from .report import audit_report, classification_report, far_field_threshold_table, run_summary_table
 from .sampling import run_nuts
-from .search import chain_starts, multistart_map, prior_starts
-from .search_staged import hybrid_map, staged_map
+from .search import chain_starts
+from .search_split import split_map
 from .state import build_state, deviation_constraint_ratio, with_member_classes
 
 STAGES = ("init", "final", "both")
@@ -296,23 +296,8 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         state = classify(state, evaluator, state.initial_theta, config, reference_cut_kpc=None, beta_radius=None, log=log)
         evaluator = Evaluator(state, config.likelihood.likelihood_mode)
 
-        # 2. Multi-start MAP of the global block from prior draws, polished in full dimension.
-        starts = prior_starts(state, config.search.n_starts, config.runtime.seed)
-        if config.search.strategy == "staged":
-            search = staged_map(state, evaluator, starts, config.search, config.model, seed=config.runtime.seed, log=log)
-        elif config.search.strategy == "hybrid":
-            search = hybrid_map(state, evaluator, starts, config.search, seed=config.runtime.seed, log=log)
-        else:
-            search = multistart_map(state, evaluator, starts, config.search, seed=config.runtime.seed, log=log)
-            if config.search.escalate and search_is_fragile(search):
-                log("[init] only the configured start reached the best basin; escalating to the hybrid Adam search from the same starts")
-                alternative = hybrid_map(state, evaluator, starts, config.search, seed=config.runtime.seed, log=log)
-                if alternative["modes"][0]["log_posterior"] > search["modes"][0]["log_posterior"] or not search_is_fragile(alternative):
-                    alternative["escalated_from"] = {"method": search["method"], "log_posterior": search["modes"][0]["log_posterior"]}
-                    search = alternative
-                    log(f"[init] hybrid search adopted (log posterior {search['modes'][0]['log_posterior']:.2f})")
-                else:
-                    log(f"[init] hybrid search did not improve on the multistart ({alternative['modes'][0]['log_posterior']:.2f}); keeping it")
+        # 2. The search: large-scale model, then members with the large family frozen, then a polish of everything.
+        search = split_map(config, state, evaluator, seed=config.runtime.seed, log=log)
         theta = np.asarray(search["theta"], dtype=float)
         physical = np.asarray(evaluator.physical(jnp.asarray(theta)))
 
@@ -463,7 +448,7 @@ def dry_run(config: LensClusterSolverConfig) -> dict[str, Any]:
     print(classification_report(state))
     print(far_field_threshold_table(state))
     return {
-        "stages": {"init": f"classify -> {config.search.strategy} search from {config.search.n_starts} prior starts -> reclassify at the MAP -> start.json",
+        "stages": {"init": f"classify -> large-scale search from {config.search.n_starts} prior starts -> members with the large family frozen -> polish -> reclassify at the MAP -> start.json",
                    "final": "NUTS from the start -> posterior audit -> tables and figures"},
         "output": {"init": str(run_paths(config).init.root), "final": str(run_paths(config).final.root)},
         "likelihood": "smoothed-local-image-plane",
@@ -472,10 +457,10 @@ def dry_run(config: LensClusterSolverConfig) -> dict[str, Any]:
         "provisional_classification": {"exact": classification.get("exact_count"), "mandatory": classification.get("mandatory_count"),
                                        "far_field": int(len(state.members.member_ids)) - int(classification.get("exact_count", 0)),
                                        "inflated_cut_kpc": classification.get("inflated_cut_kpc")},
-        "search": {"strategy": config.search.strategy, "method": config.search.method, "n_starts": int(config.search.n_starts),
-                   "lbfgs_max_iter": int(config.search.lbfgs_max_iter), "search_latent": bool(config.search.search_latent),
-                   "polish_scatter": config.search.polish_scatter, "max_chain_modes": int(config.search.max_chain_modes),
-                   **({"staged_method": config.search.staged_method, "staged_steps": int(config.search.staged_steps)} if config.search.strategy != "multistart" else {})},
+        "search": {"halo_method": config.search.halo_method, "member_method": config.search.member_method, "n_starts": int(config.search.n_starts),
+                   "member_starts": int(config.search.member_starts), "lbfgs_max_iter": int(config.search.lbfgs_max_iter),
+                   "polish_max_iter": int(config.search.polish_max_iter), "polish_scatter": config.search.polish_scatter,
+                   "max_chain_modes": int(config.search.max_chain_modes)},
         "sampling": {"chains": int(config.runtime.chains), "warmup": int(config.sampling.warmup), "samples": int(config.sampling.samples),
                      "max_tree_depth": int(config.sampling.max_tree_depth)},
         "config": config.to_json_dict(),

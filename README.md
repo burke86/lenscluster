@@ -30,15 +30,16 @@ Every run has two stages, implemented in `lenscluster.pipeline`:
 
 1. Build the model state from the typed configuration.
 2. Provisional member classification with prior-inflated cut radii at the initial model.
-3. Multi-start MAP of the global block (halos, shear, scaling hyperparameters) from prior draws,
-   with member deviations and source offsets at zero; `SearchConfig.method` selects scipy
-   L-BFGS-B per start (default), vmapped Adam, or vmapped mean-field SVI. The end points are
-   clustered into modes and the modes that can seed chains are polished in full dimension.
+3. The search, in two stages: the large-scale model without the member population (halos,
+   shear, independent halos, sources) from prior draws, then, from each carried mode, the members
+   with the large-scale parameters frozen, started from prior draws of the member block. The end
+   points are clustered into modes and the modes that can seed chains are polished in full
+   dimension with L-BFGS. `SearchConfig.halo_method` and `member_method` select scipy L-BFGS-B
+   per start (default), vmapped optax L-BFGS, Adam or mean-field SVI; on CPU scipy is the fastest
+   by a factor of four or more.
 4. Final classification at the best mode and the classification report. The init log ends with a
    one-line verdict: "robust" when several independent starts reach the best basin, "fragile" when
-   only the configured model does; a fragile multistart automatically escalates to the hybrid
-   Adam-then-L-BFGS search (`SearchConfig.escalate`). The start, the classification and the modes
-   are saved under `init/`.
+   only one does. The start, the classification and the modes are saved under `init/`.
 
 **Final** (`run_final`) samples from that start:
 
