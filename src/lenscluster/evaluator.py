@@ -22,7 +22,7 @@ class Evaluator:
 
     def __init__(self, state: ModelState, likelihood: str = "smoothed") -> None:
         """``likelihood``: "smoothed" (local image-plane, default) or "source-isotropic" (source-plane Gaussian with
-        variance sigma_src^2 + sigma_obs^2 per image and no Jacobian; cheap, biased, for searches only)."""
+        variance sigma_def^2 + sigma_meas^2 per image and no Jacobian; cheap, biased, for searches only)."""
         if likelihood not in {"smoothed", "source-isotropic", "source-anisotropic"}:
             raise ValueError("likelihood must be 'smoothed', 'source-isotropic' or 'source-anisotropic'")
         self.likelihood_mode = likelihood
@@ -58,10 +58,11 @@ class Evaluator:
         self.guard_cut_radii = float(members.far_field_guard_cut_radii)
         self.far_field_barrier_width = float(members.far_field_barrier_width)
         self.far_field_barrier_strength = float(members.far_field_barrier_strength)
-        self.sigma_obs_extra_index = int(getattr(state, "sigma_obs_extra_param_index", -1))
-        self.scale_indices = jnp.asarray(sorted({int(members.sigma_src_index)} | {int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
+        self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index = int(state.sigma_def_param_index), int(state.sigma_extra_param_index), int(state.sigma_sel_param_index)
+        self.sigma_res = float(state.sigma_res_arcsec)
+        self.scale_indices = jnp.asarray(sorted({self.sigma_def_index} | {int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
                                                 | {int(i) for i in np.asarray(members.radius_scatter_param_index) if i >= 0}
-                                                | ({self.sigma_obs_extra_index} if self.sigma_obs_extra_index >= 0 else set())), dtype=jnp.int32)
+                                                | {i for i in (self.sigma_extra_index, self.sigma_sel_index) if i >= 0}), dtype=jnp.int32)
         # Components whose geometry (centre, ellipticity) never changes: catalog members.  Their geometry at the image
         # positions is a constant of the computation and is precomputed once.
         packed_spec = state.packed_lens_spec
@@ -342,22 +343,25 @@ class Evaluator:
         images, members = self.state.images, self.state.members
         isotropic = self.likelihood_mode == "source-isotropic"
         fields = self.fields(physical, force_exact=force_exact, derivative=not isotropic)
-        sigma_src = physical[members.sigma_src_index]
-        sigma_obs_extra = physical[self.sigma_obs_extra_index] if self.sigma_obs_extra_index >= 0 else jnp.asarray(0.0, dtype=jnp.float64)
-        sigma_obs = jnp.sqrt(jnp.square(images.sigma_per_image) + jnp.square(sigma_obs_extra))   # catalog error is the floor
+        zero = jnp.asarray(0.0, dtype=jnp.float64)
+        sigma_def = physical[self.sigma_def_index]
+        sigma_extra = physical[self.sigma_extra_index] if self.sigma_extra_index >= 0 else zero
+        sigma_sel = physical[self.sigma_sel_index] if self.sigma_sel_index >= 0 else zero
+        sigma_meas = jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_extra))   # the instrumental error is the floor
         jacobian = jnp.zeros_like(fields["jacobian"]) if isotropic else fields["jacobian"]
-        cov = sl.source_covariance(jacobian, sigma_obs, sigma_src)
+        cov = sl.source_covariance(jacobian, sigma_meas, sigma_def, sigma_sel, self.sigma_res)
         whitening = sl.source_whitening(fields["backprojected"], cov["covariance"], images.family_index_per_image, images.n_families)
         coordinates = jnp.stack((params[images.source_x_param_index], params[images.source_y_param_index]), -1)
         transported = sl.transport_sources(coordinates, whitening, jnp.asarray(members.source_prior_mean), members.source_prior_sigma)
         source = transported["source"]
         stats = sl.statistics(fields["backprojected"], source[images.family_index_per_image], jacobian,
-                              fields["determinant_gradient"], sigma_obs, sigma_src, parity=images.parity)
+                              fields["determinant_gradient"], sigma_meas, sigma_def, sigma_sel, self.sigma_res, parity=images.parity)
         if isotropic or self.likelihood_mode == "source-anisotropic":   # Gaussian source-plane term only: no determinant factor
             stats["loglike"] = stats["gaussian_loglike"]
             stats["valid"] = cov["valid"] & jnp.all(jnp.isfinite(stats["residual"]), axis=-1)
         stats.update(source_by_family=source, source_correction=transported["log_correction"], whitening=whitening,
-                     transport_valid=transported["valid"], sigma_src=sigma_src, sigma_obs_extra=sigma_obs_extra, sigma_obs=sigma_obs, fields=fields, physical=physical)
+                     transport_valid=transported["valid"], sigma_def=sigma_def, sigma_extra=sigma_extra, sigma_meas=sigma_meas, sigma_sel=sigma_sel,
+                     fields=fields, physical=physical)
         return stats
 
     def log_likelihood(self, params: jnp.ndarray) -> jnp.ndarray:

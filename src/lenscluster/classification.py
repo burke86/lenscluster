@@ -5,7 +5,7 @@ score_g = max over images i of max( (k r_cut,g / R_gi)^6 , ||C_i^-1/2 e_gi|| / t
 The first term is the leading omitted term of the series normalized to the guard
 distance k r_cut; members with any image inside k cut radii score above one and are
 mandatory.  The second term is the whitened ellipticity error of the circular series,
-with C_i = sigma_src^2 I + sigma_obs^2 A_i A_i^T, bounded and evaluated at one model.
+with the source-plane covariance C_i of the likelihood, bounded and evaluated at one model.
 After the per-member rule, the largest contributors are promoted until the summed
 whitened ellipticity error of the remaining far-field members is below the tolerance
 at every image.
@@ -17,6 +17,7 @@ from typing import Any
 import jax.numpy as jnp
 import numpy as np
 
+from . import smoothed_likelihood as sl
 from .evaluator import Evaluator
 from .farfield import evaluate_farfield_per_member
 from .model import ModelState
@@ -83,7 +84,8 @@ FAR_FIELD_THRESHOLD_GRID = (2.0, 3.0, 4.0, 5.0, 10.0)
 
 def member_field_terms(state: ModelState, evaluator: Evaluator, physical: np.ndarray) -> dict[str, np.ndarray]:
     """Per member and image at this model: the exact (elliptical) deflection, the circular far-field series, their
-    difference whitened by the image covariance C = sigma_src^2 I + sigma_obs^2 A A^T, the precision and the separation."""
+    difference whitened by the source-plane covariance C of the likelihood (at the catalog measurement error), the precision
+    and the separation."""
     members = state.members
     physical_jax = jnp.asarray(physical, dtype=jnp.float64)
     packed, _ = evaluator.packed_state(physical_jax)
@@ -94,9 +96,9 @@ def member_field_terms(state: ModelState, evaluator: Evaluator, physical: np.nda
         evaluator.geometry, jnp.take(packed.sigma0, components, axis=0), jnp.take(packed.Ra, components),
         jnp.take(packed.Rs, components))[0])                             # (M, N, 2) circular series
     a = np.asarray(fields["jacobian"])
-    sigma_obs = np.asarray(state.images.sigma_per_image)
-    sigma_src = float(physical[members.sigma_src_index])
-    covariance = sigma_src ** 2 * np.eye(2)[None] + sigma_obs[:, None, None] ** 2 * a @ np.swapaxes(a, 1, 2)
+    sigma_sel = float(physical[state.sigma_sel_param_index]) if state.sigma_sel_param_index >= 0 else 0.0
+    covariance = np.asarray(sl.source_covariance(a, np.asarray(state.images.sigma_inst_per_image), float(physical[state.sigma_def_param_index]),
+                                                 sigma_sel, state.sigma_res_arcsec)["covariance"])
     precision = np.linalg.inv(covariance)
     error = exact_alpha - circular_alpha
     error = np.where(np.isfinite(error), error, np.inf)

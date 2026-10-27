@@ -6,9 +6,11 @@ population of cluster-member dPIE subhalos that follow luminosity scaling relati
 with per-member velocity-dispersion and, optionally, cut-radius deviations. The
 profiles the solver knows are registered in `lenscluster/profiles.py`. The likelihood is the smoothed local image-plane likelihood: every observed
 image is ray-traced to the source plane, the source-plane residual is compared with a
-Gaussian whose covariance combines the intrinsic source scatter and the propagated
-astrometric error, and the conditional expectation of the absolute Jacobian determinant
-normalizes the density. Members far from every image are evaluated with the circular
+Gaussian whose covariance is the paper's C = sigma_meas^2 A A^T + sigma_def^2 I + sigma_sel^2 R
+(the propagated measurement error with sigma_meas^2 = sigma_inst^2 + sigma_extra^2, an isotropic
+residual-deflection scatter, and an optional feature-selection term weighted by the resolution
+sigma_res; `LikelihoodConfig`), and the conditional expectation of the absolute Jacobian
+determinant normalizes the density. Members far from every image are evaluated with the circular
 far-field series of the dPIE; members close to an image use the exact profile.
 
 ## Running a cluster
@@ -128,6 +130,8 @@ summaries still use the full posterior.
 - `scripts/build_hff_master_catalog.py`, `scripts/build_hff_lenscluster_pars.py`: HFF inputs.
 - `scripts/make_ff_sims_truth_magnitudes.py`, `scripts/measure_ff_sims_image_magnitudes.py`.
 - `scripts/make_dpie_figure.py`, `scripts/make_covariance_figure.py`: paper figures.
+- `scripts/make_covariance_mapping.py`: current measurement, deflection and feature-selection covariance figure. Run with the `ggsl`, `hdm`, or `lenstronomy` conda Python interpreter, e.g. `/Users/isaque.dutra/miniforge3/envs/ggsl/bin/python scripts/make_covariance_mapping.py`. Uses only the Python standard library plus `pdflatex` (PGFPlots) and `pdftoppm`; no Node.js dependency. The reviewed layout is in `scripts/templates/covariance_mapping.tex`. Writes the PDF, TeX, PNG preview and checked illustrative parameters to `output/pdf/covariance_candidates/`.
+- `scripts/make_lensing_geometry_figures.mjs`: four analytic illustrations of local stretching, forward/inverse circle mappings, arc curvature, and critical-curve directions. Run `node scripts/make_lensing_geometry_figures.mjs`; PDFs, editable TeX, PNG previews, and analytic checks are written to `output/pdf/lensing_geometry/`. Requires Node.js, `pdflatex`, and `pdftoppm`.
 - `download_catalogs.py`: catalog and image downloads.
 
 ## Tests

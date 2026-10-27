@@ -11,12 +11,12 @@ from pathlib import Path
 cores = 4  # NUTS chains; one JAX CPU device per chain (same budget as run.xsh).
 seed_default = 12345
 output_dir_default = "validation_runs"
-# What the mock injects.  The astrometric noise is also the solver's catalog error (the floor under the sampled
-# sigma_obs_extra); the source-plane scatter is the truth of sigma_src; the member scatters are the truths of the two
+# What the mock injects.  The astrometric noise is also the solver's instrumental error sigma_inst (the floor under the
+# sampled sigma_extra); the source-plane scatter is the truth of sigma_def; the member scatters are the truths of the two
 # population scatters (0.10 is the median of the solver's dispersion-scatter prior).  Unmodelled members are subhalos
 # present in the truth but missing from the catalog, the misspecification experiment.
-pos_sigma_arcsec = 0.10
-source_scatter_arcsec = 0.05
+sigma_inst_arcsec = 0.10
+sigma_def_arcsec = 0.05
 scatter_ln = 0.10
 cut_scatter_ln = 0.0
 unmodelled_members = 0
@@ -97,7 +97,7 @@ def _solver(*, production: bool, seed: int) -> LensClusterSolverConfig:
         search=SearchConfig() if production else SearchConfig(n_starts=8),
         sampling=(SamplingConfig(warmup=5000, samples=2000, max_tree_depth=8, target_accept=0.85) if production
                   else SamplingConfig(warmup=100, samples=100, max_tree_depth=6, target_accept=0.85)),
-        likelihood=LikelihoodConfig(pos_sigma_arcsec=pos_sigma_arcsec),
+        likelihood=LikelihoodConfig(sigma_inst_arcsec=sigma_inst_arcsec),
         scaling=ScalingModelConfig(fit_corekpc=False),   # the 0.15 kpc member core is not a lensing observable; fixed at the truth value
         image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=64 if production else 8, match_tolerance_arcsec=3.0),
         truth=TruthRecoveryConfig(posterior_truth_recovery_draws=0),
@@ -113,8 +113,8 @@ def build_config(preset: str, *, seed: int, realizations: int, campaign_name: st
         n_members=200 if production else 10,   # Hera has 332 members, AS1063 222; far-field approximation for the distant ones (library default)
         n_primary_families=15 if production else 4,
         n_member_families=15 if production else 1,   # galaxy-galaxy families are what constrain sigma* and r_cut*
-        pos_sigma_arcsec=pos_sigma_arcsec,
-        source_scatter_arcsec=source_scatter_arcsec,
+        sigma_inst_arcsec=sigma_inst_arcsec,
+        sigma_def_arcsec=sigma_def_arcsec,
         sigma_scatter_ln=scatter_ln,
         cut_scatter_ln=cut_scatter_ln,
         unmodelled_members=unmodelled_members,
@@ -141,7 +141,7 @@ def main(argv=None):
         return 0
     from lenscluster.mock_validation import rescore_mock_validation, run_mock_validation, write_aggregate_plots
     print(f"[config] preset={options['preset']} mode={options['mode']} seed={options['seed']} realizations={options['realizations']} "
-          f"scatter_ln={scatter_ln} pos_sigma_arcsec={pos_sigma_arcsec} source_scatter_arcsec={source_scatter_arcsec} members={config.mock.n_members} "
+          f"scatter_ln={scatter_ln} sigma_inst_arcsec={sigma_inst_arcsec} sigma_def_arcsec={sigma_def_arcsec} members={config.mock.n_members} "
           f"n_starts={config.solver.search.n_starts} chains={cores} cpus={cpu_plan.selected_cpu_ids} campaign_dir={campaign_dir}")
     start = time.monotonic()
     try:

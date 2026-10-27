@@ -501,7 +501,7 @@ def _load_multiple_images_catalog(
     par_reference: tuple[int, float, float] | None,
     *,
     metadata_path: str | Path | None = None,
-    sigma_arcsec: float | None = None,
+    sigma_inst_arcsec: float | None = None,
     sigma_floor_arcsec: float = 0.0,
 ) -> pd.DataFrame:
     catalog_df = _load_dat_catalog(filepath, par_reference, catalog_kind="multiple_images")
@@ -554,10 +554,10 @@ def _load_multiple_images_catalog(
                 )
     result = result.reset_index(drop=True)
     _validate_image_family_redshifts(result, filepath)
-    if metadata_path is not None or sigma_arcsec is not None:
+    if metadata_path is not None or sigma_inst_arcsec is not None:
         result = _merge_image_metadata(
             result, metadata_path=metadata_path,
-            sigma_arcsec=0.5 if sigma_arcsec is None else sigma_arcsec,
+            sigma_inst_arcsec=0.5 if sigma_inst_arcsec is None else sigma_inst_arcsec,
             sigma_floor_arcsec=sigma_floor_arcsec,
         )
     return result
@@ -567,7 +567,7 @@ def _merge_image_metadata(
     images: pd.DataFrame,
     *,
     metadata_path: str | Path | None,
-    sigma_arcsec: float,
+    sigma_inst_arcsec: float,
     sigma_floor_arcsec: float,
 ) -> pd.DataFrame:
     """Attach measured astrometry/parity by label, never from lens predictions.
@@ -575,12 +575,12 @@ def _merge_image_metadata(
     Missing metadata rows or blank values use the configured astrometric error
     and unknown parity (zero). Supplied nonblank values must be valid.
     """
-    if not np.isfinite(sigma_arcsec) or sigma_arcsec <= 0.0:
-        raise ValueError("sigma_arcsec must be finite and positive.")
+    if not np.isfinite(sigma_inst_arcsec) or sigma_inst_arcsec <= 0.0:
+        raise ValueError("sigma_inst_arcsec must be finite and positive.")
     if not np.isfinite(sigma_floor_arcsec) or sigma_floor_arcsec < 0.0:
         raise ValueError("sigma_floor_arcsec must be finite and nonnegative.")
     result = images.copy()
-    result["sigma_obs_arcsec"] = max(float(sigma_arcsec), float(sigma_floor_arcsec))
+    result["sigma_inst_arcsec"] = max(float(sigma_inst_arcsec), float(sigma_floor_arcsec))
     result["parity"] = np.zeros(len(result), dtype=np.int8)
     if metadata_path is None:
         return result
@@ -590,9 +590,9 @@ def _merge_image_metadata(
     metadata = pd.read_csv(path, dtype=str, keep_default_na=False)
     if "image_label" not in metadata:
         raise ValueError("image metadata requires image_label.")
-    supported = {"sigma_obs_arcsec", "parity"}.intersection(metadata.columns)
+    supported = {"sigma_inst_arcsec", "parity"}.intersection(metadata.columns)
     if not supported:
-        raise ValueError("image metadata requires sigma_obs_arcsec or parity.")
+        raise ValueError("image metadata requires sigma_inst_arcsec or parity.")
     labels = metadata["image_label"].str.strip()
     if labels.eq("").any() or labels.duplicated().any():
         raise ValueError("image metadata labels must be nonempty and unique.")
@@ -605,13 +605,13 @@ def _merge_image_metadata(
         supplied = raw.ne("")
         numeric = pd.to_numeric(raw.where(supplied), errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
-        valid = finite & ((numeric > 0.0).to_numpy() if field == "sigma_obs_arcsec" else numeric.isin([-1, 0, 1]).to_numpy())
+        valid = finite & ((numeric > 0.0).to_numpy() if field == "sigma_inst_arcsec" else numeric.isin([-1, 0, 1]).to_numpy())
         if np.any(supplied.to_numpy() & ~valid):
             bad = raw.index[supplied.to_numpy() & ~valid].tolist()
             raise ValueError(f"Invalid {field} in image metadata for {bad}.")
         mapped = result["image_label"].map(numeric)
-        if field == "sigma_obs_arcsec":
-            result[field] = np.maximum(mapped.fillna(float(sigma_arcsec)), float(sigma_floor_arcsec))
+        if field == "sigma_inst_arcsec":
+            result[field] = np.maximum(mapped.fillna(float(sigma_inst_arcsec)), float(sigma_floor_arcsec))
         else:
             result[field] = mapped.fillna(0).astype(np.int8)
     return result

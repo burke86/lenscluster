@@ -21,6 +21,7 @@ from lenscluster.config import (
     ImageCatalogCutoutConfig,
     ImageConstraintsConfig,
     LensClusterSolverConfig,
+    LikelihoodConfig,
     LensModelConfig,
     MemberConfig,
     MemberPopulationConfig,
@@ -232,8 +233,9 @@ def _hff_clusters():
             "independent_member_halos": (),
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
-            # Real data: the 0.1" HST floor is too tight for a lenstool-style catalog (Bergamini's model reaches 0.55" rms).
-            "image_sigma_arcsec": 0.1,
+            # Instrumental astrometric error per image and the PSF sigma of the marking images (HST WFC3/IR F160W, FWHM 0.15").
+            "sigma_inst_arcsec": 0.1,
+            "sigma_res_arcsec": 0.06,
             # Classify at the current model (reclassified at the MAP) rather than at the prior's 0.975 quantile, which for a
             # log-uniform cut radius is 90 kpc (198 of 222 exact).  The library defaults (guard 3, inflation 3) give the
             # sampled r_cut* a factor of three before any far-field member reaches the guard.
@@ -299,7 +301,7 @@ def _m0416_bergamini2023_cluster():
         fixed("gas3", -2.3693869253788935, -1.2627359596498962, 0.4248370668779292, -54.743768197790125, 8.281737600000504, 37.5947433600023, 101.7305750041091),
         fixed("gas4", -20.12861892537998, 14.74104004035109, 0.4013796817764777, -49.32427500520669, 51.67495680000315, 52.337385600003195, 281.8472712670227),
     )
-    def entry(key, *, reference, image_catalog, member_catalog, image_sigma_arcsec):
+    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec, sigma_res_arcsec):
         return {
             "cluster_key": key,
             "reference": ReferenceFrameConfig(reference=3, ra0_deg=reference[0], dec0_deg=reference[1]),
@@ -313,7 +315,8 @@ def _m0416_bergamini2023_cluster():
             "independent_member_halos": (),
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
-            "image_sigma_arcsec": image_sigma_arcsec,
+            "sigma_inst_arcsec": sigma_inst_arcsec,
+            "sigma_res_arcsec": sigma_res_arcsec,
             "classification_prior_quantile": None,
         }
 
@@ -321,11 +324,11 @@ def _m0416_bergamini2023_cluster():
     return {
         # HST + MUSE: 237 spectroscopic images in 88 families (Bergamini et al. 2023), HST astrometry.
         "M0416_BERGAMINI2023": entry("m0416_bergamini2023", reference=(64.0381417, -24.0674722), image_catalog=f"{catalog_dir}/obs_arcs.cat",
-                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", image_sigma_arcsec=0.1),
+                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.1, sigma_res_arcsec=0.06),
         # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 111 families (Rihtarsic et al. 2025), NIRCam
         # positions; the same halo set-up and member catalog (their copy has the BCG shifted), their reference centre.
         "M0416_CANUCS2025": entry("m0416_canucs2025", reference=(64.03821668520617, -24.06750122335985), image_catalog=f"{canucs_dir}/obs_arcs.cat",
-                                  member_catalog=f"{canucs_dir}/members.cat", image_sigma_arcsec=0.05),
+                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.05, sigma_res_arcsec=0.03),   # NIRCam F200W PSF
     }
 
 
@@ -370,8 +373,9 @@ def build_config(
             independent_member_halos=cluster_config["independent_member_halos"],
             member_populations=(cluster_config["member_population"],),
             image_constraints=ImageConstraintsConfig(catalog_path=cluster_config["image_catalog"], metadata_path=image_metadata,
-                                                     sigma_arcsec=float(cluster_config.get("image_sigma_arcsec", ImageConstraintsConfig.sigma_arcsec))),
+                                                     sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
+        likelihood=LikelihoodConfig(sigma_res_arcsec=float(cluster_config.get("sigma_res_arcsec", LikelihoodConfig.sigma_res_arcsec))),
         paths=RunPathsConfig(output_dir=f"results/{campaign_name}/{cluster_config['cluster_key']}",
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
@@ -423,7 +427,7 @@ def main(argv=None):
     from lenscluster.pipeline import run
     print(f"[config] cluster={cluster} run_name={config.paths.run_name} output_dir={config.paths.output_dir} "
           f"stage={options['stage']} chains={runtime.chains} search={config.search.halo_method}+{config.search.member_method} "
-          f"n_starts={config.search.n_starts} fast={options['fast']} sigma_obs_arcsec={config.model.image_constraints.sigma_arcsec}")
+          f"n_starts={config.search.n_starts} fast={options['fast']} sigma_inst_arcsec={config.model.image_constraints.sigma_inst_arcsec}")
     start = time.monotonic()
     try:
         run(config, stage=options["stage"])

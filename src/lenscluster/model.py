@@ -138,7 +138,7 @@ class PackedLensValidity(NamedTuple):
 class FamilyData:
     family_id: str
     z_source: float
-    sigma_arcsec: float
+    sigma_inst_arcsec: float
     image_labels: list[str]
     x_obs: np.ndarray
     y_obs: np.ndarray
@@ -178,7 +178,7 @@ class ImageData:
     n_families: int
     x_obs: jnp.ndarray
     y_obs: jnp.ndarray
-    sigma_per_image: jnp.ndarray
+    sigma_inst_per_image: jnp.ndarray
     parity: jnp.ndarray
     z_index_per_image: jnp.ndarray
     family_index_per_image: jnp.ndarray
@@ -198,7 +198,6 @@ class MemberModel:
     component_indices: np.ndarray
     scatter_param_index: np.ndarray          # per member -> population scatter parameter
     offset_param_index: np.ndarray           # per member -> sampled velocity offset parameter
-    sigma_src_index: int
     exact_positions: np.ndarray              # positions into member arrays evaluated exactly
     far_positions: np.ndarray                # positions evaluated by the far-field series
     source_prior_mean: tuple[float, float]
@@ -232,7 +231,10 @@ class ModelState:
     dpie_sigma0_factor_by_z: dict[float, float]
     log_softening_length_param_index: int = -1
     scaling_priors: dict[str, float] = field(default_factory=dict)
-    sigma_obs_extra_param_index: int = -1        # extra image-plane scatter added in quadrature to the catalog errors; -1 when absent
+    sigma_def_param_index: int = -1              # residual deflection scatter, isotropic in the source plane
+    sigma_extra_param_index: int = -1            # extra measurement scatter added in quadrature to sigma_inst; -1 when absent
+    sigma_sel_param_index: int = -1              # feature-selection scatter; -1 when the term is disabled
+    sigma_res_arcsec: float = 0.0                # PSF sigma of the marking images (the resolution weight of the selection term)
     dropped_member_ids: tuple[str, ...] = ()  # catalog members removed from the lens model (members.min_deflection_arcsec)
     initial_theta: np.ndarray | None = None
 

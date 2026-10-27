@@ -188,7 +188,7 @@ def declared_model_inputs(model_config: LensModelConfig, scaling: Any = None) ->
     constraints = model_config.image_constraints
     images_df = load_multiple_images_catalog(
         constraints.catalog_path, reference, metadata_path=constraints.metadata_path,
-        sigma_arcsec=constraints.sigma_arcsec, sigma_floor_arcsec=constraints.sigma_floor_arcsec)
+        sigma_inst_arcsec=constraints.sigma_inst_arcsec, sigma_floor_arcsec=constraints.sigma_floor_arcsec)
     if images_df.empty:
         raise ValueError("No multiple-image constraints found in the image catalog.")
 

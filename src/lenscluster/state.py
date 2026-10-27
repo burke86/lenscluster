@@ -167,17 +167,17 @@ ERROR_SCALE_FLOOR_ARCSEC = 1.0e-4
 
 
 def _error_scale_spec(name: str, sample_name: str, potential_id: str, field: str, prior) -> ParameterSpec:
-    """A sampled error scale (source scatter, extra observation error): log-normal in the log coordinate, truncated
+    """A sampled error scale (sigma_def, sigma_extra, sigma_sel): log-normal in the log coordinate, truncated
     above at ``prior.upper`` arcsec when given so the sampler cannot inflate the errors until the likelihood goes flat."""
     if prior.upper is None:
         return ParameterSpec(name=name, sample_name=sample_name, potential_id=potential_id, profile_type=0, field=field,
                              prior_kind="normal", lower=-math.inf, upper=math.inf, step=0.1,
                              mean=float(np.log(prior.median)), std=float(prior.log_sigma),
-                             component_family="source_scatter", transform_kind="log_positive", physical_lower=0.0, physical_mean=float(prior.median))
+                             component_family="error_scale", transform_kind="log_positive", physical_lower=0.0, physical_mean=float(prior.median))
     return ParameterSpec(name=name, sample_name=sample_name, potential_id=potential_id, profile_type=0, field=field,
                          prior_kind="truncated_normal", lower=float(np.log(ERROR_SCALE_FLOOR_ARCSEC)), upper=float(np.log(prior.upper)), step=0.1,
                          mean=float(np.log(prior.median)), std=float(prior.log_sigma),
-                         component_family="source_scatter", transform_kind="log_positive",
+                         component_family="error_scale", transform_kind="log_positive",
                          physical_lower=ERROR_SCALE_FLOOR_ARCSEC, physical_upper=float(prior.upper), physical_mean=float(prior.median))
 
 
@@ -504,7 +504,7 @@ def build_packed_lens_spec(base_components, component_assignments, scaling_assig
 
 
 # ----------------------------------------------------------------------------- families and images
-def build_family_data(images_df: pd.DataFrame, sigma_arcsec: float, reference: tuple[int, float, float]) -> list[FamilyData]:
+def build_family_data(images_df: pd.DataFrame, sigma_inst_arcsec: float, reference: tuple[int, float, float]) -> list[FamilyData]:
     _, ra0_deg, dec0_deg = reference
     families: list[FamilyData] = []
     for family_id in sorted(images_df["family_id"].astype(str).unique().tolist()):
@@ -518,7 +518,7 @@ def build_family_data(images_df: pd.DataFrame, sigma_arcsec: float, reference: t
         z_source = float(unique_z[0])
         x_obs, y_obs = radec_to_offsets_arcsec(family_df["ra"].to_numpy(), family_df["dec"].to_numpy(), ra0_deg, dec0_deg)
         families.append(FamilyData(
-            family_id=family_id, z_source=z_source, sigma_arcsec=float(sigma_arcsec),
+            family_id=family_id, z_source=z_source, sigma_inst_arcsec=float(sigma_inst_arcsec),
             image_labels=family_df["image_label"].astype(str).tolist(),
             x_obs=np.asarray(x_obs, dtype=float), y_obs=np.asarray(y_obs, dtype=float),
             reliability=np.asarray(pd.to_numeric(family_df.get("family_reliability", 1.0), errors="coerce")
@@ -541,7 +541,7 @@ def build_image_data(families: list[FamilyData], images_df: pd.DataFrame, z_valu
         sx.append(int(ix)); sy.append(int(iy))
         for label, x, y in zip(family.image_labels, family.x_obs, family.y_obs):
             row = by_label.loc[label]
-            sigma = float(row["sigma_obs_arcsec"]) if "sigma_obs_arcsec" in by_label.columns else float(family.sigma_arcsec)
+            sigma = float(row["sigma_inst_arcsec"]) if "sigma_inst_arcsec" in by_label.columns else float(family.sigma_inst_arcsec)
             parity = int(row["parity"]) if "parity" in by_label.columns and np.isfinite(float(row["parity"])) else 0
             if not np.isfinite(sigma) or sigma <= 0.0:
                 raise ValueError(f"Image {label} has a nonpositive astrometric uncertainty.")
@@ -552,7 +552,7 @@ def build_image_data(families: list[FamilyData], images_df: pd.DataFrame, z_valu
     return ImageData(
         family_ids=tuple(family_ids), n_families=len(family_ids),
         x_obs=jnp.asarray(xs, dtype=jnp.float64), y_obs=jnp.asarray(ys, dtype=jnp.float64),
-        sigma_per_image=jnp.asarray(sigmas, dtype=jnp.float64), parity=jnp.asarray(parities, dtype=jnp.int32),
+        sigma_inst_per_image=jnp.asarray(sigmas, dtype=jnp.float64), parity=jnp.asarray(parities, dtype=jnp.int32),
         z_index_per_image=jnp.asarray(zi, dtype=jnp.int32), family_index_per_image=jnp.asarray(fi, dtype=jnp.int32),
         source_x_param_index=jnp.asarray(sx, dtype=jnp.int32), source_y_param_index=jnp.asarray(sy, dtype=jnp.int32),
         image_labels=tuple(labels))
@@ -580,8 +580,8 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
     z_lens = float(next(float(p["z_lens"]) for p in potentials if p.get("z_lens") is not None))
     kpc_per_arcsec = kpc_per_arcsec_from_config(z_lens, cosmo_config)
     scaling = config.scaling
-    sigma_arcsec = float(config.likelihood.pos_sigma_arcsec if config.likelihood.pos_sigma_arcsec is not None
-                         else model_config.image_constraints.sigma_arcsec)
+    sigma_inst_arcsec = float(config.likelihood.sigma_inst_arcsec if config.likelihood.sigma_inst_arcsec is not None
+                              else model_config.image_constraints.sigma_inst_arcsec)
 
     specs, component_assignments, lens_model_list = build_halo_parameter_specs(
         potentials, softening_length_kpc=float(scaling.softening_length_kpc))
@@ -634,14 +634,17 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 component_family="member_scatter_offset", transform_kind="identity",
                 physical_mean=0.0, physical_std=1.0, sample_site_name=site_name, sample_site_index=site_index,
                 centered=False, scale_site_name=specs[int(scale_index[component])].sample_name))
-    sigma_src_index = len(specs)
-    specs.append(_error_scale_spec("source.sigma_src", "source_sigma_src", "source", "sigma_src", config.likelihood.source_scatter_prior))
-    sigma_obs_extra_index = -1
-    if config.likelihood.sigma_obs_extra_prior is not None:
-        sigma_obs_extra_index = len(specs)
-        specs.append(_error_scale_spec("images.sigma_obs_extra", "images_sigma_obs_extra", "images", "sigma_obs_extra", config.likelihood.sigma_obs_extra_prior))
+    sigma_def_index = len(specs)
+    specs.append(_error_scale_spec("images.sigma_def", "images_sigma_def", "images", "sigma_def", config.likelihood.sigma_def_prior))
+    sigma_extra_index = sigma_sel_index = -1
+    if config.likelihood.sigma_extra_prior is not None:
+        sigma_extra_index = len(specs)
+        specs.append(_error_scale_spec("images.sigma_extra", "images_sigma_extra", "images", "sigma_extra", config.likelihood.sigma_extra_prior))
+    if config.likelihood.sigma_sel_prior is not None:
+        sigma_sel_index = len(specs)
+        specs.append(_error_scale_spec("images.sigma_sel", "images_sigma_sel", "images", "sigma_sel", config.likelihood.sigma_sel_prior))
 
-    families = build_family_data(images_df, sigma_arcsec, reference)
+    families = build_family_data(images_df, sigma_inst_arcsec, reference)
     source_param_indices: dict[str, tuple[int, int]] = {}
     prior_mean = tuple(float(v) for v in config.likelihood.source_position_prior_mean_arcsec)
     prior_sigma = float(config.likelihood.source_position_prior_sigma_arcsec)
@@ -696,7 +699,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         radius_scatter_param_index=radius_scatter_index[member_components] if n_members else np.asarray([], dtype=np.int32),
         radius_offset_param_index=radius_offset_index[member_components] if n_members else np.asarray([], dtype=np.int32),
         centered=np.zeros(n_members, dtype=bool),
-        sigma_src_index=int(sigma_src_index), exact_positions=exact, far_positions=far,
+        exact_positions=exact, far_positions=far,
         source_prior_mean=prior_mean, source_prior_sigma=prior_sigma,
         far_field_guard_cut_radii=float(config.members.far_field_cut_radii),
         classification=dict(classification or {}),
@@ -708,7 +711,9 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         base_components=base_components, packed_lens_spec=packed, lens_model_list=lens_model_list,
         family_data=families, images=images, potfiles=potfiles, scaling_component_records=records,
         members=members, z_source_values=z_values, dpie_sigma0_factor_by_z=factor_by_z,
-        log_softening_length_param_index=int(log_softening_index), sigma_obs_extra_param_index=int(sigma_obs_extra_index), dropped_member_ids=dropped,
+        log_softening_length_param_index=int(log_softening_index), sigma_def_param_index=int(sigma_def_index),
+        sigma_extra_param_index=int(sigma_extra_index), sigma_sel_param_index=int(sigma_sel_index),
+        sigma_res_arcsec=float(config.likelihood.sigma_res_arcsec), dropped_member_ids=dropped,
         scaling_priors={k: float(getattr(scaling, k)) for k in ("alpha_sigma_prior_mean", "alpha_sigma_prior_std",
                                                                  "beta_radius_prior_mean", "beta_radius_prior_std")})
     state.initial_theta = default_theta(specs)

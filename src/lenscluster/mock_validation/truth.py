@@ -189,7 +189,7 @@ def parameter_truth(truth: dict[str, Any], *, solver_pivot_magnitude: float | No
                    "potfile.gamma_ml": 2.0 * float(r["alpha_sigma"]) + float(r["beta_radius"]) - 1.0,
                    "potfile.log10_mass_msun": float(log10_dpie_mass_msun(sigma, cut)),
                    "potfile.velocity_log_scatter": float(r["sigma_scatter_ln"]), "potfile.radius_log_scatter": float(r["cut_scatter_ln"]),
-                   "source.sigma_src": float(truth.get("source_scatter_arcsec", 0.0)), "images.sigma_obs_extra": 0.0})
+                   "images.sigma_def": float(truth.get("sigma_def_arcsec", 0.0)), "images.sigma_extra": 0.0})
     for source in truth.get("sources", []):
         values[f"source.{source['family_id']}.beta_x"] = float(source["beta_x"])
         values[f"source.{source['family_id']}.beta_y"] = float(source["beta_y"])

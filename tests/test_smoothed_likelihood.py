@@ -21,7 +21,7 @@ def fixture_arrays():
     a = (a + a.swapaxes(-1, -2)) / 2
     return dict(backprojected=rng.normal(size=(n, 2)) * .07, source=rng.normal(size=(n, 2)) * .03,
                 jacobian=a, determinant_gradient=rng.normal(size=(n, 2)),
-                sigma_obs=np.array([.03, .05, .1, .07]), sigma_src=.04)
+                sigma_meas=np.array([.03, .05, .1, .07]), sigma_def=.04)
 
 
 def test_conditioning_matches_independent_latent_gaussian():
@@ -29,7 +29,7 @@ def test_conditioning_matches_independent_latent_gaussian():
     out = statistics(**args)
     for i in range(4):
         a, grad = args['jacobian'][i], args['determinant_gradient'][i]
-        so, ss = args['sigma_obs'][i], args['sigma_src']
+        so, ss = args['sigma_meas'][i], args['sigma_def']
         # F = A e + eta with e ~ N(0, so^2), eta ~ N(0, ss^2); X = det A - g.e
         b = np.concatenate((so * a, ss * np.eye(2)), axis=1)
         w = np.concatenate((-so * grad, np.zeros(2)))
@@ -91,14 +91,14 @@ def test_branch_log_gradient_in_tails_and_near_switch(parity):
 
 
 def test_fold_crossing_matches_displacement_quadrature():
-    sigma_obs, sigma_src = .025, .02
+    sigma_meas, sigma_def = .025, .02
     for position in [-.03, 0., .03]:
         a = np.diag([1.2, position])
         grad = np.array([0., .8])
         f = np.array([.008, -.006])
-        result = statistics(f[None], np.zeros((1, 2)), a[None], grad[None], np.array([sigma_obs]), sigma_src)
-        xfactor = norm.pdf(f[0], scale=np.sqrt(sigma_src**2 + (1.2 * sigma_obs)**2))
-        integral = quad(lambda u: abs(np.linalg.det(a) + grad[1] * u) * norm.pdf(u, scale=sigma_obs) * norm.pdf(f[1] + a[1, 1] * u, scale=sigma_src),
+        result = statistics(f[None], np.zeros((1, 2)), a[None], grad[None], np.array([sigma_meas]), sigma_def)
+        xfactor = norm.pdf(f[0], scale=np.sqrt(sigma_def**2 + (1.2 * sigma_meas)**2))
+        integral = quad(lambda u: abs(np.linalg.det(a) + grad[1] * u) * norm.pdf(u, scale=sigma_meas) * norm.pdf(f[1] + a[1, 1] * u, scale=sigma_def),
                         -.4, .4, points=[-np.linalg.det(a) / grad[1]], epsabs=1e-12)[0]
         np.testing.assert_allclose(np.exp(result['loglike'][0]), xfactor * integral, rtol=2e-10)
 
@@ -111,7 +111,7 @@ def test_full_likelihood_gradients():
         args['source'] = jnp.asarray(base['source']) + theta[0]
         args['jacobian'] = jnp.asarray(base['jacobian']) * jnp.exp(theta[1])
         args['determinant_gradient'] = jnp.asarray(base['determinant_gradient']) * jnp.exp(theta[2])
-        args['sigma_src'] = .04 * jnp.exp(theta[3])
+        args['sigma_def'] = .04 * jnp.exp(theta[3])
         return statistics(**args)['loglike'].sum()
 
     theta = jnp.array([.004, .03, -.05, .08])
@@ -126,7 +126,7 @@ def test_full_likelihood_gradients():
 
 def test_source_transport_roundtrip_and_physical_target_identity():
     args = fixture_arrays()
-    cov = source_covariance(args['jacobian'], args['sigma_obs'], args['sigma_src'])['covariance']
+    cov = source_covariance(args['jacobian'], args['sigma_meas'], args['sigma_def'])['covariance']
     index = jnp.array([0, 1, 0, 1])
     whitening = source_whitening(args['backprojected'], cov, index, 2)
     offsets = jnp.array([[.3, -.7], [.1, 1.2]])
@@ -155,7 +155,7 @@ def test_source_transport_lens_gradient_and_empty_family_flag():
 
     def target(t):
         beta = jnp.asarray(base['backprojected']) + t * .2
-        cov = source_covariance(jnp.asarray(base['jacobian']) * jnp.exp(t), base['sigma_obs'], .04)['covariance']
+        cov = source_covariance(jnp.asarray(base['jacobian']) * jnp.exp(t), base['sigma_meas'], .04)['covariance']
         w = source_whitening(beta, cov, family, 2)
         return transport_sources(jnp.ones((2, 2)) * .4, w, jnp.zeros((2, 2)), 2.)['log_correction']
 
@@ -168,7 +168,7 @@ def test_source_transport_lens_gradient_and_empty_family_flag():
 
 def test_negative_scatter_flagged():
     args = fixture_arrays()
-    assert not np.any(statistics(**dict(args, sigma_src=-.1))['valid'])
+    assert not np.any(statistics(**dict(args, sigma_def=-.1))['valid'])
 
 
 @pytest.mark.parametrize('parity', [0, -1, 1])
@@ -184,3 +184,26 @@ def test_zero_mean_analytic_gradient_and_curvature(parity):
     np.testing.assert_allclose(gradient, [expected_mean_derivative, .5 / variance], rtol=1e-14, atol=1e-14)
     np.testing.assert_allclose(hessian[0, 0], expected_mean_curvature, rtol=1e-14)
     assert np.isfinite(hessian).all()
+
+
+def test_selection_term_eigenvalues_and_switch_off():
+    """sigma_sel^2 R has eigenvalues sigma_sel^2 s^2 / (s^2 + sigma_res^2 lambda^2) along the Jacobian's principal directions
+    (s = sigma_sel) and vanishes when sigma_sel = 0."""
+    a = np.array([[0.1, 0.0], [0.0, 2.0]])            # tangential stretch 10x, radial compression 2x
+    meas, de, sel, res = 0.05, 0.02, 0.04, 0.06
+    cov = np.asarray(source_covariance(a[None], meas, de, sel, res)["covariance"][0])
+    expected = np.diag([meas**2 * 0.1**2 + de**2 + sel**2 * sel**2 / (sel**2 + res**2 * 0.1**2),
+                        meas**2 * 2.0**2 + de**2 + sel**2 * sel**2 / (sel**2 + res**2 * 2.0**2)])
+    np.testing.assert_allclose(cov, expected, rtol=1e-12)
+    off = np.asarray(source_covariance(a[None], meas, de, 0.0, res)["covariance"][0])
+    np.testing.assert_allclose(off, np.diag([meas**2 * 0.01 + de**2, meas**2 * 4.0 + de**2]), rtol=1e-12)
+    # the determinant conditioning stays the exact Gaussian conditioning with the selection term in C
+    args = fixture_arrays()
+    out = statistics(**args, sigma_sel=sel, sigma_res=res)
+    for i in range(4):
+        a_i, grad = args["jacobian"][i], args["determinant_gradient"][i]
+        c = np.asarray(source_covariance(a_i[None], args["sigma_meas"][i], args["sigma_def"], sel, res)["covariance"][0])
+        cross = -args["sigma_meas"][i]**2 * a_i @ grad
+        f = args["backprojected"][i] - args["source"][i]
+        np.testing.assert_allclose(out["determinant_mean"][i], np.linalg.det(a_i) + cross @ np.linalg.solve(c, f), rtol=1e-10)
+        np.testing.assert_allclose(out["determinant_variance"][i], args["sigma_meas"][i]**2 * grad @ grad - cross @ np.linalg.solve(c, cross), rtol=1e-9)

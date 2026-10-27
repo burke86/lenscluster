@@ -176,7 +176,7 @@ class MemberPopulationConfig:
 @dataclass(frozen=True)
 class ImageConstraintsConfig:
     catalog_path: str | Path
-    sigma_arcsec: float = 0.1                # HST astrometric precision; model systematics belong to the source scatter, not here
+    sigma_inst_arcsec: float = 0.1           # instrumental astrometric error per image (sigma_inst); model systematics belong to sigma_def
     metadata_path: str | Path | None = None
     sigma_floor_arcsec: float = 0.0
 
@@ -303,14 +303,21 @@ class ScalingModelConfig:
 @dataclass(frozen=True)
 class LikelihoodConfig:
     likelihood_mode: str = "smoothed"       # "smoothed" (local image-plane, the model of the paper); diagnostics only: "source-anisotropic", "source-isotropic"
-    source_scatter_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.1, log_sigma=1.0, upper=1.0))
+    # Source-plane positional covariance per image, C = sigma_meas^2 A A^T + sigma_def^2 I + sigma_sel^2 R (the paper's
+    # Eq. position_covariance), with sigma_meas^2 = sigma_inst^2 + sigma_extra^2.
+    sigma_inst_arcsec: float | None = None    # overrides the catalog's instrumental astrometric error for every image
+    # Extra measurement scatter (arcsec, log-normal) added in quadrature to sigma_inst: image registration, feature
+    # centring, manual marking.  None fixes the measurement error at the catalog value.
+    sigma_extra_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.05, log_sigma=1.0, upper=1.0))
+    # Residual deflection error, isotropic in the source plane (arcsec, log-normal).
+    sigma_def_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.1, log_sigma=1.0, upper=1.0))
+    # Feature-selection scatter, isotropic in the source plane for a resolved feature and weighted by
+    # R = (I + (sigma_res / sigma_sel)^2 A A^T)^-1 where the feature is unresolved.  None disables the term.
+    sigma_sel_prior: LogNormalPriorConfig | None = None
+    sigma_res_arcsec: float = 0.06            # Gaussian sigma of the PSF of the images the positions were marked on (FWHM / 2.355):
+                                              # 0.06" for HST WFC3/IR F160W, 0.03" for JWST NIRCam F200W; only used with sigma_sel
     source_position_prior_mean_arcsec: tuple[float, float] = (0.0, 0.0)
     source_position_prior_sigma_arcsec: float = 100.0
-    pos_sigma_arcsec: float | None = None
-    # Extra image-plane scatter s (arcsec, log-normal prior) added in quadrature to every catalog error,
-    # sigma_obs = sqrt(sigma_catalog^2 + s^2): the catalog astrometric error is a floor, s absorbs e.g. feature
-    # mis-identification between images.  None keeps the catalog sigma fixed.
-    sigma_obs_extra_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.05, log_sigma=1.0, upper=1.0))
 
 
 @dataclass(frozen=True)
@@ -477,8 +484,9 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("members.classification_prior_quantile must lie in (0.5, 1).")
     if config.likelihood.likelihood_mode not in {"smoothed", "source-anisotropic", "source-isotropic"}:
         raise ValueError("likelihood.likelihood_mode must be 'smoothed', 'source-anisotropic' or 'source-isotropic'.")
-    for label, prior in (("likelihood.source_scatter_prior", config.likelihood.source_scatter_prior),
-                         ("likelihood.sigma_obs_extra_prior", config.likelihood.sigma_obs_extra_prior)):
+    for label, prior in (("likelihood.sigma_def_prior", config.likelihood.sigma_def_prior),
+                         ("likelihood.sigma_extra_prior", config.likelihood.sigma_extra_prior),
+                         ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior)):
         if prior is None:
             continue
         if float(prior.median) <= 0.0 or float(prior.log_sigma) <= 0.0:
@@ -491,7 +499,7 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("scaling.radius_deviation_members must be 'exact' or 'all'.")
     for name, prior in (("member_velocity_scatter_prior", scaling.member_velocity_scatter_prior),
                         ("member_radius_scatter_prior", scaling.member_radius_scatter_prior),
-                        ("source_scatter_prior", config.likelihood.source_scatter_prior)):
+                        ("sigma_def_prior", config.likelihood.sigma_def_prior)):
         if not isinstance(prior, LogNormalPriorConfig) or not all(math.isfinite(float(v)) and v > 0.0 for v in (prior.median, prior.log_sigma)):
             raise ValueError(f"{name} must be a LogNormalPriorConfig with positive median and log_sigma.")
     _validate_truncated_normal("alpha_sigma_prior", mean=scaling.alpha_sigma_prior_mean, std=scaling.alpha_sigma_prior_std,
@@ -507,8 +515,10 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     if len(mean) != 2 or not all(math.isfinite(float(v)) for v in mean):
         raise ValueError("source_position_prior_mean_arcsec requires two finite coordinates.")
     _positive("source_position_prior_sigma_arcsec", likelihood.source_position_prior_sigma_arcsec)
-    if likelihood.pos_sigma_arcsec is not None:
-        _positive("pos_sigma_arcsec", likelihood.pos_sigma_arcsec)
+    if likelihood.sigma_inst_arcsec is not None:
+        _positive("sigma_inst_arcsec", likelihood.sigma_inst_arcsec)
+    if not math.isfinite(float(likelihood.sigma_res_arcsec)) or likelihood.sigma_res_arcsec < 0.0:
+        raise ValueError("likelihood.sigma_res_arcsec must be finite and nonnegative.")
     diagnostics = config.image_diagnostics
     count = diagnostics.posterior_diagnostic_draws
     if isinstance(count, bool) or not isinstance(count, Integral) or count < 0:
@@ -588,7 +598,7 @@ def _validate_model_config(model: LensModelConfig | None) -> None:
     constraints = model.image_constraints
     if not Path(constraints.catalog_path).is_file():
         raise ValueError(f"image constraint catalog does not exist: {constraints.catalog_path}")
-    if not math.isfinite(float(constraints.sigma_arcsec)) or constraints.sigma_arcsec <= 0.0:
-        raise ValueError("image_constraints.sigma_arcsec must be finite and positive.")
+    if not math.isfinite(float(constraints.sigma_inst_arcsec)) or constraints.sigma_inst_arcsec <= 0.0:
+        raise ValueError("image_constraints.sigma_inst_arcsec must be finite and positive.")
     if not math.isfinite(float(constraints.sigma_floor_arcsec)) or constraints.sigma_floor_arcsec < 0.0:
         raise ValueError("image_constraints.sigma_floor_arcsec must be finite and nonnegative.")

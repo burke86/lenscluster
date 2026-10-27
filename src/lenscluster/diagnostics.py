@@ -51,7 +51,7 @@ def predictions_at(solver: ExactImageSolver, state: ModelState, evaluator: Evalu
             x_obs, y_obs = float(family.x_obs[k]), float(family.y_obs[k])
             residual = math.hypot(mx[k] - x_obs, my[k] - y_obs) if recovered[k] else np.nan
             rows.append({"family_id": family_id, "image_label": label, "x_obs_arcsec": x_obs, "y_obs_arcsec": y_obs,
-                         "z_source": family.z_source, "sigma_arcsec": float(images.sigma_per_image[images.image_labels.index(label)]),
+                         "z_source": family.z_source, "sigma_inst_arcsec": float(images.sigma_inst_per_image[images.image_labels.index(label)]),
                          "radius_arcsec": math.hypot(x_obs, y_obs), "angle_deg": math.degrees(math.atan2(y_obs, x_obs)),
                          "image_recovery_status": "recovered" if recovered[k] else "not_recovered",
                          "x_model_arcsec": float(mx[k]), "y_model_arcsec": float(my[k]), "image_residual_arcsec": float(residual),
@@ -103,7 +103,7 @@ def image_recovery_tables(state: ModelState, evaluator: Evaluator, posterior: Po
         r16, r50, r84 = _quantiles([d["image_residual_arcsec"] for d in draws_for])
         m16, m50, m84 = _quantiles([d["magnification_model"] for d in draws_for])
         p16, p50, p84 = _quantiles([d["magnification_model_at_model_position"] for d in draws_for])
-        sigma = float(row["sigma_arcsec"])
+        sigma = float(row["sigma_inst_arcsec"])
         image_rows.append({**row, "x_model_q16": x16, "x_model_q50": x50, "x_model_q84": x84,
                            "y_model_q16": y16, "y_model_q50": y50, "y_model_q84": y84,
                            "image_residual_q16": r16, "image_residual_q50": r50, "image_residual_q84": r84,
@@ -137,7 +137,7 @@ def fit_summary(state: ModelState, image_df: pd.DataFrame, count_df: pd.DataFram
         return out
     recovered = image_df["image_recovery_status"].astype(str) == "recovered"
     residual = pd.to_numeric(image_df["image_residual_arcsec"], errors="coerce").to_numpy(dtype=float)
-    sigma = pd.to_numeric(image_df["sigma_arcsec"], errors="coerce").to_numpy(dtype=float)
+    sigma = pd.to_numeric(image_df["sigma_inst_arcsec"], errors="coerce").to_numpy(dtype=float)
     valid = recovered.to_numpy() & np.isfinite(residual) & (sigma > 0)
     chi2 = float(np.sum((residual[valid] / sigma[valid]) ** 2))
     n_data = int(2 * valid.sum())

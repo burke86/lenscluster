@@ -25,7 +25,7 @@ from .utils import progress
 from .sampling import (LATENT_FAMILIES, posterior_model, prior_model, theta_from_site_values,
                        unconstrained_from_theta)
 
-HYPERPARAMETER_FAMILIES = frozenset({"member_velocity_scatter", "source_scatter"})
+HYPERPARAMETER_FAMILIES = frozenset({"member_velocity_scatter", "error_scale"})
 LATENT_SITES = ("member_velocity_offsets", "member_radius_offsets", "source_position_beta")
 BAD_POTENTIAL = 1.0e29                      # potentials at or above this come from the invalid-model sentinel
 

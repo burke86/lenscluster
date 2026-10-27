@@ -1,4 +1,4 @@
-"""Per-image Gaussian likelihood with an astrometrically smoothed determinant.
+"""Per-image Gaussian likelihood with a measurement-smoothed determinant.
 
 All source and image coordinates, and positional scatters, use the same units.
 """
@@ -106,42 +106,55 @@ def expected_absolute_normal(mean, variance, parity=None):
     return jnp.exp(log_expected_absolute_normal(mean, variance, parity))
 
 
-def source_covariance(jacobian, sigma_obs, sigma_src):
-    """Per-image source-plane covariance sigma_src^2 I + sigma_obs^2 A A^T, its Cholesky factor and log det."""
+def source_covariance(jacobian, sigma_meas, sigma_def, sigma_sel=0.0, sigma_res=0.0):
+    """Per-image source-plane covariance C = sigma_meas^2 A A^T + sigma_def^2 I + sigma_sel^2 R, its Cholesky factor and
+    log det.  R = (I + (sigma_res / sigma_sel)^2 A A^T)^-1 is the resolution weight of the selection term (the feature
+    size equals sigma_sel); sigma_sel = 0 drops that term."""
     a = jnp.asarray(jacobian)
     n = a.shape[0]
     eye = jnp.eye(2, dtype=a.dtype)
-    obs = jnp.broadcast_to(jnp.asarray(sigma_obs), (n,))
-    src = jnp.broadcast_to(jnp.asarray(sigma_src), (n,))
-    covariance = src[:, None, None]**2 * eye + obs[:, None, None]**2 * (a @ jnp.swapaxes(a, -1, -2))
+    meas = jnp.broadcast_to(jnp.asarray(sigma_meas), (n,))
+    deflection = jnp.broadcast_to(jnp.asarray(sigma_def), (n,))
+    sel = jnp.broadcast_to(jnp.asarray(sigma_sel), (n,))
+    res = jnp.broadcast_to(jnp.asarray(sigma_res), (n,))
+    aat = a @ jnp.swapaxes(a, -1, -2)
+    measurement = meas[:, None, None]**2 * aat
+    safe_sel2 = jnp.where(sel > 0, sel**2, 1.0)
+    weight = jnp.linalg.solve(eye + (res**2 / safe_sel2)[:, None, None] * aat, jnp.broadcast_to(eye, aat.shape))
+    selection = jnp.where((sel > 0)[:, None, None], sel[:, None, None]**2 * weight, 0.0)
+    covariance = deflection[:, None, None]**2 * eye + measurement + selection
     covariance = 0.5 * (covariance + jnp.swapaxes(covariance, -1, -2))
     chol = jnp.linalg.cholesky(covariance)
     logdet = 2.0 * jnp.sum(jnp.log(jnp.diagonal(chol, axis1=-2, axis2=-1)), axis=-1)
     valid = (jnp.all(jnp.isfinite(covariance), axis=(-2, -1)) & jnp.all(jnp.isfinite(chol), axis=(-2, -1))
-             & (obs >= 0) & (src >= 0) & jnp.all(jnp.isfinite(a), axis=(-2, -1)))
-    return dict(jacobian=a, sigma_obs=obs, sigma_src=src, covariance=covariance, cholesky=chol, logdet=logdet, valid=valid)
+             & (meas >= 0) & (deflection >= 0) & (sel >= 0) & (res >= 0) & jnp.all(jnp.isfinite(a), axis=(-2, -1)))
+    return dict(jacobian=a, sigma_meas=meas, sigma_def=deflection, sigma_sel=sel, measurement=measurement,
+                covariance=covariance, cholesky=chol, logdet=logdet, valid=valid)
 
 
-def statistics(backprojected, source, jacobian, determinant_gradient, sigma_obs, sigma_src, *, parity=None):
+def statistics(backprojected, source, jacobian, determinant_gradient, sigma_meas, sigma_def, sigma_sel=0.0, sigma_res=0.0, *, parity=None):
     """Normalized local image-plane log-likelihood per image and its diagnostics.
 
     ``determinant_gradient`` is grad_theta(det A) with shape (N, 2).
     """
-    result = source_covariance(jacobian, sigma_obs, sigma_src)
-    a, obs, src = result["jacobian"], result["sigma_obs"], result["sigma_src"]
+    result = source_covariance(jacobian, sigma_meas, sigma_def, sigma_sel, sigma_res)
+    a, meas = result["jacobian"], result["sigma_meas"]
     covariance, chol = result["covariance"], result["cholesky"]
     residual = jnp.asarray(backprojected) - jnp.asarray(source)
     g = jnp.asarray(determinant_gradient)
     determinant = a[:, 0, 0] * a[:, 1, 1] - a[:, 0, 1] * a[:, 1, 0]
-    # Astrometric error e: F = A e + eta, X = D - g.e, so Cov(F, X) = -sigma_obs^2 A g.
-    cross_covariance = -obs[:, None]**2 * jnp.einsum("nij,nj->ni", a, g)
+    # Measurement error e: F = A e + eta, X = D - g.e, so Cov(F, X) = -sigma_meas^2 A g; the deflection and selection
+    # scatters enter F only.
+    cross_covariance = -meas[:, None]**2 * jnp.einsum("nij,nj->ni", a, g)
     precision_residual = jnp.linalg.solve(covariance, residual[..., None])[..., 0]
     precision_cross = jnp.linalg.solve(covariance, cross_covariance[..., None])[..., 0]
     determinant_mean = determinant + jnp.sum(cross_covariance * precision_residual, axis=-1)
-    # Residual latent coefficients give the Schur complement without subtraction.
-    astrometric_remainder = g + jnp.einsum("nji,nj->ni", a, precision_cross)
-    determinant_variance = (obs**2 * jnp.sum(astrometric_remainder**2, axis=-1)
-                            + src**2 * jnp.sum(precision_cross**2, axis=-1))
+    # Residual latent coefficients give the Schur complement without subtraction: with p = C^-1 c,
+    # sigma_meas^2 |g|^2 - c^T C^-1 c = sigma_meas^2 |g + A^T p|^2 + p^T (C - sigma_meas^2 A A^T) p.
+    measurement_remainder = g + jnp.einsum("nji,nj->ni", a, precision_cross)
+    rest = covariance - result["measurement"]
+    determinant_variance = (meas**2 * jnp.sum(measurement_remainder**2, axis=-1)
+                            + jnp.einsum("ni,nij,nj->n", precision_cross, rest, precision_cross))
     log_h = log_expected_absolute_normal(determinant_mean, determinant_variance, parity)
     whitened_residual = jnp.linalg.solve(chol, residual[..., None])[..., 0]
     quadratic = jnp.sum(whitened_residual**2, axis=-1)

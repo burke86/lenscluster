@@ -306,14 +306,14 @@ def generate_images(truth: MockTruth, config: MockConfig, rng: np.random.Generat
         # position, re-solved from the true image (so highly magnified images move far, as they do in reality); an image
         # that no longer exists for its displaced source keeps the true position.  Then astrometric noise in the image plane.
         x_obs, y_obs = x.copy(), y.copy()
-        if config.source_scatter_arcsec > 0:
-            delta = rng.normal(0.0, config.source_scatter_arcsec, (x.size, 2))
+        if config.sigma_def_arcsec > 0:
+            delta = rng.normal(0.0, config.sigma_def_arcsec, (x.size, 2))
             xs, ys = _refine(state, (source[0] + delta[:, 0], source[1] + delta[:, 1]), x, y,
                              iterations=config.image_refine_iterations, precision=config.image_precision_arcsec, keep_order=True)
             moved = np.isfinite(xs) & np.isfinite(ys)
             x_obs, y_obs = np.where(moved, xs, x), np.where(moved, ys, y)
-        x_obs = x_obs + rng.normal(0.0, config.pos_sigma_arcsec, x.size)
-        y_obs = y_obs + rng.normal(0.0, config.pos_sigma_arcsec, y.size)
+        x_obs = x_obs + rng.normal(0.0, config.sigma_inst_arcsec, x.size)
+        y_obs = y_obs + rng.normal(0.0, config.sigma_inst_arcsec, y.size)
         _, _, det_obs = jacobian(state, x_obs, y_obs)
         source_magnitude = float(rng.uniform(*config.source_magnitude_range))
         magnitude = source_magnitude - 2.5 * np.log10(np.abs(1.0 / det_obs) + 1.0e-3) + rng.normal(0.0, config.image_magnitude_sigma, x.size)
@@ -325,7 +325,7 @@ def generate_images(truth: MockTruth, config: MockConfig, rng: np.random.Generat
                          "x_true_arcsec": float(x[k]), "y_true_arcsec": float(y[k]), "x_obs_arcsec": float(x_obs[k]), "y_obs_arcsec": float(y_obs[k]),
                          "magnification_true": float(mu_true[k]), "magnification_true_at_obs": float(1.0 / det_obs[k]),
                          "image_magnitude_obs": float(magnitude[k]), "image_magnitude_err": float(config.image_magnitude_sigma),
-                         "sigma_obs_arcsec": float(config.pos_sigma_arcsec)})
+                         "sigma_inst_arcsec": float(config.sigma_inst_arcsec)})
     if not sources:
         raise RuntimeError("the mock produced no multiply imaged family")
     log(f"[mock] {len(sources)} families, {len(rows)} images, {len(dropped)} families dropped")

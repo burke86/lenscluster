@@ -15,7 +15,7 @@ from lenscluster.mock_validation.aperture import APERTURE_RADII_KPC, aperture_pr
 from lenscluster.mock_validation.images import jacobian, lens_state
 from lenscluster.state import build_state
 
-SMALL = MockConfig(seed=7, n_members=12, n_primary_families=4, n_member_families=1, unmodelled_members=2, source_scatter_arcsec=0.03)
+SMALL = MockConfig(seed=7, n_members=12, n_primary_families=4, n_member_families=1, unmodelled_members=2, sigma_def_arcsec=0.03)
 
 
 def test_truth_is_deterministic_and_in_range():
@@ -44,7 +44,7 @@ def test_images_are_exact_and_noise_is_injected():
     rows = images[images.family_id == central[0]["family_id"]]
     assert np.hypot(rows.x_true_arcsec - truth.bcg.x_centre, rows.y_true_arcsec - truth.bcg.y_centre).min() <= SMALL.central_radius_arcsec
     offsets = np.hypot(images.x_obs_arcsec - images.x_true_arcsec, images.y_obs_arcsec - images.y_true_arcsec)
-    assert 0.5 * SMALL.pos_sigma_arcsec < np.median(offsets) < 4 * SMALL.pos_sigma_arcsec       # astrometric noise plus source scatter
+    assert 0.5 * SMALL.sigma_inst_arcsec < np.median(offsets) < 4 * SMALL.sigma_inst_arcsec       # astrometric noise plus source scatter
 
 
 @pytest.mark.parametrize("mode", ["production", "idealized"])
@@ -76,7 +76,7 @@ def test_solver_model_from_truth_contains_the_truth(tmp_path, mode):
     assert fixed.potfiles[0]["corekpc_nominal"] == pytest.approx(values["potfile.corekpc"], rel=0.05)   # moved with the prior-mean beta, truth with the truth beta
     profiles = aperture_profiles(np.asarray(APERTURE_RADII_KPC), truth_groups(truth), centre_kpc=(truth["halo"]["x_centre"] * truth["kpc_per_arcsec"], truth["halo"]["y_centre"] * truth["kpc_per_arcsec"]))
     np.testing.assert_allclose(profiles["total"], profiles["halo"] + profiles["bcg"] + profiles["members"], rtol=1e-10)
-    assert values["source.sigma_src"] == pytest.approx(0.03) and values["potfile.velocity_log_scatter"] == pytest.approx(0.10)
+    assert values["images.sigma_def"] == pytest.approx(0.03) and values["potfile.velocity_log_scatter"] == pytest.approx(0.10)
 
 
 def test_campaign_end_to_end_scores_only_parameters_with_a_truth(tmp_path):
@@ -93,7 +93,7 @@ def test_campaign_end_to_end_scores_only_parameters_with_a_truth(tmp_path):
     rows = payload["parameters"]
     scored = [r for r in rows if r["scored"]]
     assert scored and all(np.isfinite(r["truth"]) for r in scored)
-    assert not any(r["scored"] for r in rows if r["parameter"] in {"images.sigma_obs_extra", "potfile.radius_log_scatter"})   # injected as zero
+    assert not any(r["scored"] for r in rows if r["parameter"] in {"images.sigma_extra", "potfile.radius_log_scatter"})   # injected as zero
     assert 0.0 <= payload["coverage_68"] <= 1.0 and payload["scored_parameters"] == len(scored)
     assert isinstance(payload["converged"], bool) and isinstance(payload["convergence_reasons"], list)
     magnification = pd.DataFrame(payload["magnification"])

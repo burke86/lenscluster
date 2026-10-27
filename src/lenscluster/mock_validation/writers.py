@@ -52,7 +52,7 @@ def write_mock(root: Path, truth: MockTruth, sources: list[dict[str, Any]], imag
             lines.append(f"{m.id:>10s} {m.x_centre: .8f} {m.y_centre: .8f} {1.0:.6f} {q:.6f} {m.angle_pos:.4f} {m.magnitude:.6f} {m.luminosity_ratio:.8e} nan\n")
         paths.member_catalog.write_text("#REFERENCE 3\n" + "".join(lines), encoding="utf-8")
     payload = {"mock": "analytic-cluster", "config": config_json, **truth.to_json_dict(),
-               "source_scatter_arcsec": float(config_json.get("source_scatter_arcsec", 0.0)),
+               "sigma_def_arcsec": float(config_json.get("sigma_def_arcsec", 0.0)),
                "sources": sources, "images": images.to_dict("records"),
                "dropped_families": images.attrs.get("dropped_families", []), "caustics_by_source_redshift": images.attrs.get("caustics_by_z", {})}
     paths.truth.write_text(json.dumps(payload, indent=1, default=_json_default), encoding="utf-8")

@@ -77,8 +77,8 @@ class MockConfig:
     source_redshift_range: tuple[float, float] = (1.5, 9.0)
     min_images_per_family: int = 3
     max_source_attempts: int = 400
-    pos_sigma_arcsec: float = 0.10               # astrometric noise injected and assumed by the solver
-    source_scatter_arcsec: float = 0.0           # injected intrinsic source-plane scatter per image (sigma_src truth)
+    sigma_inst_arcsec: float = 0.10              # astrometric noise injected and assumed by the solver (sigma_inst)
+    sigma_def_arcsec: float = 0.0                # injected source-plane scatter per image (the truth of sigma_def)
     source_magnitude_range: tuple[float, float] = (24.0, 27.0)
     image_magnitude_sigma: float = 0.10
     # Image finding on the exact truth model.
@@ -112,10 +112,10 @@ class MockConfig:
             raise ValueError("n_central_families must be >= 0 and central_radius_arcsec > 0")
         if self.n_member_families > 0 and self.n_members == 0:
             raise ValueError("mock.n_member_families needs members.")
-        for name in ("pos_sigma_arcsec", "caustic_window_arcsec", "caustic_grid_arcsec", "seed_grid_pixel_arcsec", "search_window_arcsec", "image_precision_arcsec"):
+        for name in ("sigma_inst_arcsec", "caustic_window_arcsec", "caustic_grid_arcsec", "seed_grid_pixel_arcsec", "search_window_arcsec", "image_precision_arcsec"):
             if not (math.isfinite(getattr(self, name)) and getattr(self, name) > 0.0):
                 raise ValueError(f"mock.{name} must be positive.")
-        for name in ("source_scatter_arcsec", "sigma_scatter_ln", "cut_scatter_ln"):
+        for name in ("sigma_def_arcsec", "sigma_scatter_ln", "cut_scatter_ln"):
             if not (math.isfinite(getattr(self, name)) and getattr(self, name) >= 0.0):
                 raise ValueError(f"mock.{name} must be nonnegative.")
         if self.min_images_per_family < 2:
@@ -231,7 +231,7 @@ def mock_lens_model_config(config: MockConfig, truth: dict[str, Any], *, image_c
     return LensModelConfig(
         reference=ReferenceFrameConfig(reference=3, ra0_deg=float(config.reference_ra_deg), dec0_deg=float(config.reference_dec_deg)),
         cosmology=config.cosmology, large_halos=halos, member_populations=members,
-        image_constraints=ImageConstraintsConfig(catalog_path=image_catalog, sigma_arcsec=float(config.pos_sigma_arcsec)))
+        image_constraints=ImageConstraintsConfig(catalog_path=image_catalog, sigma_inst_arcsec=float(config.sigma_inst_arcsec)))
 
 
 def solver_config_for_mock(config: MockValidationConfig, truth: dict[str, Any], *, image_catalog: Path, member_catalog: Path | None,
@@ -244,7 +244,7 @@ def solver_config_for_mock(config: MockValidationConfig, truth: dict[str, Any], 
         relation = truth["relation"]
         scaling = replace(scaling, alpha_sigma_prior_mean=float(relation["alpha_sigma"]), alpha_sigma_prior_std=0.03,
                           beta_radius_prior_mean=float(relation["beta_radius"]), beta_radius_prior_std=0.08)
-    likelihood = replace(template.likelihood, pos_sigma_arcsec=float(config.mock.pos_sigma_arcsec))
+    likelihood = replace(template.likelihood, sigma_inst_arcsec=float(config.mock.sigma_inst_arcsec))
     return replace(template, model=model, scaling=scaling, likelihood=likelihood,
                    paths=RunPathsConfig(output_dir=output_dir, run_name="solver"),
                    runtime=replace(template.runtime, seed=int(seed), resume=bool(config.runtime.resume), quiet=bool(config.runtime.quiet)))

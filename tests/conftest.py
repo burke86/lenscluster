@@ -29,7 +29,7 @@ def synthetic_cluster_config(root: Path) -> LensClusterSolverConfig:
                                                        cutkpc=10.0, z_lens=0.3,
                                                        sigma_prior=PriorConfig("truncated_normal", mean=100.0, std=20.0, lower=50.0, upper=200.0),
                                                        cutkpc_prior=PriorConfig("truncated_normal", mean=10.0, std=3.0, lower=1.0, upper=50.0)),),
-            image_constraints=ImageConstraintsConfig(catalog_path=str(images), sigma_arcsec=0.1)),
+            image_constraints=ImageConstraintsConfig(catalog_path=str(images), sigma_inst_arcsec=0.1)),
         paths=RunPathsConfig(output_dir=str(root / "output"), run_name="toy"))
 
 

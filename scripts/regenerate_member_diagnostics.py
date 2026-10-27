@@ -31,13 +31,6 @@ def main():
     final = run / 'final'
     config = artifacts.load_config(final / 'artifacts')
     saved = json.loads((init / artifacts.STATE_FILE).read_text())
-    old_scatter = next((p for p in saved['parameter_specs'] if p['name'] == 'images.obs_scatter'), None)
-    if not hasattr(config.likelihood, 'sigma_obs_extra_prior'):
-        # Preserve both fixed-astrometry runs and the former name of the same extra scatter.
-        prior = getattr(config.likelihood, 'observation_scatter_prior', None) if old_scatter else None
-        if old_scatter and prior is None:
-            raise ValueError('Saved observation scatter has no recorded prior')
-        config = replace(config, likelihood=replace(config.likelihood, sigma_obs_extra_prior=prior))
     config = replace(config, image_diagnostics=replace(config.image_diagnostics, posterior_diagnostic_draws=args.draws))
     state = build_state(config)
     classes = json.loads((init / artifacts.CLASSIFICATION_FILE).read_text())
@@ -45,10 +38,6 @@ def main():
     state = with_member_classes(state, artifacts.load_exact_positions(init), classes,
                                 centered=np.array([m in centered for m in state.members.member_ids]))
     state.initial_theta = artifacts.load_start(init)
-    if old_scatter:
-        from lenscluster.model import ParameterSpec
-        state.parameter_specs = [ParameterSpec(**old_scatter) if p.name == 'images.sigma_obs_extra' else p
-                                 for p in state.parameter_specs]
     if [p.name for p in state.parameter_specs] != [p['name'] for p in saved['parameter_specs']]:
         raise ValueError('Rebuilt parameter identities/order differ from saved run')
     if list(state.members.member_ids) != saved['member_ids']:
