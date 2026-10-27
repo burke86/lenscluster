@@ -25,7 +25,7 @@ def test_split_map_transfers_halos_and_returns_a_finite_mode(synthetic_config, m
     theta = np.asarray(result["theta"], dtype=float)
     assert theta.shape == (state.n_parameters,) and np.isfinite(theta).all()
     assert np.isfinite(float(evaluator.loglike(jnp.asarray(theta))))
-    assert result["method"] == f"{methods[0]}+{methods[1]}" and [s["stage"] for s in result["stages"]] == ["large_scale", "members"]
+    assert result["method"] == f"{methods[0]}+{methods[1]}" and [s["stage"][:1] for s in result["stages"]] == ["A", "B", "p"]
     assert result["stages"][0]["active"] < result["stages"][1]["active"] and result["final_theta"].shape[1] == state.n_parameters
 
 
@@ -52,3 +52,16 @@ def test_optax_lbfgs_matches_scipy_on_the_synthetic_cluster(synthetic_config):
     optax_result = multistart_map(state, evaluator, starts, base, method="optax-lbfgs", seed=5, log=quiet)
     assert optax_result["method"] == "optax-lbfgs" and np.isfinite(optax_result["theta"]).all()
     assert abs(optax_result["modes"][0]["log_posterior"] - scipy_result["modes"][0]["log_posterior"]) < 2.0
+
+
+def test_search_summary_table_lists_the_three_stages(synthetic_config):
+    from lenscluster.report import search_summary_table
+    search = SearchConfig(n_starts=3, member_starts=2, lbfgs_max_iter=20, polish_max_iter=5)
+    config = replace(synthetic_config, search=search)
+    state = build_state(config)
+    lines = []
+    result = split_map(config, state, Evaluator(state), seed=1, log=lines.append)
+    assert [s["stage"][:1] for s in result["stages"]] == ["A", "B", "p"] and result["stages"][2]["active"] >= result["stages"][1]["active"]
+    text = search_summary_table(result)
+    assert "Init search" in text and "large-scale" in text and "polish" in text and "best log posterior" in text
+    assert any("search stage A" in l for l in lines) and any("search stage B" in l for l in lines) and any("Init search" in l for l in lines)

@@ -292,7 +292,7 @@ def cluster_modes(final_g: np.ndarray, potential: np.ndarray, finite: np.ndarray
 
 
 def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, config: SearchConfig, *, method: str, seed: int = 0,
-                   log=print, active_sites: set[str] | None = None) -> dict[str, Any]:
+                   log=print, active_sites: set[str] | None = None, label: str = "search") -> dict[str, Any]:
     """Optimize from every start with ``method``, cluster the end points into modes, polish the best modes with L-BFGS in
     full dimension.  ``active_sites`` restricts the search to those sample sites (the polish still frees everything)."""
     pinned = pinned_scatter_values(state, config.polish_scatter)
@@ -336,11 +336,13 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
     polish_seconds = time.perf_counter() - started
     modes.sort(key=lambda m: m["potential_polished"])
     best = modes[0]
-    log(f"[search] {method}: {len(starts)} starts, {int(finite.sum())} finite, {len(modes)} modes, "
-        f"{sum(m['within_margin'] for m in modes)} within margin; active block {objective.n_global} of {objective.base.size} "
-        f"(scatter {'pinned at %.3g' % config.polish_scatter if config.polish_scatter else 'free'}); "
-        f"search {search_seconds:.1f}s, polish {polish_seconds:.1f}s; best log posterior {-best['potential_polished']:.2f} "
-        f"(before polish {-best['potential']:.2f}); mean iterations {out['iterations'].mean():.0f}, mean evaluations {out['evaluations'].mean():.0f}")
+    for mode in modes:        # the margin is re-evaluated after the polish: an unpolished mode that fell behind cannot seed a chain
+        mode["within_margin"] = bool(mode["potential_polished"] - best["potential_polished"] <= float(config.mode_margin))
+    polished = [m for m in modes if m.get("polished")]
+    log(f"[{label}] {method}: {len(starts)} starts -> {int(finite.sum())} finite, {len(modes)} modes, {sum(m['within_margin'] for m in modes)} within "
+        f"the margin of {config.mode_margin:g}; best log posterior {-best['potential']:.2f} after {out['iterations'].mean():.0f} iterations on average, "
+        f"{search_seconds:.1f}s; polish of {len(polished)} modes in full dimension ({polish_objective.n_global} parameters): "
+        f"{-best['potential_polished']:.2f} after {np.mean([m['polish_iterations'] for m in polished]) if polished else 0:.0f} iterations, {polish_seconds:.1f}s")
     theta_best = np.asarray(best["theta"], dtype=float)
     for mode in modes:
         mode.pop("unconstrained", None)
@@ -353,7 +355,9 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
                 starts_in_basin=starts_in_basin, configured_in_basin=bool(configured_in_basin),
                 traces=out["traces"], final_theta=final_theta, global_index=np.asarray(objective.global_index).tolist(),
                 search_seconds=float(search_seconds), polish_seconds=float(polish_seconds), n_finite=int(finite.sum()),
-                n_global=objective.n_global, starts=starts.tolist(), **{k: v for k, v in out.items() if k == "guide_sigma_median"})
+                n_global=objective.n_global, n_polish=int(polish_objective.n_global), mean_iterations=float(out["iterations"].mean()),
+                polish_iterations=float(np.mean([m["polish_iterations"] for m in polished])) if polished else 0.0,
+                best_before_polish=float(-best["potential"]), starts=starts.tolist(), **{k: v for k, v in out.items() if k == "guide_sigma_median"})
 
 
 def chain_starts(search: dict[str, Any], chains: int, max_modes: int) -> np.ndarray:

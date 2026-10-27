@@ -80,6 +80,30 @@ def run_summary_table(result, config) -> str:
     return capture.get().rstrip()
 
 
+def search_summary_table(search: dict[str, Any]) -> str:
+    """The init search, one row per stage: what was optimized, from how many starts, what came out and how long it took.
+    Rendered with rich without colour."""
+    from rich.console import Console
+    from rich.table import Table
+    stages = search.get("stages") or []
+    table = Table(title="Init search", title_justify="left")
+    for name, justify in (("stage", "left"), ("optimizer", "left"), ("parameters", "right"), ("starts", "right"), ("finite", "right"), ("modes", "right"),
+                          ("within margin", "right"), ("carried", "right"), ("mean iterations", "right"), ("best log posterior", "right"), ("time", "right")):
+        table.add_column(name, justify=justify, no_wrap=True)
+    for row in stages:
+        table.add_row(row["stage"], row["method"], str(row["active"]), str(row["starts"]), "-" if row.get("finite") is None else str(row["finite"]),
+                      str(row["modes"]), str(row["within_margin"]), str(row.get("kept", "-")), f"{row['mean_iterations']:.0f}",
+                      f"{row['best_log_posterior']:.2f}", _duration(row["seconds"]))
+    modes = search.get("modes") or []
+    best = modes[0]["log_posterior"] if modes else float("nan")
+    footer = (f"best log posterior {best:.2f}; {sum(m['within_margin'] for m in modes)} mode(s) within the margin seed the chains; "
+              f"total {_duration(search.get('total_seconds'))}")
+    console = Console(width=170, color_system=None, force_terminal=False)
+    with console.capture() as capture:
+        console.print(table)
+    return capture.get().rstrip() + "\n" + footer
+
+
 def far_field_threshold_table(state: ModelState) -> str:
     """The far-field threshold study of the current classification as a table: for each R/r_cut, how many members
     would be exact and far-field and what deflection error the far-field members leave at the images; the configured
