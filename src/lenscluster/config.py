@@ -318,6 +318,11 @@ class LikelihoodConfig:
                                               # 0.06" for HST WFC3/IR F160W, 0.03" for JWST NIRCam F200W; only used with sigma_sel
     source_position_prior_mean_arcsec: tuple[float, float] = (0.0, 0.0)
     source_position_prior_sigma_arcsec: float = 100.0
+    # Hold grad det A (the third derivatives of the potential) fixed in the backward pass.  The log-likelihood is unchanged;
+    # its gradient differs by 1e-4 relative (AS1063, M0416) and costs 15-35% less, since the reverse pass through the third
+    # derivatives dominates.  NUTS stays exact (the energy is exact and the leapfrog map stays reversible and volume
+    # preserving); only the integrator's accuracy, hence the acceptance rate, can suffer.
+    freeze_determinant_gradient: bool = False
 
 
 @dataclass(frozen=True)

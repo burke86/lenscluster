@@ -713,7 +713,8 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         members=members, z_source_values=z_values, dpie_sigma0_factor_by_z=factor_by_z,
         log_softening_length_param_index=int(log_softening_index), sigma_def_param_index=int(sigma_def_index),
         sigma_extra_param_index=int(sigma_extra_index), sigma_sel_param_index=int(sigma_sel_index),
-        sigma_res_arcsec=float(config.likelihood.sigma_res_arcsec), dropped_member_ids=dropped,
+        sigma_res_arcsec=float(config.likelihood.sigma_res_arcsec), freeze_determinant_gradient=bool(config.likelihood.freeze_determinant_gradient),
+        dropped_member_ids=dropped,
         scaling_priors={k: float(getattr(scaling, k)) for k in ("alpha_sigma_prior_mean", "alpha_sigma_prior_std",
                                                                  "beta_radius_prior_mean", "beta_radius_prior_std")})
     state.initial_theta = default_theta(specs)

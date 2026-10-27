@@ -69,3 +69,13 @@ def test_sigma_sel_is_sampled_by_default_and_absent_when_disabled(synthetic_conf
     assert float(stats["sigma_sel"]) > 0 and np.isfinite(float(evaluator.loglike(jnp.asarray(theta))))
     value, grad = evaluator.value_and_grad(jnp.asarray(theta))
     assert np.isfinite(float(value)) and float(grad[index]) != 0.0
+
+
+def test_frozen_determinant_gradient_keeps_the_value_and_nearly_the_gradient(synthetic_config):
+    state = build_state(synthetic_config)
+    frozen = build_state(replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, freeze_determinant_gradient=True)))
+    theta = jnp.asarray(state.initial_theta)
+    (v, g), (vf, gf) = Evaluator(state).value_and_grad(theta), Evaluator(frozen).value_and_grad(theta)
+    assert float(v) == float(vf) and np.isfinite(np.asarray(gf)).all()
+    g, gf = np.asarray(g), np.asarray(gf)
+    assert np.linalg.norm(g - gf) / np.linalg.norm(g) < 1e-2 and np.dot(g, gf) / (np.linalg.norm(g) * np.linalg.norm(gf)) > 0.9999

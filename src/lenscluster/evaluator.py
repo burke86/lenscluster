@@ -60,6 +60,7 @@ class Evaluator:
         self.far_field_barrier_strength = float(members.far_field_barrier_strength)
         self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index = int(state.sigma_def_param_index), int(state.sigma_extra_param_index), int(state.sigma_sel_param_index)
         self.sigma_res = float(state.sigma_res_arcsec)
+        self.freeze_determinant_gradient = bool(state.freeze_determinant_gradient)
         self.scale_indices = jnp.asarray(sorted({self.sigma_def_index} | {int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
                                                 | {int(i) for i in np.asarray(members.radius_scatter_param_index) if i >= 0}
                                                 | {i for i in (self.sigma_extra_index, self.sigma_sel_index) if i >= 0}), dtype=jnp.int32)
@@ -354,8 +355,11 @@ class Evaluator:
         coordinates = jnp.stack((params[images.source_x_param_index], params[images.source_y_param_index]), -1)
         transported = sl.transport_sources(coordinates, whitening, jnp.asarray(members.source_prior_mean), members.source_prior_sigma)
         source = transported["source"]
+        determinant_gradient = fields["determinant_gradient"]
+        if self.freeze_determinant_gradient:
+            determinant_gradient = jax.lax.stop_gradient(determinant_gradient)
         stats = sl.statistics(fields["backprojected"], source[images.family_index_per_image], jacobian,
-                              fields["determinant_gradient"], sigma_meas, sigma_def, sigma_sel, self.sigma_res, parity=images.parity)
+                              determinant_gradient, sigma_meas, sigma_def, sigma_sel, self.sigma_res, parity=images.parity)
         if isotropic or self.likelihood_mode == "source-anisotropic":   # Gaussian source-plane term only: no determinant factor
             stats["loglike"] = stats["gaussian_loglike"]
             stats["valid"] = cov["valid"] & jnp.all(jnp.isfinite(stats["residual"]), axis=-1)
