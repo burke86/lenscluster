@@ -312,8 +312,8 @@ class LikelihoodConfig:
     # Residual deflection error, isotropic in the source plane (arcsec, log-normal).
     sigma_def_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.1, log_sigma=1.0, upper=1.0))
     # Feature-selection scatter, isotropic in the source plane for a resolved feature and weighted by
-    # R = (I + (sigma_res / sigma_sel)^2 A A^T)^-1 where the feature is unresolved.  None disables the term.
-    sigma_sel_prior: LogNormalPriorConfig | None = None
+    # R = (I + (sigma_res / sigma_sel)^2 A A^T)^-1 where the feature is unresolved (arcsec, log-normal).  None disables the term.
+    sigma_sel_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.04, log_sigma=1.0, upper=1.0))
     sigma_res_arcsec: float = 0.06            # Gaussian sigma of the PSF of the images the positions were marked on (FWHM / 2.355):
                                               # 0.06" for HST WFC3/IR F160W, 0.03" for JWST NIRCam F200W; only used with sigma_sel
     source_position_prior_mean_arcsec: tuple[float, float] = (0.0, 0.0)

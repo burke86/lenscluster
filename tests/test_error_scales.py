@@ -56,11 +56,10 @@ def test_sigma_extra_adds_in_quadrature_to_sigma_inst(synthetic_config):
     assert abs(float(evaluator.loglike(at(doubling))) - float(evaluator.loglike(at(0.05)))) > 1.0
 
 
-def test_sigma_sel_is_absent_by_default_and_sampled_when_configured(synthetic_config):
-    state = build_state(synthetic_config)
-    assert state.sigma_sel_param_index == -1 and not any(s.field == "sigma_sel" for s in state.parameter_specs)
-    enabled = replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, sigma_sel_prior=LogNormalPriorConfig(median=0.04, log_sigma=1.0, upper=1.0),
-                                                           sigma_res_arcsec=0.03)).validate()
+def test_sigma_sel_is_sampled_by_default_and_absent_when_disabled(synthetic_config):
+    disabled = build_state(replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, sigma_sel_prior=None)))
+    assert disabled.sigma_sel_param_index == -1 and not any(s.field == "sigma_sel" for s in disabled.parameter_specs)
+    enabled = replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, sigma_res_arcsec=0.03)).validate()
     state = build_state(enabled)
     index = state.sigma_sel_param_index
     assert state.parameter_specs[index].name == "images.sigma_sel" and state.sigma_res_arcsec == 0.03
