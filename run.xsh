@@ -36,7 +36,7 @@ from lenscluster.config import (
     ShearHaloConfig,
     TruthRecoveryConfig,
 )
-from lenscluster.cpu_runtime import configure_cpu_runtime, resolve_cpu_plan
+from lenscluster.cpu_runtime import configure_cpu_runtime, resolve_cpu_plan, threads_per_chain_if_supported
 from lenscluster.jax_cosmology import kpc_per_arcsec_from_config
 
 OUTPUT_DIR_LABEL = "oct22_single_stage"
@@ -233,9 +233,8 @@ def _hff_clusters():
             "independent_member_halos": (),
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
-            # Instrumental astrometric error per image and the PSF sigma of the marking images (HST WFC3/IR F160W, FWHM 0.15").
+            # Instrumental astrometric error per image (HST WFC3/IR F160W).
             "sigma_inst_arcsec": 0.1,
-            "sigma_res_arcsec": 0.06,
             # Classify at the current model (reclassified at the MAP) rather than at the prior's 0.975 quantile, which for a
             # log-uniform cut radius is 90 kpc (198 of 222 exact).  The library defaults (guard 3, inflation 3) give the
             # sampled r_cut* a factor of three before any far-field member reaches the guard.
@@ -301,7 +300,7 @@ def _m0416_bergamini2023_cluster():
         fixed("gas3", -2.3693869253788935, -1.2627359596498962, 0.4248370668779292, -54.743768197790125, 8.281737600000504, 37.5947433600023, 101.7305750041091),
         fixed("gas4", -20.12861892537998, 14.74104004035109, 0.4013796817764777, -49.32427500520669, 51.67495680000315, 52.337385600003195, 281.8472712670227),
     )
-    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec, sigma_res_arcsec):
+    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec):
         return {
             "cluster_key": key,
             "reference": ReferenceFrameConfig(reference=3, ra0_deg=reference[0], dec0_deg=reference[1]),
@@ -316,7 +315,6 @@ def _m0416_bergamini2023_cluster():
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
             "sigma_inst_arcsec": sigma_inst_arcsec,
-            "sigma_res_arcsec": sigma_res_arcsec,
             "classification_prior_quantile": None,
         }
 
@@ -324,11 +322,11 @@ def _m0416_bergamini2023_cluster():
     return {
         # HST + MUSE: 237 spectroscopic images in 88 families (Bergamini et al. 2023), HST astrometry.
         "M0416_BERGAMINI2023": entry("m0416_bergamini2023", reference=(64.0381417, -24.0674722), image_catalog=f"{catalog_dir}/obs_arcs.cat",
-                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.1, sigma_res_arcsec=0.06),
+                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.1),
         # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 111 families (Rihtarsic et al. 2025), NIRCam
         # positions; the same halo set-up and member catalog (their copy has the BCG shifted), their reference centre.
         "M0416_CANUCS2025": entry("m0416_canucs2025", reference=(64.03821668520617, -24.06750122335985), image_catalog=f"{canucs_dir}/obs_arcs.cat",
-                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.05, sigma_res_arcsec=0.03),   # NIRCam F200W PSF
+                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.05),
     }
 
 
@@ -342,7 +340,8 @@ def build_runtime(cores: int) -> RuntimeConfig:
         resume=True,
         numpyro_print_summary=True,
         nuts_chain_method="parallel",
-        cpu_threads_per_chain=2,  # Shared CPU budget = concurrent chains * this value; None disables tuning.
+        # Shared CPU budget = concurrent chains * this value (Linux pinning); None, the macOS fallback, disables tuning.
+        cpu_threads_per_chain=threads_per_chain_if_supported(2),
     )
 
 
@@ -375,13 +374,13 @@ def build_config(
             image_constraints=ImageConstraintsConfig(catalog_path=cluster_config["image_catalog"], metadata_path=image_metadata,
                                                      sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
-        likelihood=LikelihoodConfig(sigma_res_arcsec=float(cluster_config.get("sigma_res_arcsec", LikelihoodConfig.sigma_res_arcsec))),
+        likelihood=LikelihoodConfig(),
         paths=RunPathsConfig(output_dir=f"results/{campaign_name}/{cluster_config['cluster_key']}",
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
         runtime=runtime if runtime is not None else build_runtime(cores),
         search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search),
-        sampling=SamplingConfig(warmup=2000, samples=1000, max_tree_depth=8, target_accept=0.85),
+        sampling=SamplingConfig(warmup=1000, samples=500, max_tree_depth=8, target_accept=0.85),
         scaling=replace(cluster_config.get("scaling", ScalingModelConfig()), softening_length_kpc=float(cluster_config.get("softening_length_kpc", 0.0))),
         members=MemberConfig(far_field_cut_radii=float(cluster_config.get("far_field_cut_radii", MemberConfig.far_field_cut_radii)),
                              cut_radius_inflation=float(cluster_config.get("cut_radius_inflation", MemberConfig.cut_radius_inflation)),
@@ -407,6 +406,19 @@ def build_config(
         )
     return config
 
+def _fast_mode_warning(config) -> None:
+    """A banner that cannot be missed: a --fast run uses exploratory settings."""
+    from rich.console import Console
+    from rich.panel import Panel
+    members = config.members
+    text = ("This is a FAST run.  Its settings are exploratory:\n"
+            f"  - members deflecting every image by less than {members.min_deflection_arcsec:g}\" are dropped from the model\n"
+            f"  - far-field members are allowed down to {members.far_field_cut_radii:g} cut radii from an image (default 3)\n"
+            f"  - {config.search.n_starts} search starts, {config.sampling.warmup} warmup + {config.sampling.samples} draws per chain "
+            f"at tree depth {config.sampling.max_tree_depth}, target accept {config.sampling.target_accept:g}")
+    Console(stderr=False).print(Panel(text, title="[bold]WARNING: --fast[/bold]", border_style="yellow", style="yellow", expand=False))
+
+
 def main(argv=None):
     options = _parse_args(sys.argv if argv is None else argv)
     cluster = options["cluster"]
@@ -425,12 +437,16 @@ def main(argv=None):
         print(json.dumps({"dry_run": True, "cpu_plan": cpu_plan.to_dict(), **dry_run(config)}, indent=2, default=str))
         return 0
     from lenscluster.pipeline import run
+    if options["fast"]:
+        _fast_mode_warning(config)
     print(f"[config] cluster={cluster} run_name={config.paths.run_name} output_dir={config.paths.output_dir} "
           f"stage={options['stage']} chains={runtime.chains} search={config.search.halo_method}+{config.search.member_method} "
           f"n_starts={config.search.n_starts} fast={options['fast']} sigma_inst_arcsec={config.model.image_constraints.sigma_inst_arcsec}")
     start = time.monotonic()
     try:
         run(config, stage=options["stage"])
+        if options["fast"]:
+            _fast_mode_warning(config)
     finally:
         print(f"[timing] elapsed={time.monotonic() - start:.2f}s")
     return 0
