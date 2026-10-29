@@ -95,7 +95,7 @@ def _solver(*, production: bool, seed: int) -> LensClusterSolverConfig:
     return LensClusterSolverConfig(
         runtime=build_runtime(seed),
         search=SearchConfig() if production else SearchConfig(n_starts=8),
-        sampling=(SamplingConfig(warmup=5000, samples=2000, max_tree_depth=8, target_accept=0.85) if production
+        sampling=(SamplingConfig(warmup=2000, samples=1000, max_tree_depth=8, target_accept=0.85) if production
                   else SamplingConfig(warmup=100, samples=100, max_tree_depth=6, target_accept=0.85)),
         likelihood=LikelihoodConfig(sigma_inst_arcsec=sigma_inst_arcsec),
         scaling=ScalingModelConfig(fit_corekpc=False),   # the 0.15 kpc member core is not a lensing observable; fixed at the truth value
