@@ -29,6 +29,7 @@ def test_run_outputs_create_potfile_corner(tmp_path, monkeypatch):
     monkeypatch.setattr(outputs, "posterior_summary_table", lambda *args: pd.DataFrame())
     monkeypatch.setattr(outputs, "classification_table", lambda *args: pd.DataFrame())
     monkeypatch.setattr(outputs.plots, "member_scaling_table", lambda *args: pd.DataFrame())
+    monkeypatch.setattr(outputs, "write_covariance_plots", lambda *args, **kwargs: [])
     monkeypatch.setattr(outputs, "write_member_diagnostic_plots", lambda *args, **kwargs: [])
     # Stop after the actual potfile output hook, before unrelated image diagnostics.
     class ReachedImageDiagnostics(Exception):

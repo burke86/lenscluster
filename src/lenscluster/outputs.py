@@ -19,6 +19,7 @@ from .potfile_plots import write_potfile_plots
 from .member_diagnostic_plots import write_member_diagnostic_plots
 from .truth_recovery import compute_truth_recovery
 from .results_tex import write_run_results
+from .covariance_plots import write_covariance_plots
 
 
 def posterior_summary_table(state: ModelState, posterior: PosteriorResults) -> pd.DataFrame:
@@ -62,6 +63,7 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
     member_table = plots.member_scaling_table(state, posterior)
     member_table.to_csv(tables / "member_scaling_relation.csv", index=False)
     write_potfile_plots(posterior.physical, state.parameter_specs, figures, prefix, posterior=posterior, log=log)
+    write_covariance_plots(config, state, evaluator, posterior, paths, log=log)
     write_member_diagnostic_plots(config, state, evaluator, posterior, paths, log=log)
     if not member_table.empty:
         plots.plot_scaling_relation(member_table, np.asarray(posterior.physical), state.parameter_specs,
