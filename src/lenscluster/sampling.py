@@ -232,6 +232,49 @@ def chain_diagnostics(grouped_theta: np.ndarray) -> dict[str, Any]:
     return {"r_hat": r_hat.tolist(), "n_eff": n_eff.tolist(), "max_r_hat": float(np.nanmax(r_hat)), "min_n_eff": float(np.nanmin(n_eff))}
 
 
+HESSIAN_NEGATIVE_FRACTION_WARNING = 0.10   # at a mode the global-block Hessian is positive definite; runs started at a
+                                            # correct mode show 0-3 of 35 negative eigenvalues, a misplaced start 13-20 of 37
+
+
+def hessian_seed_warning(mass_diagnostics: dict[str, Any]) -> str | None:
+    """A warning when the Hessian of the global block at the first chain start has many negative eigenvalues: the start
+    is then not at a posterior mode, and the floored seed gives NUTS a poor mass matrix."""
+    negative, dim = mass_diagnostics.get("n_negative_eigenvalues"), mass_diagnostics.get("global_dim")
+    if not negative or not dim or negative / dim <= HESSIAN_NEGATIVE_FRACTION_WARNING:
+        return None
+    return (f"WARNING: the Hessian at the first chain start has {negative} negative eigenvalues out of {dim} in the global block "
+            f"(more than {100 * HESSIAN_NEGATIVE_FRACTION_WARNING:.0f}%): the start is not at a posterior mode, so the mass seed is floored and "
+            f"warmup starts from a poor point.  Check that the chain starts reproduce the saved init start.")
+
+
+def e_bfmi(energy: np.ndarray) -> float:
+    """Estimated Bayesian fraction of missing information of one chain, sum (E_t - E_t-1)^2 / sum (E_t - mean E)^2;
+    values below about 0.3 mean the momentum resampling cannot move the energy across the marginal energy distribution
+    (heavy tails or a funnel)."""
+    energy = np.asarray(energy, dtype=float)
+    energy = energy[np.isfinite(energy)]
+    if energy.size < 3:
+        return float("nan")
+    denominator = float(np.sum((energy - energy.mean()) ** 2))
+    return float(np.sum(np.diff(energy) ** 2) / denominator) if denominator > 0 else float("nan")
+
+
+def adaptation_diagnostics(step_size: np.ndarray, energy: np.ndarray, accept: np.ndarray, diverging: np.ndarray,
+                           num_steps: np.ndarray, max_tree_depth: int) -> dict[str, Any]:
+    """Per chain: the adapted step size, E-BFMI, energy spread, acceptance, divergences and how often the trajectory
+    hit the tree-depth cap (2^depth - 1 leapfrog steps).  Every per-draw input has shape (chains, draws)."""
+    cap = 2 ** int(max_tree_depth) - 1
+    per_chain = [{"chain": int(c), "step_size": float(step_size[c]), "e_bfmi": e_bfmi(energy[c]),
+                  "energy_mean": float(np.nanmean(energy[c])), "energy_std": float(np.nanstd(energy[c])),
+                  "accept_mean": float(np.mean(accept[c])), "divergences": int(np.sum(diverging[c])),
+                  "mean_steps": float(np.mean(num_steps[c])), "tree_depth_saturation": float(np.mean(num_steps[c] >= cap))}
+                 for c in range(energy.shape[0])]
+    return {"per_chain": per_chain, "max_tree_depth": int(max_tree_depth),
+            "min_e_bfmi": float(np.nanmin([c["e_bfmi"] for c in per_chain])) if per_chain else float("nan"),
+            "max_tree_depth_saturation": float(max(c["tree_depth_saturation"] for c in per_chain)) if per_chain else float("nan"),
+            "step_size_range": [float(np.min(step_size)), float(np.max(step_size))] if len(step_size) else []}
+
+
 def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, warmup: int, samples: int, chains: int,
              chain_method: str, max_tree_depth: int, target_accept: float, initial_step_size: float, seed: int,
              thin: int = 1, print_summary: bool = False, mass_matrix: str = "hessian", log=print) -> PosteriorResults:
@@ -250,6 +293,10 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
         dense_mass, inverse_mass = False, None
         log("[nuts] diagonal mass matrix, adapted from the identity")
     mass_diagnostics["mass_matrix"] = mass_matrix
+    warning = hessian_seed_warning(mass_diagnostics)
+    if warning:
+        log(f"[nuts] {warning}")
+    mass_diagnostics["warning"] = warning
     if chain_method == "parallel" and jax.device_count() < chains:
         raise RuntimeError(f"nuts_chain_method='parallel' needs {chains} JAX devices; {jax.device_count()} are visible. "
                            "Set JAX_NUM_CPU_DEVICES or use 'sequential'.")
@@ -260,9 +307,13 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
     mcmc = MCMC(kernel, num_warmup=int(warmup), num_samples=int(samples), num_chains=int(chains),
                 chain_method=chain_method, progress_bar=True, thinning=int(thin))
     started = time.perf_counter()
-    mcmc.run(jax.random.PRNGKey(int(seed)), extra_fields=("accept_prob", "diverging", "num_steps", "potential_energy"), init_params=init_params)
+    mcmc.run(jax.random.PRNGKey(int(seed)), extra_fields=("accept_prob", "diverging", "num_steps", "potential_energy", "energy",
+                                                           "adapt_state.step_size"), init_params=init_params)
     grouped = mcmc.get_samples(group_by_chain=True)
     extra = mcmc.get_extra_fields(group_by_chain=True)
+    # The step size is frozen after warmup, so the first sampled draw of each chain carries the adapted value.
+    step_size = np.asarray(extra["adapt_state.step_size"], dtype=float).reshape(int(chains), -1)[:, 0]
+    energy_by_chain = np.asarray(extra["energy"], dtype=float).reshape(int(chains), -1)
     jax.block_until_ready(grouped)
     elapsed = time.perf_counter() - started
     if print_summary:
@@ -278,13 +329,22 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
     accept = np.asarray(extra["accept_prob"], dtype=float).reshape(-1)
     diverging = np.asarray(extra["diverging"], dtype=bool).reshape(-1)
     num_steps = np.asarray(extra["num_steps"], dtype=float).reshape(-1)
+    adaptation = adaptation_diagnostics(step_size, energy_by_chain, accept.reshape(int(chains), -1), diverging.reshape(int(chains), -1),
+                                        num_steps.reshape(int(chains), -1), max_tree_depth)
     log(f"[nuts] done in {elapsed:.1f}s accept_mean={accept.mean():.3f} divergences={int(diverging.sum())} "
         f"mean_steps={num_steps.mean():.1f} draws={flat.shape[0]}")
+    for c in adaptation["per_chain"]:
+        log(f"[nuts] chain {c['chain']}: step size {c['step_size']:.3g}, E-BFMI {c['e_bfmi']:.2f}, accept {c['accept_mean']:.3f}, "
+            f"{c['divergences']} divergences, mean steps {c['mean_steps']:.0f}, {100 * c['tree_depth_saturation']:.0f}% of transitions at the "
+            f"tree-depth cap ({2 ** int(max_tree_depth) - 1} steps)")
+    if adaptation["min_e_bfmi"] < 0.3:
+        log(f"[nuts] WARNING: E-BFMI below 0.3 (min {adaptation['min_e_bfmi']:.2f}): the energy does not mix, typical of a funnel or heavy tails")
     best = int(np.nanargmax(np.where(finite, log_prob, -np.inf)))
-    diagnostics = dict(mass_seed=mass_diagnostics, elapsed_seconds=float(elapsed), chain_method=chain_method,
+    diagnostics = dict(mass_seed=mass_diagnostics, adaptation=adaptation, elapsed_seconds=float(elapsed), chain_method=chain_method,
                        n_nonfinite_draws=int((~finite).sum()), **chain_diagnostics(grouped_theta))
     return PosteriorResults(samples=flat, physical=physical, log_prob=log_prob, accept_prob=accept, diverging=diverging,
                            num_steps=num_steps, warmup_steps=int(warmup), sample_steps=int(samples), num_chains=int(chains),
+                           energy=energy_by_chain.reshape(-1), step_size=step_size,
                            grouped_samples=grouped_theta, diagnostics=diagnostics,
                            median_fit=np.median(physical[finite], axis=0) if finite.any() else None,
                            maximum_likelihood_fit=physical[best])

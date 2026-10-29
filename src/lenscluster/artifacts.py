@@ -81,7 +81,7 @@ def save_search(directory: Path, search: dict[str, Any]) -> None:
 def save_posterior(directory: Path, posterior: PosteriorResults) -> None:
     np.savez_compressed(directory / POSTERIOR_FILE, samples=posterior.samples, physical=posterior.physical,
                         log_prob=posterior.log_prob, accept_prob=posterior.accept_prob, diverging=posterior.diverging,
-                        num_steps=posterior.num_steps, grouped_samples=posterior.grouped_samples,
+                        num_steps=posterior.num_steps, energy=posterior.energy, step_size=posterior.step_size, grouped_samples=posterior.grouped_samples,
                         median_fit=posterior.median_fit, maximum_likelihood_fit=posterior.maximum_likelihood_fit,
                         warmup_steps=posterior.warmup_steps, sample_steps=posterior.sample_steps, num_chains=posterior.num_chains)
     write_json(directory / "posterior_diagnostics.json", posterior.diagnostics)
@@ -92,6 +92,7 @@ def load_posterior(directory: Path) -> PosteriorResults:
         diagnostics = json.loads((directory / "posterior_diagnostics.json").read_text()) if (directory / "posterior_diagnostics.json").exists() else {}
         return PosteriorResults(samples=data["samples"], physical=data["physical"], log_prob=data["log_prob"],
                                 accept_prob=data["accept_prob"], diverging=data["diverging"], num_steps=data["num_steps"],
+                                energy=data["energy"], step_size=data["step_size"],
                                 warmup_steps=int(data["warmup_steps"]), sample_steps=int(data["sample_steps"]),
                                 num_chains=int(data["num_chains"]), grouped_samples=data["grouped_samples"],
                                 diagnostics=diagnostics, median_fit=data["median_fit"], maximum_likelihood_fit=data["maximum_likelihood_fit"])

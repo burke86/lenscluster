@@ -259,6 +259,8 @@ class PosteriorResults:
     warmup_steps: int
     sample_steps: int
     num_chains: int
+    energy: np.ndarray                       # (draws,) Hamiltonian energy of each transition (E-BFMI)
+    step_size: np.ndarray                    # (chains,) step size at the end of warmup
     grouped_samples: np.ndarray | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
     median_fit: np.ndarray | None = None

@@ -40,6 +40,7 @@ def run_summary_table(result, config) -> str:
     state, posterior, audit = result.state, result.posterior, result.audit
     fit = (result.summary or {}).get("fit", {})
     diagnostics = posterior.diagnostics or {}
+    adaptation = diagnostics.get("adaptation", {})
     timing = result.timing or {}
 
     def number(value, digits=3):
@@ -60,7 +61,12 @@ def run_summary_table(result, config) -> str:
         ("Sampler", [("chains x (warmup + samples)", f"{config.runtime.chains} x ({config.sampling.warmup} + {config.sampling.samples})"),
                      ("draws, divergences", f"{len(posterior.samples)}, {int(np.asarray(posterior.diverging).sum())}"),
                      ("mean accept, mean steps", f"{float(np.mean(posterior.accept_prob)):.3f}, {float(np.mean(posterior.num_steps)):.1f}"),
-                     ("max R-hat, min ESS", f"{number(diagnostics.get('max_r_hat'))}, {number(diagnostics.get('min_n_eff'), 0)}")]),
+                     ("max R-hat, min ESS", f"{number(diagnostics.get('max_r_hat'))}, {number(diagnostics.get('min_n_eff'), 0)}"),
+                     ("step size per chain", ", ".join(f"{c['step_size']:.3g}" for c in adaptation.get("per_chain", [])) or "-"),
+                     ("E-BFMI per chain (< 0.3 is bad)", ", ".join(f"{c['e_bfmi']:.2f}" for c in adaptation.get("per_chain", [])) or "-"),
+                     ("transitions at the tree-depth cap", ", ".join(f"{100 * c['tree_depth_saturation']:.0f}%" for c in adaptation.get("per_chain", [])) or "-"),
+                     ("initialization", "WARNING, see the final log" if (diagnostics.get("start_check", {}).get("warnings")
+                                                                      or diagnostics.get("mass_seed", {}).get("warning")) else "ok")]),
         ("Far-field audit", [("verdict", str(audit.get("approximation_validation", "-"))),
                              ("min R/r_cut over draws (guard)", f"{number(audit.get('min_separation_over_cut_radius'), 2)} ({audit.get('guard_cut_radii', '-')})"),
                              ("draws near / inside the guard", f"{100 * audit.get('fraction_of_draws_near_guard', 0.0):.0f}% / {audit.get('draws_inside_guard', 0)}")]),

@@ -723,6 +723,28 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
     return with_member_classes(state, exact, classification, centered=np.zeros(n_members, dtype=bool))
 
 
+def _current_centering(state: ModelState) -> np.ndarray:
+    n_members = len(state.members.member_ids)
+    return np.asarray(state.members.centered, dtype=bool) if len(state.members.centered) else np.zeros(n_members, dtype=bool)
+
+
+def convert_member_centering(state: ModelState, theta: np.ndarray, centered: np.ndarray) -> np.ndarray:
+    """Latent vector(s) ``theta`` (shape (n,) or (k, n)) moved from the state's current member centering to ``centered``,
+    so that every member's physical deviation, and so the model, is unchanged: a unit offset z becomes the deviation
+    s z when the member becomes centered, and back.  Each row uses its own sampled scatter s."""
+    old_centered = _current_centering(state)
+    centered = np.asarray(centered, dtype=bool)
+    out = np.array(theta, dtype=float, copy=True)
+    for position in np.flatnonzero(centered != old_centered):
+        for offset_idx, scatter_idx in ((state.members.offset_param_index[position], state.members.scatter_param_index[position]),
+                                        (state.members.radius_offset_param_index[position], state.members.radius_scatter_param_index[position])):
+            if int(offset_idx) < 0:
+                continue
+            scatter = np.exp(out[..., int(scatter_idx)])              # latent log scatter -> physical scatter
+            out[..., int(offset_idx)] = out[..., int(offset_idx)] * scatter if centered[position] else out[..., int(offset_idx)] / scatter
+    return out
+
+
 def with_member_classes(state: ModelState, exact_positions: np.ndarray, classification: dict[str, Any] | None = None, *,
                         centered: np.ndarray | None = None) -> ModelState:
     """Set the exact/far-field classes and, if given, which members use centered deviations; the initial theta
@@ -730,23 +752,18 @@ def with_member_classes(state: ModelState, exact_positions: np.ndarray, classifi
     n_members = len(state.members.member_ids)
     exact = np.asarray(sorted(set(int(i) for i in exact_positions)), dtype=np.int32)
     far = np.asarray(sorted(set(range(n_members)) - set(exact.tolist())), dtype=np.int32)
-    old_centered = np.asarray(state.members.centered, dtype=bool) if len(state.members.centered) else np.zeros(n_members, dtype=bool)
+    old_centered = _current_centering(state)
     centered = old_centered.copy() if centered is None else np.asarray(centered, dtype=bool).copy()
     specs = list(state.parameter_specs)
-    theta = np.asarray(state.initial_theta, dtype=float).copy()
+    theta = convert_member_centering(state, state.initial_theta, centered)
     packed_centered = np.asarray(state.packed_lens_spec.deviation_centered, dtype=bool).copy()
     for position in range(n_members):
-        component = int(state.members.component_indices[position])
-        packed_centered[component] = centered[position]
+        packed_centered[int(state.members.component_indices[position])] = centered[position]
         if centered[position] == old_centered[position]:
             continue
-        for offset_idx, scatter_idx in ((state.members.offset_param_index[position], state.members.scatter_param_index[position]),
-                                        (state.members.radius_offset_param_index[position], state.members.radius_scatter_param_index[position])):
-            if int(offset_idx) < 0:
-                continue
-            scatter = float(np.exp(theta[int(scatter_idx)]))          # latent log scatter -> physical scatter
-            theta[int(offset_idx)] = theta[int(offset_idx)] * scatter if centered[position] else theta[int(offset_idx)] / scatter
-            specs[int(offset_idx)] = replace(specs[int(offset_idx)], centered=bool(centered[position]))
+        for offset_idx in (state.members.offset_param_index[position], state.members.radius_offset_param_index[position]):
+            if int(offset_idx) >= 0:
+                specs[int(offset_idx)] = replace(specs[int(offset_idx)], centered=bool(centered[position]))
     active = np.asarray(state.packed_lens_spec.radius_deviation_active, dtype=bool).copy()
     if state.packed_lens_spec.radius_deviation_members == "exact" and active.size:
         active[np.asarray(state.members.component_indices)] = False

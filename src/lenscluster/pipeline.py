@@ -24,7 +24,7 @@ from .report import audit_report, classification_report, far_field_threshold_tab
 from .sampling import run_nuts
 from .search import chain_starts
 from .search_split import split_map
-from .state import build_state, deviation_constraint_ratio, with_member_classes
+from .state import build_state, deviation_constraint_ratio, with_member_classes, convert_member_centering
 
 STAGES = ("init", "final", "both")
 
@@ -214,6 +214,42 @@ def choose_centering(state: ModelState, evaluator: Evaluator, config: LensCluste
     return with_member_classes(state, state.members.exact_positions, state.members.classification, centered=centered)
 
 
+def convert_search_centering(search: dict[str, Any], before: ModelState, after: ModelState) -> dict[str, Any]:
+    """The search result moved to the member centering of ``after``: every mode's theta, the best theta and the end
+    points, so that the saved modes, the chain starts and the Hessian seed all live in the coordinates NUTS samples."""
+    centered = _member_centering(after)
+    out = dict(search)
+    out["modes"] = [dict(m, theta=convert_member_centering(before, np.asarray(m["theta"], dtype=float), centered).tolist()) for m in search["modes"]]
+    out["theta"] = convert_member_centering(before, np.asarray(search["theta"], dtype=float), centered)
+    if search.get("final_theta") is not None:
+        out["final_theta"] = convert_member_centering(before, np.asarray(search["final_theta"], dtype=float), centered)
+    return out
+
+
+def _member_centering(state: ModelState) -> np.ndarray:
+    return np.asarray(state.members.centered, dtype=bool) if len(state.members.centered) else np.zeros(len(state.members.member_ids), dtype=bool)
+
+
+START_LOGLIKE_TOLERANCE = 1.0e-6     # the first chain start must reproduce the saved init start to rounding
+
+
+def chain_start_check(evaluator: Evaluator, starts: np.ndarray, reference_theta: np.ndarray, *, margin: float) -> dict[str, Any]:
+    """Compare the NUTS starts with the init's saved start under the model NUTS samples.  The first start must be the
+    saved start; every start must be finite and within ``5 x margin`` in log-likelihood of it (the modes that seed chains
+    are within ``margin`` of the best in log posterior, and the final classification can move them a little)."""
+    reference = float(evaluator.loglike(jnp.asarray(reference_theta)))
+    values = [float(evaluator.loglike(jnp.asarray(start))) for start in np.asarray(starts, dtype=float)]
+    warnings = []
+    if not np.array_equal(np.asarray(starts[0], dtype=float), np.asarray(reference_theta, dtype=float)) or abs(values[0] - reference) > START_LOGLIKE_TOLERANCE * max(1.0, abs(reference)):
+        warnings.append(f"WARNING: the first chain start is not the saved init start (log-likelihood {values[0]:.3f} against {reference:.3f}); "
+                        "the starts and the init are in different coordinates")
+    for chain, value in enumerate(values):
+        if not np.isfinite(value) or value < reference - 5.0 * float(margin):
+            warnings.append(f"WARNING: chain {chain} starts at log-likelihood {value:.3f}, {reference - value:.3g} below the saved init start "
+                            f"({reference:.3f}); more than 5 x the mode margin ({float(margin):g})")
+    return {"reference_log_likelihood": reference, "start_log_likelihoods": values, "warnings": warnings}
+
+
 def search_is_fragile(search: dict[str, Any]) -> bool:
     """True when at most one start reaches the best basin: the result rests on a single optimization, whether that was
     the configured model or one lucky prior draw."""
@@ -306,7 +342,9 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         state = classify(state, evaluator, theta, config, reference_cut_kpc=_scaling_value(state, physical, "cutkpc"),
                          beta_radius=_scaling_value(state, physical, "beta_radius"), log=log)
         state.initial_theta = theta
+        before_centering = state
         state = choose_centering(state, Evaluator(state, config.likelihood.likelihood_mode), config, log=log)
+        search = convert_search_centering(search, before_centering, state)
         theta = np.asarray(state.initial_theta, dtype=float)
         state.members.classification["dropped_members"] = list(state.dropped_member_ids)
         state.members.classification["min_deflection_arcsec"] = config.members.min_deflection_arcsec
@@ -369,12 +407,18 @@ def run_final(config: LensClusterSolverConfig, init: InitResult) -> RunResult:
         sampling = config.sampling
         log(f"[final] NUTS from {len({tuple(s) for s in starts.tolist()})} distinct start(s), chains={runtime.chains} "
             f"warmup={sampling.warmup} samples={sampling.samples}")
+        start_check = chain_start_check(evaluator, starts, init.theta, margin=config.search.mode_margin)
+        log(f"[final] chain-start log-likelihoods {', '.join(f'{v:.2f}' for v in start_check['start_log_likelihoods'])} "
+            f"(saved init start {start_check['reference_log_likelihood']:.2f})")
+        for warning in start_check["warnings"]:
+            log(f"[final] {warning}")
         sampling_started = time.perf_counter()
         posterior = run_nuts(state, evaluator, starts, warmup=sampling.warmup, samples=sampling.samples, chains=runtime.chains,
                              chain_method=runtime.nuts_chain_method, max_tree_depth=sampling.max_tree_depth,
                              target_accept=sampling.target_accept, initial_step_size=sampling.initial_step_size,
                              seed=runtime.seed, thin=sampling.thin, print_summary=runtime.numpyro_print_summary,
                              mass_matrix=sampling.mass_matrix, log=log)
+        posterior.diagnostics["start_check"] = start_check
         artifacts.save_posterior(stage.artifacts, posterior)
         sampling_seconds = time.perf_counter() - sampling_started
 
