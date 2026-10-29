@@ -132,6 +132,7 @@ summaries still use the full posterior.
 - `scripts/make_ff_sims_truth_magnitudes.py`, `scripts/measure_ff_sims_image_magnitudes.py`.
 - `scripts/make_dpie_figure.py`, `scripts/make_covariance_figure.py`: paper figures.
 - `scripts/make_covariance_mapping.py`: current measurement, deflection and feature-selection covariance figure. Run with the `ggsl`, `hdm`, or `lenstronomy` conda Python interpreter, e.g. `/Users/isaque.dutra/miniforge3/envs/ggsl/bin/python scripts/make_covariance_mapping.py`. Uses only the Python standard library plus `pdflatex` (PGFPlots) and `pdftoppm`; no Node.js dependency. The reviewed layout is in `scripts/templates/covariance_mapping.tex`. Writes the PDF, TeX, PNG preview and checked illustrative parameters to `output/pdf/covariance_candidates/`.
+- `scripts/make_covariance_candidates.mjs`: legacy transition and sequence candidates for the older covariance prescription. The current mapping figure is generated separately by `scripts/make_covariance_mapping.py`.
 - `scripts/make_lensing_geometry_figures.mjs`: four analytic illustrations of local stretching, forward/inverse circle mappings, arc curvature, and critical-curve directions. Run `node scripts/make_lensing_geometry_figures.mjs`; PDFs, editable TeX, PNG previews, and analytic checks are written to `output/pdf/lensing_geometry/`. Requires Node.js, `pdflatex`, and `pdftoppm`.
 - `download_catalogs.py`: catalog and image downloads.
 
@@ -182,3 +183,7 @@ Regenerate just this plot, without inference:
 ```sh
 /home/dutra/.conda/envs/lenstronomy/bin/python scripts/regenerate_magnification_recovery.py path/to/run
 ```
+
+- scripts/make_farfield_illustrations.py: synthetic member-image geometry, precomputed-matrix diagram, and circular dPIE convergence figures. Run with the ggsl conda Python interpreter; vector PDFs and PNG previews are written to output/pdf/farfield_candidates/.
+
+- scripts/make_jacobian_smoothing_illustrations.py: synthetic Gaussian determinant averaging, smoothed normalization, and conditioning figures. Run in ggsl, hdm or lenstronomy; outputs are in output/pdf/jacobian_smoothing_candidates/.
