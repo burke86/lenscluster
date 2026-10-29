@@ -36,6 +36,8 @@ def test_run_export(tmp_path):
     path = write_run_results(tmp_path)
     text = path.read_text()
     assert path.name == 'm0416_results.tex'
+    assert path.parent == tmp_path / 'figures'
+    assert not (tmp_path / 'tables' / path.name).exists()
     assert r'\MJZeroFourOneSixNRecovered}{2}' in text
     assert r'\MJZeroFourOneSixRMS}{0.123}' in text
     assert r'\MJZeroFourOneSixNFarFieldMembers}{6}' in text

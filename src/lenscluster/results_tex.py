@@ -58,7 +58,10 @@ def _write(path, prefix, metrics, comments):
 
 
 def write_run_results(final_dir: str | Path, *, name: str | None = None) -> Path:
-    """Read final/{tables,artifacts}; missing quantities remain explicitly unavailable."""
+    """Read final/{tables,artifacts} and export beside plots in final/figures.
+
+    Missing quantities remain explicitly unavailable.
+    """
     final = Path(final_dir)
     if not (final / 'artifacts/summary.json').is_file():
         raise FileNotFoundError(f'No saved run summary under {final / "artifacts"}')
@@ -101,7 +104,7 @@ def write_run_results(final_dir: str | Path, *, name: str | None = None) -> Path
             metrics['NExtraImages'] = str(len(pd.read_csv(extra)))
         except pd.errors.EmptyDataError:
             metrics['NExtraImages'] = '0'
-    return _write(final / 'tables' / f'{filename}_results.tex', command_prefix(name), metrics,
+    return _write(final / 'figures' / f'{filename}_results.tex', command_prefix(name), metrics,
                   ['Best-fit image recovery; no reduced chi-square exported.',
                    'Runtime is recorded full-run wall time, including initialization and outputs.',
                    'SamplingRuntime is the saved sampler elapsed time, not total run time.',
