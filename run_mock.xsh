@@ -35,7 +35,7 @@ from lenscluster.config import (
     SearchConfig,
     TruthRecoveryConfig,
 )
-from lenscluster.cpu_runtime import configure_cpu_runtime, resolve_cpu_plan
+from lenscluster.cpu_runtime import configure_cpu_runtime, resolve_cpu_plan, threads_per_chain_if_supported
 
 VALID_PRESETS = ("smoke", "production")
 
@@ -86,7 +86,7 @@ def _parse_args(argv: list[str]) -> dict:
 
 def build_runtime(seed: int) -> RuntimeConfig:
     return RuntimeConfig(seed=seed, chains=cores, resume=True, numpyro_print_summary=True, nuts_chain_method="parallel",
-                         cpu_threads_per_chain=2)   # same CPU budget as run.xsh: chains * 2 cores, chosen to avoid other runs
+                         cpu_threads_per_chain=threads_per_chain_if_supported(2))   # same CPU budget as run.xsh: chains * 2 cores on Linux, no pinning on macOS
 
 
 def _solver(*, production: bool, seed: int) -> LensClusterSolverConfig:

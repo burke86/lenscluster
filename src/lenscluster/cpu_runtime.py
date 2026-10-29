@@ -121,6 +121,17 @@ def cpu_busy_fractions(interval=0.25):
     return busy
 
 
+def affinity_supported():
+    """Whether this platform can pin the process to CPUs (Linux); macOS and Windows cannot."""
+    return hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity")
+
+
+def threads_per_chain_if_supported(threads_per_chain):
+    """The ``cpu_threads_per_chain`` setting for this platform: the requested value where CPU affinity exists,
+    otherwise None (no pinning, the default thread pools), so one run script serves Linux and macOS."""
+    return threads_per_chain if affinity_supported() else None
+
+
 def resolve_cpu_plan(chains, chain_method="parallel", threads_per_chain=None, *, avoid=None, load=None):
     """Choose the CPUs of this run.  XLA sizes its thread pool from the affinity mask, so with ``threads_per_chain``
     the run is pinned to concurrent * threads_per_chain physical cores.  Those are the least busy cores at launch
@@ -136,7 +147,7 @@ def resolve_cpu_plan(chains, chain_method="parallel", threads_per_chain=None, *,
     # our own narrowed affinity mask, so it must not be recomputed once applied.
     if _ACTIVE_PLAN is not None and (_ACTIVE_PLAN.chains, _ACTIVE_PLAN.chain_method, _ACTIVE_PLAN.threads_per_chain) == (chains, chain_method, threads_per_chain):
         return _ACTIVE_PLAN
-    supported = hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity")
+    supported = affinity_supported()
     available = tuple(sorted(os.sched_getaffinity(0))) if supported else tuple(range(os.cpu_count() or 1))
     if _ACTIVE_PLAN is not None and available == tuple(sorted(_ACTIVE_PLAN.selected_cpu_ids)):
         available = _ACTIVE_PLAN.available_cpu_ids
