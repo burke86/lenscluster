@@ -280,9 +280,5 @@ def write_member_diagnostic_plots(config, state, evaluator, posterior, paths, *,
             path = output(name)
             renderer(data, path)
             products.append(path)
-        for population in potfile_populations(state.parameter_specs):
-            path = output(f'{population}_scaling_correlations')
-            scaling_correlations(posterior.physical, state.parameter_specs, population, path)
-            products.append(path)
     log(f'[diagnostics] wrote {len(products)} PDFs; {len(data.variables)} member comparisons')
     return products

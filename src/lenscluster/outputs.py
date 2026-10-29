@@ -79,7 +79,11 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
                                             draws=recovery.get("posterior_image_residual_draws"), log=log)
         plots.plot_image_recovery(image_df, recovery["image_recovery_extra_images"], plots.figure_path(figures, "image_recovery.pdf", prefix))
 
-    corner_path = plots.plot_corner(np.asarray(posterior.physical), state.parameter_specs, plots.figure_path(figures, "corner_globals.pdf", prefix), best=best_physical)
+    from .chain_traces import trace_data
+    traces = trace_data(posterior, state.parameter_specs)
+    corner_path = plots.plot_corner(np.asarray(posterior.physical), state.parameter_specs,
+                                   plots.figure_path(figures, "corner_globals.pdf", prefix), best=best_physical,
+                                   grouped_physical=None if traces is None else traces['chains'])
     if corner_path is None:
         log("[outputs] corner skipped: fewer than two global parameters with posterior spread")
 

@@ -155,23 +155,15 @@ def plot_image_recovery(image_df: pd.DataFrame, extra_df: pd.DataFrame, path: Pa
 
 
 # ----------------------------------------------------------------------------- posterior
-def plot_corner(samples: np.ndarray, specs: list[ParameterSpec], path: Path, *, best: np.ndarray | None = None) -> Path | None:
-    import corner
-    keep = [i for i, spec in enumerate(specs) if spec.component_family not in {"source_position", "member_scatter_offset"}]
-    values = np.asarray(samples, dtype=float)[:, keep]
-    finite = np.isfinite(values).all(axis=1)
-    values = values[finite]
-    spans = values.max(axis=0) - values.min(axis=0)
-    dynamic = np.isfinite(spans) & (spans > 0)
-    if dynamic.sum() < 2 or values.shape[0] <= int(dynamic.sum()) + 1:   # corner needs more samples than dimensions
-        return None
-    values = values[:, dynamic]
-    labels = [specs[i].name for i, d in zip(keep, dynamic) if d]
-    levels = tuple(float(1.0 - np.exp(-0.5 * s ** 2)) for s in (1.0, 2.0, 3.0))
-    fig = corner.corner(values, labels=labels, levels=levels, plot_datapoints=False, fill_contours=True, show_titles=True,
-                        title_kwargs={"fontsize": 8}, label_kwargs={"fontsize": 8}, quantiles=[0.16, 0.5, 0.84],
-                        truths=None if best is None else [float(best[i]) for i, d in zip(keep, dynamic) if d], truth_color="#d4a017")
-    return _finish(fig, path, dpi=200)
+def plot_corner(samples: np.ndarray, specs: list[ParameterSpec], path: Path, *, best: np.ndarray | None = None,
+                grouped_physical=None, best_index=None) -> Path | None:
+    from .corner_plots import plot_parameter_corner
+    keep = [(i, spec, spec.name) for i, spec in enumerate(specs)
+            if spec.component_family not in {"source_position", "member_scatter_offset"}]
+    if best_index is None and best is not None:
+        matches = np.flatnonzero(np.all(np.asarray(samples) == best, axis=1))
+        best_index = int(matches[0]) if len(matches) else None
+    return plot_parameter_corner(samples, keep, path, grouped_physical=grouped_physical, best_index=best_index)
 
 
 def member_scaling_table(state: ModelState, posterior: PosteriorResults) -> pd.DataFrame:

@@ -93,7 +93,8 @@ def test_suite_and_best_only(synthetic_config, tmp_path):
     paths = SimpleNamespace(figures=tmp_path/'figures', tables=tmp_path/'tables')
     style = plt.rcParams['font.size']
     results = write_member_diagnostic_plots(config, state, evaluator, posterior, paths)
-    assert len(results) == 5
+    assert len(results) == 4
+    assert not list(paths.figures.glob('*scaling_correlations.pdf'))
     for path in results:
         assert path.read_bytes().startswith(b'%PDF')
     provenance = json.loads((paths.tables/'member_diagnostic_provenance.json').read_text())

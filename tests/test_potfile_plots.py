@@ -20,7 +20,7 @@ def fixture_draws(population="potfile_members"):
     return samples, specs
 
 
-def test_run_outputs_create_both_potfile_figures(tmp_path, monkeypatch):
+def test_run_outputs_create_potfile_corner(tmp_path, monkeypatch):
     samples, specs = fixture_draws()
     posterior = SimpleNamespace(samples=samples, physical=samples, log_prob=np.zeros(len(samples)))
     state = SimpleNamespace(parameter_specs=specs)
@@ -38,12 +38,13 @@ def test_run_outputs_create_both_potfile_figures(tmp_path, monkeypatch):
     monkeypatch.setattr(outputs, "image_recovery_tables", stop)
     with pytest.raises(ReachedImageDiagnostics):
         outputs.write_outputs(config, state, SimpleNamespace(physical=lambda p: p), posterior, {}, paths)
-    for kind in ("corner", "prior_posterior"):
+    for kind in ("corner",):
         path = paths.figures / f"hera_potfile_members_{kind}.pdf"
         assert path.read_bytes().startswith(b"%PDF")
         summary = json.loads(path.with_suffix(".json").read_text())
         assert summary["population"] == "potfile_members"
         assert summary["draws"] == len(samples)
+    assert not (paths.figures / 'hera_potfile_members_prior_posterior.pdf').exists()
 
 
 def test_multiple_populations_and_isolated_style(tmp_path):
@@ -52,7 +53,7 @@ def test_multiple_populations_and_isolated_style(tmp_path):
     style = plt.rcParams.copy()
     results = potfile_plots.write_potfile_plots(np.column_stack((samples, other)), specs + other_specs, tmp_path)
     assert {p.name for p in results} == {f"potfile_{pop}_{kind}.pdf" for pop in ("2", "named")
-                                       for kind in ("corner", "prior_posterior")}
+                                       for kind in ("corner",)}
     assert plt.rcParams["font.size"] == style["font.size"]
     assert plt.rcParams["mathtext.fontset"] == style["mathtext.fontset"]
     assert not plt.get_fignums()
@@ -64,7 +65,7 @@ def test_short_fixed_and_empty_posteriors(tmp_path):
     assert potfile_plots.write_potfile_plots(np.empty((4, 0)), [], tmp_path) == []
     fixed = np.tile(samples[0], (10, 1))
     paths = potfile_plots.write_potfile_plots(fixed, specs, tmp_path, log=lambda _: None)
-    assert [p.name for p in paths] == ["potfile_members_prior_posterior.pdf"]
+    assert paths == []
 
 
 def test_prior_quantiles_and_density_match_sampler():
@@ -90,3 +91,24 @@ def test_corner_traces_preserve_chain_order(tmp_path):
     with pytest.raises(ValueError, match='chain-ordered'):
         potfile_plots.plot_potfile_corner(samples, specs, 'potfile_members', tmp_path/'bad.pdf', grouped_physical=grouped[::-1])
     plt.close('all')
+
+
+def test_uniform_global_prior_and_coordinate_transforms(tmp_path):
+    from lenscluster.corner_plots import DisplayPrior, display_values
+    from lenscluster.plots import plot_corner
+    specs = [SimpleNamespace(name=f'halo.{field}', field=field, component_family='large',
+                             prior_kind='uniform', lower=-1., upper=1., transform_kind='identity')
+             for field in ('x', 'y')]
+    draws = np.random.default_rng(4).uniform(-.8, .8, (100, 2))
+    path = plot_corner(draws, specs, tmp_path/'global.pdf', best=draws[0])
+    assert path.is_file()
+    assert 'support boundary' in json.loads(path.with_suffix('.json').read_text())['uniform_joint_prior']
+    spec = SimpleNamespace(prior_kind='normal', mean=0., std=1., transform_kind='affine',
+                           transform_offset=10., transform_scale=2.)
+    prior = DisplayPrior(spec)
+    np.testing.assert_allclose(prior.ppf(np.array([.5])), [10.])
+    np.testing.assert_allclose(prior.pdf(10.), 1/(2*np.sqrt(2*np.pi)))
+    spec.transform_kind = 'log_positive'
+    prior = DisplayPrior(spec)
+    np.testing.assert_allclose(prior.pdf(0.), np.log(10)/np.sqrt(2*np.pi))
+    np.testing.assert_allclose(display_values(np.array([1., 10.]), spec), [0., 1.])
