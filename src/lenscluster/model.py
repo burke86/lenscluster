@@ -234,7 +234,7 @@ class ModelState:
     sigma_def_param_index: int = -1              # residual deflection scatter, isotropic in the source plane
     sigma_extra_param_index: int = -1            # extra measurement scatter added in quadrature to sigma_inst; -1 when absent
     sigma_sel_param_index: int = -1              # feature-selection scatter; -1 when the term is disabled
-    sigma_res_arcsec: float = 0.0                # PSF sigma of the marking images (the resolution weight of the selection term)
+    lambda_sel_param_index: int = -1             # stretching scale of the selection weight R = (I + A A^T / lambda_sel^2)^-1; -1 with the term
     freeze_determinant_gradient: bool = False    # hold grad det A fixed in the backward pass (LikelihoodConfig)
     dropped_member_ids: tuple[str, ...] = ()  # catalog members removed from the lens model (members.min_deflection_arcsec)
     initial_theta: np.ndarray | None = None

@@ -311,11 +311,12 @@ class LikelihoodConfig:
     sigma_extra_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.05, log_sigma=1.0, upper=1.0))
     # Residual deflection error, isotropic in the source plane (arcsec, log-normal).
     sigma_def_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.1, log_sigma=1.0, upper=1.0))
-    # Feature-selection scatter, isotropic in the source plane for a resolved feature and weighted by
-    # R = (I + (sigma_res / sigma_sel)^2 A A^T)^-1 where the feature is unresolved (arcsec, log-normal).  None disables the term.
+    # Feature-selection scatter sigma_sel (arcsec, log-normal) in the source plane, weighted by the stretching through
+    # R = (I + A A^T / lambda_sel^2)^-1 (the paper's Eq. selection_weight): the selection variance is halved where the
+    # absolute Jacobian eigenvalue equals lambda_sel.  None disables the term.
     sigma_sel_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.04, log_sigma=1.0, upper=1.0))
-    sigma_res_arcsec: float = 0.06            # Gaussian sigma of the PSF of the images the positions were marked on (FWHM / 2.355):
-                                              # 0.06" for HST WFC3/IR F160W, 0.03" for JWST NIRCam F200W; only used with sigma_sel
+    # The dimensionless stretching scale lambda_sel of the selection term (log-normal), sampled with sigma_sel.
+    lambda_sel_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.7, log_sigma=1.0))
     source_position_prior_mean_arcsec: tuple[float, float] = (0.0, 0.0)
     source_position_prior_sigma_arcsec: float = 100.0
     # Hold grad det A (the third derivatives of the potential) fixed in the backward pass.  The log-likelihood is unchanged;
@@ -491,11 +492,14 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("likelihood.likelihood_mode must be 'smoothed', 'source-anisotropic' or 'source-isotropic'.")
     for label, prior in (("likelihood.sigma_def_prior", config.likelihood.sigma_def_prior),
                          ("likelihood.sigma_extra_prior", config.likelihood.sigma_extra_prior),
-                         ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior)):
+                         ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior),
+                         ("likelihood.lambda_sel_prior", config.likelihood.lambda_sel_prior)):
         if prior is None:
             continue
+        if not isinstance(prior, LogNormalPriorConfig):
+            raise ValueError(f"{label} must be a LogNormalPriorConfig.")
         if float(prior.median) <= 0.0 or float(prior.log_sigma) <= 0.0:
-            raise ValueError(f"{label} must have a positive median (arcsec) and log_sigma.")
+            raise ValueError(f"{label} must have a positive median and log_sigma.")
         if prior.upper is not None and float(prior.upper) <= float(prior.median):
             raise ValueError(f"{label}.upper must exceed the median.")
     if scaling.member_deviation not in {"sigma", "mass", "sigma_rcut", "mass_rcut"}:
@@ -522,8 +526,6 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     _positive("source_position_prior_sigma_arcsec", likelihood.source_position_prior_sigma_arcsec)
     if likelihood.sigma_inst_arcsec is not None:
         _positive("sigma_inst_arcsec", likelihood.sigma_inst_arcsec)
-    if not math.isfinite(float(likelihood.sigma_res_arcsec)) or likelihood.sigma_res_arcsec < 0.0:
-        raise ValueError("likelihood.sigma_res_arcsec must be finite and nonnegative.")
     diagnostics = config.image_diagnostics
     count = diagnostics.posterior_diagnostic_draws
     if isinstance(count, bool) or not isinstance(count, Integral) or count < 0:

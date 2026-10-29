@@ -59,16 +59,18 @@ def test_sigma_extra_adds_in_quadrature_to_sigma_inst(synthetic_config):
 def test_sigma_sel_is_sampled_by_default_and_absent_when_disabled(synthetic_config):
     disabled = build_state(replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, sigma_sel_prior=None)))
     assert disabled.sigma_sel_param_index == -1 and not any(s.field == "sigma_sel" for s in disabled.parameter_specs)
-    enabled = replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, sigma_res_arcsec=0.03)).validate()
+    assert disabled.lambda_sel_param_index == -1 and not any(s.field == "lambda_sel" for s in disabled.parameter_specs)
+    enabled = replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, lambda_sel_prior=LogNormalPriorConfig(median=0.5, log_sigma=0.7))).validate()
     state = build_state(enabled)
-    index = state.sigma_sel_param_index
-    assert state.parameter_specs[index].name == "images.sigma_sel" and state.sigma_res_arcsec == 0.03
+    index, lam_index = state.sigma_sel_param_index, state.lambda_sel_param_index
+    assert state.parameter_specs[index].name == "images.sigma_sel" and state.parameter_specs[lam_index].name == "images.lambda_sel"
+    assert state.parameter_specs[lam_index].physical_mean == 0.5
     evaluator = Evaluator(state)
     theta = np.asarray(state.initial_theta).copy()
     stats = evaluator.statistics(jnp.asarray(theta))
-    assert float(stats["sigma_sel"]) > 0 and np.isfinite(float(evaluator.loglike(jnp.asarray(theta))))
+    assert float(stats["sigma_sel"]) > 0 and float(stats["lambda_sel"]) > 0 and np.isfinite(float(evaluator.loglike(jnp.asarray(theta))))
     value, grad = evaluator.value_and_grad(jnp.asarray(theta))
-    assert np.isfinite(float(value)) and float(grad[index]) != 0.0
+    assert np.isfinite(float(value)) and float(grad[index]) != 0.0 and float(grad[lam_index]) != 0.0
 
 
 def test_frozen_determinant_gradient_keeps_the_value_and_nearly_the_gradient(synthetic_config):

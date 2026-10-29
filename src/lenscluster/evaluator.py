@@ -59,11 +59,11 @@ class Evaluator:
         self.far_field_barrier_width = float(members.far_field_barrier_width)
         self.far_field_barrier_strength = float(members.far_field_barrier_strength)
         self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index = int(state.sigma_def_param_index), int(state.sigma_extra_param_index), int(state.sigma_sel_param_index)
-        self.sigma_res = float(state.sigma_res_arcsec)
+        self.lambda_sel_index = int(state.lambda_sel_param_index)
         self.freeze_determinant_gradient = bool(state.freeze_determinant_gradient)
         self.scale_indices = jnp.asarray(sorted({self.sigma_def_index} | {int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
                                                 | {int(i) for i in np.asarray(members.radius_scatter_param_index) if i >= 0}
-                                                | {i for i in (self.sigma_extra_index, self.sigma_sel_index) if i >= 0}), dtype=jnp.int32)
+                                                | {i for i in (self.sigma_extra_index, self.sigma_sel_index, self.lambda_sel_index) if i >= 0}), dtype=jnp.int32)
         # Components whose geometry (centre, ellipticity) never changes: catalog members.  Their geometry at the image
         # positions is a constant of the computation and is precomputed once.
         packed_spec = state.packed_lens_spec
@@ -348,9 +348,10 @@ class Evaluator:
         sigma_def = physical[self.sigma_def_index]
         sigma_extra = physical[self.sigma_extra_index] if self.sigma_extra_index >= 0 else zero
         sigma_sel = physical[self.sigma_sel_index] if self.sigma_sel_index >= 0 else zero
+        lambda_sel = physical[self.lambda_sel_index] if self.lambda_sel_index >= 0 else jnp.asarray(1.0, dtype=jnp.float64)
         sigma_meas = jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_extra))   # the instrumental error is the floor
         jacobian = jnp.zeros_like(fields["jacobian"]) if isotropic else fields["jacobian"]
-        cov = sl.source_covariance(jacobian, sigma_meas, sigma_def, sigma_sel, self.sigma_res)
+        cov = sl.source_covariance(jacobian, sigma_meas, sigma_def, sigma_sel, lambda_sel)
         whitening = sl.source_whitening(fields["backprojected"], cov["covariance"], images.family_index_per_image, images.n_families)
         coordinates = jnp.stack((params[images.source_x_param_index], params[images.source_y_param_index]), -1)
         transported = sl.transport_sources(coordinates, whitening, jnp.asarray(members.source_prior_mean), members.source_prior_sigma)
@@ -359,12 +360,13 @@ class Evaluator:
         if self.freeze_determinant_gradient:
             determinant_gradient = jax.lax.stop_gradient(determinant_gradient)
         stats = sl.statistics(fields["backprojected"], source[images.family_index_per_image], jacobian,
-                              determinant_gradient, sigma_meas, sigma_def, sigma_sel, self.sigma_res, parity=images.parity)
+                              determinant_gradient, sigma_meas, sigma_def, sigma_sel, lambda_sel, parity=images.parity)
         if isotropic or self.likelihood_mode == "source-anisotropic":   # Gaussian source-plane term only: no determinant factor
             stats["loglike"] = stats["gaussian_loglike"]
             stats["valid"] = cov["valid"] & jnp.all(jnp.isfinite(stats["residual"]), axis=-1)
         stats.update(source_by_family=source, source_correction=transported["log_correction"], whitening=whitening,
                      transport_valid=transported["valid"], sigma_def=sigma_def, sigma_extra=sigma_extra, sigma_meas=sigma_meas, sigma_sel=sigma_sel,
+                     lambda_sel=lambda_sel,
                      fields=fields, physical=physical)
         return stats
 

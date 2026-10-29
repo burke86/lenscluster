@@ -8,8 +8,9 @@ profiles the solver knows are registered in `lenscluster/profiles.py`. The likel
 image is ray-traced to the source plane, the source-plane residual is compared with a
 Gaussian whose covariance is the paper's C = sigma_meas^2 A A^T + sigma_def^2 I + sigma_sel^2 R
 (the propagated measurement error with sigma_meas^2 = sigma_inst^2 + sigma_extra^2, an isotropic
-residual-deflection scatter, and an optional feature-selection term weighted by the resolution
-sigma_res; `LikelihoodConfig`), and the conditional expectation of the absolute Jacobian
+residual-deflection scatter, and a feature-selection term sigma_sel^2 R with the stretching
+weight R = (I + A A^T / lambda_sel^2)^-1, sigma_sel and lambda_sel sampled; `LikelihoodConfig`),
+and the conditional expectation of the absolute Jacobian
 determinant normalizes the density. Members far from every image are evaluated with the circular
 far-field series of the dPIE; members close to an image use the exact profile.
 

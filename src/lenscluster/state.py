@@ -167,8 +167,8 @@ ERROR_SCALE_FLOOR_ARCSEC = 1.0e-4
 
 
 def _error_scale_spec(name: str, sample_name: str, potential_id: str, field: str, prior) -> ParameterSpec:
-    """A sampled error scale (sigma_def, sigma_extra, sigma_sel): log-normal in the log coordinate, truncated
-    above at ``prior.upper`` arcsec when given so the sampler cannot inflate the errors until the likelihood goes flat."""
+    """A sampled error scale (sigma_def, sigma_extra, sigma_sel, lambda_sel): log-normal in the log coordinate, truncated
+    above at ``prior.upper`` when given so the sampler cannot inflate the errors until the likelihood goes flat."""
     if prior.upper is None:
         return ParameterSpec(name=name, sample_name=sample_name, potential_id=potential_id, profile_type=0, field=field,
                              prior_kind="normal", lower=-math.inf, upper=math.inf, step=0.1,
@@ -636,13 +636,15 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 centered=False, scale_site_name=specs[int(scale_index[component])].sample_name))
     sigma_def_index = len(specs)
     specs.append(_error_scale_spec("images.sigma_def", "images_sigma_def", "images", "sigma_def", config.likelihood.sigma_def_prior))
-    sigma_extra_index = sigma_sel_index = -1
+    sigma_extra_index = sigma_sel_index = lambda_sel_index = -1
     if config.likelihood.sigma_extra_prior is not None:
         sigma_extra_index = len(specs)
         specs.append(_error_scale_spec("images.sigma_extra", "images_sigma_extra", "images", "sigma_extra", config.likelihood.sigma_extra_prior))
     if config.likelihood.sigma_sel_prior is not None:
         sigma_sel_index = len(specs)
         specs.append(_error_scale_spec("images.sigma_sel", "images_sigma_sel", "images", "sigma_sel", config.likelihood.sigma_sel_prior))
+        lambda_sel_index = len(specs)
+        specs.append(_error_scale_spec("images.lambda_sel", "images_lambda_sel", "images", "lambda_sel", config.likelihood.lambda_sel_prior))
 
     families = build_family_data(images_df, sigma_inst_arcsec, reference)
     source_param_indices: dict[str, tuple[int, int]] = {}
@@ -713,7 +715,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         members=members, z_source_values=z_values, dpie_sigma0_factor_by_z=factor_by_z,
         log_softening_length_param_index=int(log_softening_index), sigma_def_param_index=int(sigma_def_index),
         sigma_extra_param_index=int(sigma_extra_index), sigma_sel_param_index=int(sigma_sel_index),
-        sigma_res_arcsec=float(config.likelihood.sigma_res_arcsec), freeze_determinant_gradient=bool(config.likelihood.freeze_determinant_gradient),
+        lambda_sel_param_index=int(lambda_sel_index), freeze_determinant_gradient=bool(config.likelihood.freeze_determinant_gradient),
         dropped_member_ids=dropped,
         scaling_priors={k: float(getattr(scaling, k)) for k in ("alpha_sigma_prior_mean", "alpha_sigma_prior_std",
                                                                  "beta_radius_prior_mean", "beta_radius_prior_std")})

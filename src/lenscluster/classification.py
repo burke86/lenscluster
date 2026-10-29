@@ -97,8 +97,9 @@ def member_field_terms(state: ModelState, evaluator: Evaluator, physical: np.nda
         jnp.take(packed.Rs, components))[0])                             # (M, N, 2) circular series
     a = np.asarray(fields["jacobian"])
     sigma_sel = float(physical[state.sigma_sel_param_index]) if state.sigma_sel_param_index >= 0 else 0.0
+    lambda_sel = float(physical[state.lambda_sel_param_index]) if state.lambda_sel_param_index >= 0 else 1.0
     covariance = np.asarray(sl.source_covariance(a, np.asarray(state.images.sigma_inst_per_image), float(physical[state.sigma_def_param_index]),
-                                                 sigma_sel, state.sigma_res_arcsec)["covariance"])
+                                                 sigma_sel, lambda_sel)["covariance"])
     precision = np.linalg.inv(covariance)
     error = exact_alpha - circular_alpha
     error = np.where(np.isfinite(error), error, np.inf)

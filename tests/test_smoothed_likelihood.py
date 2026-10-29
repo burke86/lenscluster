@@ -187,19 +187,21 @@ def test_zero_mean_analytic_gradient_and_curvature(parity):
 
 
 def test_selection_term_eigenvalues_and_switch_off():
-    """sigma_sel^2 R has eigenvalues sigma_sel^2 s^2 / (s^2 + sigma_res^2 lambda^2) along the Jacobian's principal directions
-    (s = sigma_sel) and vanishes when sigma_sel = 0."""
+    """sigma_sel^2 R has eigenvalues sigma_sel^2 / (1 + lambda^2 / lambda_sel^2) along the Jacobian's principal directions
+    (half the variance where |lambda| = lambda_sel) and vanishes when sigma_sel = 0."""
     a = np.array([[0.1, 0.0], [0.0, 2.0]])            # tangential stretch 10x, radial compression 2x
-    meas, de, sel, res = 0.05, 0.02, 0.04, 0.06
+    meas, de, sel, res = 0.05, 0.02, 0.04, 0.6
     cov = np.asarray(source_covariance(a[None], meas, de, sel, res)["covariance"][0])
-    expected = np.diag([meas**2 * 0.1**2 + de**2 + sel**2 * sel**2 / (sel**2 + res**2 * 0.1**2),
-                        meas**2 * 2.0**2 + de**2 + sel**2 * sel**2 / (sel**2 + res**2 * 2.0**2)])
+    expected = np.diag([meas**2 * 0.1**2 + de**2 + sel**2 / (1 + 0.1**2 / res**2),
+                        meas**2 * 2.0**2 + de**2 + sel**2 / (1 + 2.0**2 / res**2)])
     np.testing.assert_allclose(cov, expected, rtol=1e-12)
+    half = np.asarray(source_covariance(np.diag([res, res])[None], 0.0, 0.0, sel, res)["covariance"][0])
+    np.testing.assert_allclose(half, np.diag([sel**2 / 2, sel**2 / 2]), rtol=1e-12)
     off = np.asarray(source_covariance(a[None], meas, de, 0.0, res)["covariance"][0])
     np.testing.assert_allclose(off, np.diag([meas**2 * 0.01 + de**2, meas**2 * 4.0 + de**2]), rtol=1e-12)
     # the determinant conditioning stays the exact Gaussian conditioning with the selection term in C
     args = fixture_arrays()
-    out = statistics(**args, sigma_sel=sel, sigma_res=res)
+    out = statistics(**args, sigma_sel=sel, lambda_sel=res)
     for i in range(4):
         a_i, grad = args["jacobian"][i], args["determinant_gradient"][i]
         c = np.asarray(source_covariance(a_i[None], args["sigma_meas"][i], args["sigma_def"], sel, res)["covariance"][0])
@@ -207,3 +209,16 @@ def test_selection_term_eigenvalues_and_switch_off():
         f = args["backprojected"][i] - args["source"][i]
         np.testing.assert_allclose(out["determinant_mean"][i], np.linalg.det(a_i) + cross @ np.linalg.solve(c, f), rtol=1e-10)
         np.testing.assert_allclose(out["determinant_variance"][i], args["sigma_meas"][i]**2 * grad @ grad - cross @ np.linalg.solve(c, cross), rtol=1e-9)
+
+
+def test_smoothed_likelihood_with_exact_determinant_is_the_image_plane_gaussian():
+    """With sigma_def = sigma_sel = 0 and |det A| in place of h_i the smoothed likelihood is
+    -0.5 |A^-1 F|^2 / sigma_meas^2 - ln(2 pi sigma_meas^2)."""
+    args = fixture_arrays()
+    args["sigma_def"] = 0.0
+    out = statistics(**args)
+    for i in range(4):
+        a, f, sigma = args["jacobian"][i], args["backprojected"][i] - args["source"][i], args["sigma_meas"][i]
+        expected = -0.5 * np.sum(np.linalg.solve(a, f) ** 2) / sigma ** 2 - np.log(2 * np.pi * sigma ** 2)
+        actual = float(out["gaussian_loglike"][i]) + np.log(abs(np.linalg.det(a)))
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)

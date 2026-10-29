@@ -111,12 +111,13 @@ def reporting_fields(evaluator, theta):
     sigma_def = physical[state.sigma_def_param_index]
     extra = physical[state.sigma_extra_param_index] if state.sigma_extra_param_index >= 0 else 0.
     sel = physical[state.sigma_sel_param_index] if state.sigma_sel_param_index >= 0 else 0.
+    lam = physical[state.lambda_sel_param_index] if state.lambda_sel_param_index >= 0 else 1.
     meas = jnp.sqrt(images.sigma_inst_per_image**2 + extra**2)
-    covariance = sl.source_covariance(sampled['jacobian'], meas, sigma_def, sel, state.sigma_res_arcsec)['covariance']
+    covariance = sl.source_covariance(sampled['jacobian'], meas, sigma_def, sel, lam)['covariance']
     whitening = sl.source_whitening(sampled['backprojected'], covariance, images.family_index_per_image, images.n_families)
     coordinates = jnp.stack((theta[images.source_x_param_index], theta[images.source_y_param_index]), -1)
     sources = sl.transport_sources(coordinates, whitening, jnp.asarray(state.members.source_prior_mean), state.members.source_prior_sigma)['source']
-    exact_cov = sl.source_covariance(exact['jacobian'], meas, sigma_def, sel, state.sigma_res_arcsec)['covariance']
+    exact_cov = sl.source_covariance(exact['jacobian'], meas, sigma_def, sel, lam)['covariance']
     solve = lambda v, cov: jnp.linalg.solve(jnp.linalg.cholesky(cov), v[..., None])[..., 0]
     residual = exact['backprojected'] - sources[images.family_index_per_image]
     difference = sampled['backprojected'] - exact['backprojected']
