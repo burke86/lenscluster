@@ -27,10 +27,8 @@ ARC_DIRECTION_COLOR = "#FFB454"
 ARC_STICK_LENGTH_ARCSEC = 3.0  # Fixed display length: direction only, not magnification.
 
 
-def arc_direction_table(evaluator: Evaluator, theta: np.ndarray, catalog: pd.DataFrame) -> pd.DataFrame:
-    """Exact image-plane minimum right-singular vectors, matched by stable image label."""
-    fields = evaluator.fields(evaluator.physical(theta), force_exact=True, derivative=False)
-    jacobian = np.asarray(fields["jacobian"], dtype=float)
+def _stretch_directions(jacobian):
+    jacobian = np.asarray(jacobian, dtype=float)
     if not np.isfinite(jacobian).all():
         raise ValueError("Nonfinite exact Jacobian in arc-direction overlay")
     _, singular, vh = np.linalg.svd(jacobian)
@@ -40,6 +38,13 @@ def arc_direction_table(evaluator: Evaluator, theta: np.ndarray, catalog: pd.Dat
     directions *= sign[:, None]
     defined = ~np.isclose(singular[:, 0], singular[:, 1], rtol=1e-10, atol=1e-14)
     directions[~defined] = np.nan
+    return directions, singular, defined
+
+
+def arc_direction_table(evaluator: Evaluator, theta: np.ndarray, catalog: pd.DataFrame) -> pd.DataFrame:
+    """Exact image-plane minimum right-singular vectors, matched by stable image label."""
+    fields = evaluator.fields(evaluator.physical(theta), force_exact=True, derivative=False)
+    directions, singular, defined = _stretch_directions(fields["jacobian"])
     images = evaluator.state.images
     labels = list(map(str, images.image_labels))
     if len(set(labels)) != len(labels) or catalog["image_label"].astype(str).duplicated().any():
@@ -47,6 +52,27 @@ def arc_direction_table(evaluator: Evaluator, theta: np.ndarray, catalog: pd.Dat
     result = pd.DataFrame(dict(image_label=labels, e_arc_x=directions[:, 0], e_arc_y=directions[:, 1],
                                s_arc=singular[:, 1], s_perp=singular[:, 0], direction_defined=defined))
     result = result.set_index("image_label").loc[catalog["image_label"].astype(str)].reset_index()
+    return result
+
+
+def extra_arc_direction_table(evaluator: Evaluator, theta: np.ndarray, extra: pd.DataFrame) -> pd.DataFrame:
+    """Exact stretch directions at extra-image positions and their own family redshifts."""
+    result = extra.copy().reset_index(drop=True)
+    for column in ("e_arc_x", "e_arc_y", "s_arc", "s_perp"):
+        result[column] = np.nan
+    result["direction_defined"] = False
+    if result.empty:
+        return result
+    families = {str(f.family_id): f for f in evaluator.state.family_data}
+    physical = evaluator.physical(theta)
+    for family_id, rows in result.groupby("family_id", sort=False):
+        family = families[str(family_id)]
+        packed = evaluator.packed_state_for_z(physical, float(family.z_source))
+        _, u = evaluator.total_fields_at(rows[["x_model_arcsec", "y_model_arcsec"]].to_numpy(float), packed)
+        directions, singular, defined = _stretch_directions(np.eye(2) - u)
+        result.loc[rows.index, ["e_arc_x", "e_arc_y"]] = directions
+        result.loc[rows.index, ["s_arc", "s_perp"]] = singular[:, ::-1]
+        result.loc[rows.index, "direction_defined"] = defined
     return result
 
 
@@ -167,7 +193,7 @@ def convergence_maps(evaluator: Evaluator, theta: np.ndarray, geometry: dict[str
                               truth_path=str(kappa_true_fits) if kappa_true_fits else None)
 
 
-def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra, geometry, *, arc_directions=None,
+def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra, geometry, *, arc_directions=None, extra_directions=None,
                   max_side_pixels: int | None = 3200) -> None:
     """RGB overview with recovery-status circles, scale bar and compass on the solver-aligned grid."""
     rgb = cutouts.rgb_cutout(images, bands, display, geometry["center"], geometry["size"])
@@ -186,6 +212,9 @@ def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra
     if arc_directions is not None:
         xy = catalog[["x_obs_arcsec", "y_obs_arcsec"]].to_numpy(float)
         directions = arc_directions[["e_arc_x", "e_arc_y"]].to_numpy(float)
+        if extra_directions is not None and not extra_directions.empty:
+            xy = np.vstack((xy, extra_directions[["x_model_arcsec", "y_model_arcsec"]].to_numpy(float)))
+            directions = np.vstack((directions, extra_directions[["e_arc_x", "e_arc_y"]].to_numpy(float)))
         for center, direction in zip(xy, directions):
             if not np.isfinite(direction).all():
                 continue
@@ -211,14 +240,12 @@ def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra
         end = compass + direction * 0.055 * n
         ax.annotate("", end, compass, arrowprops=dict(arrowstyle="->", color="white", lw=1.0))
         ax.text(*(end + direction * 0.018 * n), label, color="white", fontsize=9, ha="center", va="center")
-    handles = [Line2D([], [], marker="o", ls="none", mfc="none", mec="tab:blue", ms=6, label="Recovered image")]
-    if (~valid).any():
-        handles.append(Line2D([], [], marker="o", ls="none", mfc="none", mec="tab:red", ms=6, label="Missed image"))
-    if extra is not None and not extra.empty:
-        handles.append(Line2D([], [], marker="o", ls="none", mfc="none", mec="tab:purple", ms=6, label="Extra image"))
+    handles = [Line2D([], [], marker="o", ls="none", mfc="none", mec=color, ms=6, label=label)
+               for color, label in (("tab:blue", "Recovered image"), ("tab:purple", "Extra image"),
+                                    ("tab:red", "Missed image"))]
     if arc_directions is not None:
         handles.append(Line2D([], [], color=ARC_DIRECTION_COLOR, lw=.8, alpha=.9,
-                              label="Image stretch"))
+                              label="Stretching direction"))
     ax.legend(handles=handles, loc="upper right", bbox_to_anchor=(0.985, 0.985), fontsize=7, labelcolor="white", frameon=True,
               facecolor="black", edgecolor="none", framealpha=0.65, borderpad=0.6, handletextpad=0.5, handlelength=1.2)
 
@@ -230,6 +257,7 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
     display_image = images[cutouts.rgb_reference_band(bands)]
     geometry = overview_geometry(display_image, catalog, extra, evaluator.state.reference)
     arc_directions = arc_direction_table(evaluator, theta, catalog)
+    extra_directions = extra_arc_direction_table(evaluator, theta, extra if extra is not None else pd.DataFrame())
     model, truth, physical = convergence_maps(evaluator, theta, geometry, z_source, kappa_true_fits)
     sigma_crit = physical["sigma_crit_msun_per_kpc2"]
     sigma_angle = sigma_crit * physical["kpc_per_arcsec"] ** 2
@@ -248,6 +276,7 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
         provenance[f"{name}_mass_in_window_msun"] = total
     tables_dir.mkdir(parents=True, exist_ok=True)
     arc_directions.to_csv(tables_dir / "image_catalog_arc_directions.csv", index=False)
+    extra_directions.to_csv(tables_dir / "image_catalog_extra_arc_directions.csv", index=False)
     provenance["arc_directions"] = {"kernel": "exact", "redshift": "per image", "vector": "minimum right-singular vector",
                                    "stick_length_arcsec": ARC_STICK_LENGTH_ARCSEC, "length_encodes_strength": False,
                                    "defined_count": int(arc_directions["direction_defined"].sum())}
@@ -261,7 +290,8 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
     fig = plt.figure(figsize=(7.1, 7.1), facecolor="white")
     grid = fig.add_gridspec(2, 2, width_ratios=[3.2, 1], height_ratios=[3.2, 1], left=0.09, right=0.95, bottom=0.10, top=0.96, wspace=0.025, hspace=0.025)
     ax = fig.add_subplot(grid[0, 0])
-    overview_axes(fig, ax, images, bands, display, display_image, catalog, extra, geometry, arc_directions=arc_directions)
+    overview_axes(fig, ax, images, bands, display, display_image, catalog, extra, geometry,
+                  arc_directions=arc_directions, extra_directions=extra_directions)
     lower, right, corner = fig.add_subplot(grid[1, 0]), fig.add_subplot(grid[0, 1]), fig.add_subplot(grid[1, 1])
     levels = CONTOUR_LEVELS_MSUN_PER_KPC2
 

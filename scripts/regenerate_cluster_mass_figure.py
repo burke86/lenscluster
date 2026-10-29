@@ -58,7 +58,7 @@ def main():
     np.testing.assert_allclose(evaluator.reported_physical(theta), posterior.physical[best_index], rtol=1e-10, atol=1e-10)
     catalog = pd.read_csv(final / "tables" / "image_fit_quality.csv", dtype={"image_label": str})
     try:
-        extra = pd.read_csv(final / "tables" / "image_recovery_extra_images.csv")
+        extra = pd.read_csv(final / "tables" / "image_recovery_extra_images.csv", dtype={"family_id": str})
     except pd.errors.EmptyDataError:
         extra = pd.DataFrame()  # No extra images were recovered in this saved run.
     imaging = load_cluster_imaging(config.image_catalog, config.model, config.paths.run_name)
