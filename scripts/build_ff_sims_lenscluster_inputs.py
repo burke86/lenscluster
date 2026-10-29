@@ -173,8 +173,8 @@ CONFIGS = {
         cosmology_omega_m=0.24,
         expected_n_images=65,
         expected_n_image_families=19,
-        expected_n_members=334,
-        expected_n_skipped_members=6,
+        expected_n_members=340,
+        expected_n_skipped_members=0,
     ),
 }
 
@@ -240,7 +240,7 @@ def _parse_finite_float(value: str) -> float | None:
     return parsed
 
 
-def _read_plain_members(path: Path) -> tuple[list[MemberRow], int]:
+def _read_plain_members(path: Path, *, position_fallback: dict[str, MemberShape] | None = None) -> tuple[list[MemberRow], int]:
     rows: list[MemberRow] = []
     skipped = 0
     for parts in _iter_data_rows(path):
@@ -252,6 +252,14 @@ def _read_plain_members(path: Path) -> tuple[list[MemberRow], int]:
         f160w_mag = float(parts[9])
         source_x = _parse_finite_float(parts[1])
         source_y = _parse_finite_float(parts[2])
+        fallback = (position_fallback or {}).get(object_id)
+        if fallback is not None:
+            # galcat2 uses solver x; clgal_cat uses the opposite x convention.
+            # Fill only missing coordinates, preserving every measured value.
+            if source_x is None and math.isfinite(fallback.x_arcsec):
+                source_x = -fallback.x_arcsec
+            if source_y is None and math.isfinite(fallback.y_arcsec):
+                source_y = fallback.y_arcsec
         if source_x is None or source_y is None:
             skipped += 1
             continue
@@ -359,12 +367,16 @@ def _prepare_cats_members(members: list[MemberRow], config: FFSimConfig) -> list
 
 
 def _read_members(cluster_dir: Path, config: FFSimConfig) -> tuple[list[MemberRow], int]:
-    members, skipped = _read_plain_members(cluster_dir / config.members_name)
     shaped_path = cluster_dir / config.shaped_members_name if config.shaped_members_name else None
-    if shaped_path is not None and shaped_path.is_file():
+    shapes = _read_member_shapes(shaped_path) if shaped_path is not None and shaped_path.is_file() else []
+    by_id = {shape.object_id: shape for shape in shapes}
+    if len(by_id) != len(shapes):
+        raise ValueError(f"Duplicate member identities in {shaped_path}")
+    members, skipped = _read_plain_members(cluster_dir / config.members_name, position_fallback=by_id)
+    if shapes:
         members = _apply_matched_shapes(
             members,
-            _read_member_shapes(shaped_path),
+            shapes,
             tolerance_arcsec=config.member_shape_match_tolerance_arcsec,
         )
     return _prepare_cats_members(members, config), skipped

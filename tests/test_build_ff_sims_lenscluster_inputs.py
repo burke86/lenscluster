@@ -145,6 +145,36 @@ def test_apply_matched_shapes_requires_same_id_within_tolerance() -> None:
     assert matched[1].b_axis == pytest.approx(1.0)
 
 
+def test_missing_coordinates_use_same_id_shape_position_only(tmp_path: Path) -> None:
+    path = tmp_path / "members.txt"
+    path.write_text("\n".join([
+        "1 ************ 2 21 20 19 18 18 18 17",
+        "2 -3 ************ 21 20 19 18 18 18 17",
+        "3 -5 6 21 20 19 18 18 18 17",
+        "4 ************ 8 21 20 19 18 18 18 17",
+        "5 nan nan 21 20 19 18 18 18 17",
+    ]) + "\n")
+    fallback = {str(i): builder.MemberShape(str(i), x, y, 1, 1, 0)
+                for i, x, y in [(1, 10, 20), (2, 30, 40), (3, 50, 60), (5, float('nan'), 9)]}
+    members, skipped = builder._read_plain_members(path, position_fallback=fallback)
+    assert skipped == 2
+    assert [(m.object_id, m.x_arcsec, m.y_arcsec) for m in members] == [
+        ("1", 10, 2), ("2", 3, 40), ("3", 5, 6)]
+    assert all(m.f160w_mag == 17 for m in members)
+
+
+def test_read_members_uses_galcat_fallback_and_shapes(tmp_path: Path) -> None:
+    source = _write_ff_sims_fixture(tmp_path)
+    with (source / "hera/galcat2.txt").open("a") as stream:
+        stream.write("10 101 -4.05 0.000250 0.000125 35 20 0\n")
+    members, skipped = builder._read_members(source / "hera", builder.CONFIGS["hera"])
+    recovered = next(m for m in members if m.object_id == "10")
+    assert skipped == 0
+    assert (recovered.x_arcsec, recovered.y_arcsec) == (101, -4)
+    assert recovered.a_axis == pytest.approx(0.9)
+    assert recovered.b_axis == pytest.approx(0.45)
+
+
 def test_render_converts_catalogs_and_writes_loadable_pars(tmp_path: Path) -> None:
     source = _write_ff_sims_fixture(tmp_path / "source")
     output = tmp_path / "data" / "ff_sims"
@@ -152,8 +182,8 @@ def test_render_converts_catalogs_and_writes_loadable_pars(tmp_path: Path) -> No
     rows = builder.render(source_root=source, output_dir=output)
 
     assert {row["cluster_key"] for row in rows} == {"ares", "hera"}
-    assert {row["cluster_key"]: row["n_skipped_members"] for row in rows} == {"ares": 0, "hera": 6}
-    assert {row["cluster_key"]: row["n_members"] for row in rows} == {"ares": 334, "hera": 334}
+    assert {row["cluster_key"]: row["n_skipped_members"] for row in rows} == {"ares": 0, "hera": 0}
+    assert {row["cluster_key"]: row["n_members"] for row in rows} == {"ares": 334, "hera": 340}
     assert {row["cluster_key"]: row["n_explicit_galaxies"] for row in rows} == {"ares": 0, "hera": 0}
     assert {row["cluster_key"]: row["explicit_galaxy_ids"] for row in rows} == {
         "ares": "",
