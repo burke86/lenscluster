@@ -225,6 +225,8 @@ class SearchConfig:
     mode_margin: float = 10.0
     mode_parameter_tolerance: float = 0.05
     max_chain_modes: int = 4
+    max_median_abs_determinant: float = 10.0  # a mode whose median |det A| at the images exceeds this is degenerate (a lens so
+                                            # massive that the images are demagnified) and cannot seed chains; cluster lenses sit near 0.2
 
 
 @dataclass(frozen=True)
@@ -300,12 +302,33 @@ class ScalingModelConfig:
                    beta_radius_prior_mean=0.5, beta_radius_prior_std=0.25, beta_radius_prior_lower=0.0, beta_radius_prior_upper=1.5, **overrides)
 
 
+LIKELIHOOD_MODES = frozenset({"smoothed", "gp_image_plane", "source-anisotropic", "source-isotropic"})
+
+
 @dataclass(frozen=True)
 class LikelihoodConfig:
-    likelihood_mode: str = "smoothed"       # "smoothed" (local image-plane, the model of the paper); diagnostics only: "source-anisotropic", "source-isotropic"
+    # "smoothed" (local image-plane with per-image source-plane floors, the model of the paper); "gp_image_plane" (correlated
+    # image-plane displacements within each family, no source-plane floor); diagnostics only: "source-anisotropic",
+    # "source-isotropic".
+    likelihood_mode: str = "smoothed"
     # Source-plane positional covariance per image, C = sigma_meas^2 A A^T + sigma_def^2 I + sigma_sel^2 R (the paper's
     # Eq. position_covariance), with sigma_meas^2 = sigma_inst^2 + sigma_extra^2.
     sigma_inst_arcsec: float | None = None    # overrides the catalog's instrumental astrometric error for every image
+    # gp_image_plane only.  Image-plane displacement covariance per family
+    # S = sigma_shared^2 (K kron I) + (sigma_inst,i^2 + sigma_white^2) I with the Gaussian kernel K_ij = exp(-|theta_i - theta_j|^2 / 2 ell^2);
+    # source-plane covariance C = B S B^T + sigma_fl^2 I with B = blockdiag(A_i).  sigma_shared (log-normal) and sigma_white
+    # (half-normal) are sampled and replace sigma_extra, sigma_def and sigma_sel; ell and sigma_fl are fixed.  The prior on
+    # sigma_shared is truncated at 1": the untruncated prior puts 7e-5 of its mass there, and a 32" value carried a spurious init mode.
+    sigma_shared_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.15, log_sigma=0.5, upper=1.0))
+    sigma_white_prior_scale_arcsec: float = 0.05  # HalfNormal scale of sigma_white
+    sigma_shared_start_arcsec: float = 0.168      # start of the init search (the sigma_img posterior median of the oct31a M0416 run)
+    sigma_white_start_arcsec: float = 0.02
+    gp_correlation_length_arcsec: float = 7.0     # ell: the fixed value, or the start of the init search when ell is sampled
+    # ell is sampled (log-normal; this prior) unless the prior is None, which fixes ell at gp_correlation_length_arcsec.  The
+    # width 0.5 puts 68% of the prior between 4.2" and 11.5"; only the ~40 same-family pairs separated by 3" to 15" constrain
+    # ell, and above the 30" truncation every family's kernel is a block of ones, where ell is unidentified.
+    gp_correlation_length_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=7.0, log_sigma=0.5, upper=30.0))
+    gp_floor_arcsec: float = 0.0015               # sigma_fl, a smoothness floor only (1.5 mas)
     # Extra measurement scatter (arcsec, log-normal) added in quadrature to sigma_inst: image registration, feature
     # centring, manual marking.  None fixes the measurement error at the catalog value.
     sigma_extra_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.05, log_sigma=1.0, upper=1.0))
@@ -465,6 +488,7 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     _positive("search.mode_margin", search.mode_margin)
     _positive("search.mode_parameter_tolerance", search.mode_parameter_tolerance)
     _positive_int("search.max_chain_modes", search.max_chain_modes)
+    _positive("search.max_median_abs_determinant", search.max_median_abs_determinant)
     sampling = config.sampling
     for name in ("warmup", "samples", "max_tree_depth", "thin"):
         _positive_int(f"sampling.{name}", getattr(sampling, name))
@@ -489,12 +513,19 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     _positive("members.centering_ratio", config.members.centering_ratio)
     if config.members.classification_prior_quantile is not None and not (0.5 < float(config.members.classification_prior_quantile) < 1.0):
         raise ValueError("members.classification_prior_quantile must lie in (0.5, 1).")
-    if config.likelihood.likelihood_mode not in {"smoothed", "source-anisotropic", "source-isotropic"}:
-        raise ValueError("likelihood.likelihood_mode must be 'smoothed', 'source-anisotropic' or 'source-isotropic'.")
+    if config.likelihood.likelihood_mode not in LIKELIHOOD_MODES:
+        raise ValueError(f"likelihood.likelihood_mode must be one of {sorted(LIKELIHOOD_MODES)}.")
+    _positive("likelihood.gp_correlation_length_arcsec", config.likelihood.gp_correlation_length_arcsec)
+    _positive("likelihood.gp_floor_arcsec", config.likelihood.gp_floor_arcsec, allow_zero=True)
+    _positive("likelihood.sigma_white_prior_scale_arcsec", config.likelihood.sigma_white_prior_scale_arcsec)
+    _positive("likelihood.sigma_shared_start_arcsec", config.likelihood.sigma_shared_start_arcsec)
+    _positive("likelihood.sigma_white_start_arcsec", config.likelihood.sigma_white_start_arcsec)
     for label, prior in (("likelihood.sigma_def_prior", config.likelihood.sigma_def_prior),
                          ("likelihood.sigma_extra_prior", config.likelihood.sigma_extra_prior),
                          ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior),
-                         ("likelihood.lambda_sel_prior", config.likelihood.lambda_sel_prior)):
+                         ("likelihood.lambda_sel_prior", config.likelihood.lambda_sel_prior),
+                         ("likelihood.sigma_shared_prior", config.likelihood.sigma_shared_prior),
+                         ("likelihood.gp_correlation_length_prior", config.likelihood.gp_correlation_length_prior)):
         if prior is None:
             continue
         if not isinstance(prior, LogNormalPriorConfig):

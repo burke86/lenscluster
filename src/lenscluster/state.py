@@ -181,6 +181,13 @@ def _error_scale_spec(name: str, sample_name: str, potential_id: str, field: str
                          physical_lower=ERROR_SCALE_FLOOR_ARCSEC, physical_upper=float(prior.upper), physical_mean=float(prior.median))
 
 
+def _half_normal_scale_spec(name: str, sample_name: str, potential_id: str, field: str, scale: float) -> ParameterSpec:
+    """A sampled scale with a half-normal prior: a normal truncated at zero in the physical coordinate itself."""
+    return ParameterSpec(name=name, sample_name=sample_name, potential_id=potential_id, profile_type=0, field=field,
+                         prior_kind="truncated_normal", lower=0.0, upper=math.inf, step=0.1 * scale, mean=0.0, std=float(scale),
+                         component_family="error_scale", transform_kind="identity", physical_lower=0.0, physical_mean=0.0, physical_std=float(scale))
+
+
 def _log_positive_prior_spec(decoded: dict[str, Any], context: str, *, floor: float) -> dict[str, Any]:
     """A positive quantity sampled as its log; a plain normal prior becomes a truncated normal above ``floor``."""
     decoded_kind = str(decoded["prior_kind"])
@@ -634,17 +641,28 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 component_family="member_scatter_offset", transform_kind="identity",
                 physical_mean=0.0, physical_std=1.0, sample_site_name=site_name, sample_site_index=site_index,
                 centered=False, scale_site_name=specs[int(scale_index[component])].sample_name))
-    sigma_def_index = len(specs)
-    specs.append(_error_scale_spec("images.sigma_def", "images_sigma_def", "images", "sigma_def", config.likelihood.sigma_def_prior))
-    sigma_extra_index = sigma_sel_index = lambda_sel_index = -1
-    if config.likelihood.sigma_extra_prior is not None:
-        sigma_extra_index = len(specs)
-        specs.append(_error_scale_spec("images.sigma_extra", "images_sigma_extra", "images", "sigma_extra", config.likelihood.sigma_extra_prior))
-    if config.likelihood.sigma_sel_prior is not None:
-        sigma_sel_index = len(specs)
-        specs.append(_error_scale_spec("images.sigma_sel", "images_sigma_sel", "images", "sigma_sel", config.likelihood.sigma_sel_prior))
-        lambda_sel_index = len(specs)
-        specs.append(_error_scale_spec("images.lambda_sel", "images_lambda_sel", "images", "lambda_sel", config.likelihood.lambda_sel_prior))
+    sigma_def_index = sigma_extra_index = sigma_sel_index = lambda_sel_index = sigma_shared_index = sigma_white_index = gp_ell_index = -1
+    if config.likelihood.likelihood_mode == "gp_image_plane":
+        # Two sampled image-plane scales; the source-plane floors and the selection term do not exist in this model.
+        sigma_shared_index = len(specs)
+        specs.append(_error_scale_spec("images.sigma_shared", "images_sigma_shared", "images", "sigma_shared", config.likelihood.sigma_shared_prior))
+        sigma_white_index = len(specs)
+        specs.append(_half_normal_scale_spec("images.sigma_white", "images_sigma_white", "images", "sigma_white",
+                                             float(config.likelihood.sigma_white_prior_scale_arcsec)))
+        if config.likelihood.gp_correlation_length_prior is not None:
+            gp_ell_index = len(specs)
+            specs.append(_error_scale_spec("images.gp_ell", "images_gp_ell", "images", "gp_ell", config.likelihood.gp_correlation_length_prior))
+    else:
+        sigma_def_index = len(specs)
+        specs.append(_error_scale_spec("images.sigma_def", "images_sigma_def", "images", "sigma_def", config.likelihood.sigma_def_prior))
+        if config.likelihood.sigma_extra_prior is not None:
+            sigma_extra_index = len(specs)
+            specs.append(_error_scale_spec("images.sigma_extra", "images_sigma_extra", "images", "sigma_extra", config.likelihood.sigma_extra_prior))
+        if config.likelihood.sigma_sel_prior is not None:
+            sigma_sel_index = len(specs)
+            specs.append(_error_scale_spec("images.sigma_sel", "images_sigma_sel", "images", "sigma_sel", config.likelihood.sigma_sel_prior))
+            lambda_sel_index = len(specs)
+            specs.append(_error_scale_spec("images.lambda_sel", "images_lambda_sel", "images", "lambda_sel", config.likelihood.lambda_sel_prior))
 
     families = build_family_data(images_df, sigma_inst_arcsec, reference)
     source_param_indices: dict[str, tuple[int, int]] = {}
@@ -715,11 +733,19 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         members=members, z_source_values=z_values, dpie_sigma0_factor_by_z=factor_by_z,
         log_softening_length_param_index=int(log_softening_index), sigma_def_param_index=int(sigma_def_index),
         sigma_extra_param_index=int(sigma_extra_index), sigma_sel_param_index=int(sigma_sel_index),
-        lambda_sel_param_index=int(lambda_sel_index), freeze_determinant_gradient=bool(config.likelihood.freeze_determinant_gradient),
+        lambda_sel_param_index=int(lambda_sel_index), sigma_shared_param_index=int(sigma_shared_index), sigma_white_param_index=int(sigma_white_index),
+        gp_ell_param_index=int(gp_ell_index), gp_correlation_length_arcsec=float(config.likelihood.gp_correlation_length_arcsec),
+        gp_floor_arcsec=float(config.likelihood.gp_floor_arcsec),
+        freeze_determinant_gradient=bool(config.likelihood.freeze_determinant_gradient),
         dropped_member_ids=dropped,
         scaling_priors={k: float(getattr(scaling, k)) for k in ("alpha_sigma_prior_mean", "alpha_sigma_prior_std",
                                                                  "beta_radius_prior_mean", "beta_radius_prior_std")})
     state.initial_theta = default_theta(specs)
+    if sigma_shared_index >= 0:
+        state.initial_theta[sigma_shared_index] = float(np.log(config.likelihood.sigma_shared_start_arcsec))
+        state.initial_theta[sigma_white_index] = float(config.likelihood.sigma_white_start_arcsec)
+    if gp_ell_index >= 0:
+        state.initial_theta[gp_ell_index] = float(np.log(config.likelihood.gp_correlation_length_arcsec))
     return with_member_classes(state, exact, classification, centered=np.zeros(n_members, dtype=bool))
 
 

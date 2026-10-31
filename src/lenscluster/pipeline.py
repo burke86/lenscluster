@@ -356,6 +356,13 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         log(f"[init] log-likelihood at the start with final classes: {value:.3f}")
         if not np.isfinite(value):
             raise RuntimeError("The best mode is rejected by the likelihood after reclassification.")
+        if evaluator.gp_mode:
+            # Pre-run check of the shallow fold pairs at the start; sigma_fl is not changed here, the report says when to lower it.
+            from .gp_image_plane import shallow_fold_pair_report, shallow_fold_pairs
+            shared, white = float(config.likelihood.sigma_shared_start_arcsec), float(config.likelihood.sigma_white_start_arcsec)
+            pairs = shallow_fold_pairs(state, evaluator, theta, sigma_shared_arcsec=shared, sigma_white_arcsec=white)
+            log(shallow_fold_pair_report(pairs, evaluator.gp_floor, shared, white))
+            artifacts.write_json(paths.tables / "shallow_fold_pairs.json", {"pairs": pairs, "model": "init start", "sigma_shared_arcsec": shared, "sigma_white_arcsec": white})
         artifacts.save_state(paths.artifacts, state)
         artifacts.save_search(paths.artifacts, search)
         artifacts.save_start(paths.artifacts, theta, {"log_likelihood": value, "log_posterior": search["modes"][0]["log_posterior"],
@@ -495,7 +502,8 @@ def dry_run(config: LensClusterSolverConfig) -> dict[str, Any]:
         "stages": {"init": f"classify -> large-scale search from {config.search.n_starts} prior starts -> members with the large family frozen -> polish -> reclassify at the MAP -> start.json",
                    "final": "NUTS from the start -> posterior audit -> tables and figures"},
         "output": {"init": str(run_paths(config).init.root), "final": str(run_paths(config).final.root)},
-        "likelihood": "smoothed-local-image-plane",
+        "likelihood": {"smoothed": "smoothed-local-image-plane", "gp_image_plane": "gp-image-plane (correlated image-plane displacements per family)"}.get(
+            config.likelihood.likelihood_mode, config.likelihood.likelihood_mode),
         "parameters": int(state.n_parameters), "images": int(state.images.n_images), "families": int(state.images.n_families),
         "members": int(len(state.members.member_ids)), "components": int(len(state.base_components)),
         "provisional_classification": {"exact": classification.get("exact_count"), "mandatory": classification.get("mandatory_count"),

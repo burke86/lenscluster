@@ -42,12 +42,8 @@ def best_geometry(state, evaluator, theta):
     def evaluate(t):
         p = evaluator.physical(t)
         f = evaluator.fields(p, force_exact=True, derivative=True)
-        extra = p[evaluator.sigma_extra_index] if evaluator.sigma_extra_index >= 0 else 0.
-        sel = p[evaluator.sigma_sel_index] if evaluator.sigma_sel_index >= 0 else 0.
-        lam = p[evaluator.lambda_sel_index] if evaluator.lambda_sel_index >= 0 else 1.
-        meas = jnp.sqrt(state.images.sigma_inst_per_image**2 + extra**2)
-        c = source_covariance(f['jacobian'], meas, p[evaluator.sigma_def_index], sel, lam)['covariance']
-        return p, f['backprojected'], f['jacobian'], f['jacobian_spatial_derivative'], c, meas
+        c = evaluator.per_image_covariance(p, f['jacobian'])['covariance']
+        return p, f['backprojected'], f['jacobian'], f['jacobian_spatial_derivative'], c, evaluator.error_scales(p)['sigma_meas']
     p, beta, a, b, c, meas = map(np.asarray, evaluate(jnp.asarray(theta)))
     _, singular, vh = np.linalg.svd(a)
     directions = vh[:, ::-1, :].transpose(0, 2, 1)

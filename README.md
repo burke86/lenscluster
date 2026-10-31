@@ -14,6 +14,46 @@ and the conditional expectation of the absolute Jacobian
 determinant normalizes the density. Members far from every image are evaluated with the circular
 far-field series of the dPIE; members close to an image use the exact profile.
 
+`LikelihoodConfig(likelihood_mode="gp_image_plane")` (`run.xsh ... --likelihood gp_image_plane`) selects
+a second position likelihood with no source-plane floor (`lenscluster/gp_image_plane.py`). Within a
+family the image-plane displacements are correlated, S = sigma_shared^2 (K kron I) + (sigma_inst^2 +
+sigma_white^2) I with the Gaussian kernel K_ij = exp(-|theta_i - theta_j|^2 / 2 ell^2), and the stacked
+source-plane residuals have covariance C = B S B^T + sigma_fl^2 I with B = blockdiag(A_i). One
+Cholesky factor of C per family gives the Gaussian term and the conditional of the source position
+that the whitened source offsets use; the determinant factor keeps its per-image form on the
+diagonal block of C. The sampled error scales are sigma_shared (log-normal, median 0.15", width 0.5,
+truncated at 1", started at 0.168"), sigma_white (half-normal, scale 0.05", started at 0.02") and the
+correlation length ell (`images.gp_ell`, log-normal, median 7", width 0.5, truncated at 30", started at
+`gp_correlation_length_arcsec`); `gp_correlation_length_prior=None` fixes ell at that value instead.
+sigma_fl (1.5 mas) is fixed. sigma_def, sigma_extra, sigma_sel and lambda_sel do not exist in this model.
+
+The init search (both likelihoods) maximizes the posterior density in the physical source coordinates:
+the volume factor log|det L_beta| of the source transport, which NUTS needs, is left out of the search
+target (`Evaluator.search_log_likelihood`). That factor grows without bound with the magnification and
+gave the joint density a spurious mode at a lens so massive that every image was demagnified
+(M0416, 256 starts: +393 against -1213 at the physical mode). As a safety net a mode whose median
+|det A| at the images exceeds `SearchConfig.max_median_abs_determinant` (10; cluster lenses sit near
+0.2) is logged as degenerate and cannot seed chains. The init stage logs the own depth
+c Delta^2 / 8 and depth error of every mutual-nearest opposite-parity pair closer than 3" and
+writes `init/tables/shallow_fold_pairs.json`; it does not change sigma_fl. The same table for a
+saved run, with the planned rho, ell and sigma_fl:
+
+```bash
+/home/dutra/.conda/envs/lenstronomy/bin/python scripts/check_shallow_fold_pairs.py RUN_DIRECTORY --floor 0.0005
+```
+
+GP runs automatically write three diagnostics to `final/figures` when plot output is enabled:
+`gp_kernel_sky.pdf` (positions and links colored by total displacement correlation),
+`gp_shared_vs_white.pdf` (relative-displacement noise and a joint uncertainty ellipse),
+and `gp_scale_posteriors.pdf` (shared and white amplitude posteriors in mas).
+Filenames use the configured figure prefix. These plots need only the current run;
+they contain no fold-sample position panels or old-run comparisons.
+Regenerate them from a saved run with:
+
+```bash
+/home/dutra/.conda/envs/lenstronomy/bin/python scripts/make_gp_illustrations.py GP_RUN
+```
+
 ## Running a cluster
 
 ```bash
@@ -225,9 +265,11 @@ not catalog morphology classifications. Adjust
 `<prefix>_fold_pairs_source_caustics.pdf` (and `_jwst.pdf` when available) contains
 three pairs per page. At most 128 deterministically selected joint draws, including the best fit, enter
 the source calculation, including draws
-with unrecovered images. Each source is registered to its own caustic. Image contours
-reuse the standard batched local posterior finder once per draw, with the configured
-tolerances and no grid or adaptive fallback. They are conditional on local root recovery; failures do not establish global image absence.
+with unrecovered images. Each source is registered to its own caustic; the caustic and anchor
+roots of all draws of a pair are solved in one batched Newton pass (`NEWTON_ITERATIONS` damped
+steps from the tracked critical points, verified at a residual of 1e-8). Image contours
+reuse the standard batched local posterior finder once per draw for the fold-pair families only,
+with the configured tolerances and no grid or adaptive fallback. They are conditional on local root recovery; failures do not establish global image absence.
 Numerical arrays, selection rules, draw indices, and failed solves are saved in
 `final/tables/fold_pairs_source_caustics.{npz,json}`. Calculations are shared across
 imaging variants. Regenerate only this diagnostic with:

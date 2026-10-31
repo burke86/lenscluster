@@ -26,11 +26,8 @@ def plot_covariance_errors(config, state, evaluator, posterior, paths, *, draws=
     def evaluate(theta):
         p = evaluator.physical(theta)
         a = evaluator.fields(p, force_exact=True, derivative=False)['jacobian']
-        extra = p[evaluator.sigma_extra_index] if evaluator.sigma_extra_index >= 0 else 0.
-        sel = p[evaluator.sigma_sel_index] if evaluator.sigma_sel_index >= 0 else 0.
-        lam = p[evaluator.lambda_sel_index] if evaluator.lambda_sel_index >= 0 else 1.
-        model = p[evaluator.sigma_def_index]
-        meas = jnp.sqrt(state.images.sigma_inst_per_image**2 + extra**2)
+        scales = evaluator.error_scales(p)
+        sel, lam, model, meas = scales['sigma_sel'], scales['lambda_sel'], scales['sigma_def'], scales['sigma_meas']
         u, s, _ = jnp.linalg.svd(a)
         # Ascending singular values: maximum image stretch first.
         s, u = s[:, ::-1], u[:, :, ::-1]
@@ -120,9 +117,9 @@ def plot_covariance_errors(config, state, evaluator, posterior, paths, *, draws=
 def plot_covariance_corner(config, state, posterior, paths):
     """Covariance hyperparameters in the common prior-overlaid corner style."""
     from .corner_plots import plot_parameter_corner
-    fields = ['sigma_extra', 'sigma_def', 'sigma_sel', 'lambda_sel']
+    fields = ['sigma_extra', 'sigma_def', 'sigma_sel', 'lambda_sel', 'sigma_shared', 'sigma_white', 'gp_ell']
     symbols = [r'$\sigma_{\rm extra}$', r'$\sigma_{\rm def}$',
-               r'$\sigma_{\rm sel}$', r'$\lambda_{\rm sel}$']
+               r'$\sigma_{\rm sel}$', r'$\lambda_{\rm sel}$', r'$\sigma_{\rm shared}$', r'$\sigma_{\rm white}$', r'$\ell$']
     selection = [(i, spec, label) for field, label in zip(fields, symbols)
                  for i, spec in enumerate(state.parameter_specs) if spec.name == 'images.'+field]
     grouped = None

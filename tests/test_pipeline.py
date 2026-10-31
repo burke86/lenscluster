@@ -94,3 +94,30 @@ def test_far_field_barrier_is_finite_smooth_and_pushes_back(synthetic_config):
     assert values[0] > -1e-3                                                            # negligible three guard distances out
     assert abs(values[3] + np.log(2.0) * evaluator.far_field_barrier_strength) < 1.0    # about -0.7 strength at the guard (one member there)
     assert slopes[-1] < 0 and values[-1] < -evaluator.far_field_barrier_strength        # steep inside, gradient points back out
+
+
+def test_gp_image_plane_end_to_end(synthetic_config):
+    """The gp likelihood runs through both stages: sigma_img is the only error scale, the shallow-pair check is written,
+    the sources are the family conditional, and the outputs exist."""
+    from lenscluster.config import LikelihoodConfig
+    config = _fast(replace(synthetic_config, likelihood=LikelihoodConfig(likelihood_mode="gp_image_plane")))
+    result = pipeline.run(config)
+    state, evaluator, posterior = result.state, result.evaluator, result.posterior
+    names = [s.name for s in state.parameter_specs]
+    assert "images.sigma_shared" in names and "images.sigma_white" in names
+    assert not any(n in names for n in ("images.sigma_def", "images.sigma_extra", "images.sigma_sel", "images.sigma_img"))
+    assert evaluator.gp_mode and posterior.samples.shape == (20, state.n_parameters) and np.isfinite(posterior.log_prob).all()
+    theta = jnp.asarray(posterior.samples[-1])
+    stats = evaluator.statistics(theta)
+    offsets = np.stack((posterior.samples[-1][state.images.source_x_param_index], posterior.samples[-1][state.images.source_y_param_index]), -1)
+    expected = np.asarray(stats["whitening"]["centroid"]) + np.einsum("fij,fj->fi", np.asarray(stats["whitening"]["cholesky"]), offsets)
+    np.testing.assert_allclose(np.asarray(stats["source_by_family"]), expected, rtol=1e-12, atol=1e-12)
+    assert (result.paths.init.tables / "shallow_fold_pairs.json").is_file()
+    for name in ("posterior_summary.csv", "member_classification.csv", "image_fit_quality.csv", "run_summary.json"):
+        assert (result.paths.final.tables / name).is_file()
+    prefix = f"{config.paths.figure_prefix}_" if config.paths.figure_prefix else ""
+    for name in ("gp_kernel_sky", "gp_shared_vs_white", "gp_scale_posteriors"):
+        assert (result.paths.final.figures / f"{prefix}{name}.pdf").is_file()
+    assert not list(result.paths.final.figures.glob("*gp_fold_pairs*"))
+    assert not list(result.paths.final.figures.glob("*gp_error_budget*"))
+    assert pipeline.run(config).resumed

@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import jax_lensing, smoothed_likelihood as sl
+from . import gp_image_plane as gp, jax_lensing, smoothed_likelihood as sl
 from .farfield import evaluate_farfield, member_farfield_geometry, slice_geometry
 from .jax_cosmology import dpie_sigma0_factor_from_lensing_efficiency
 from .model import (member_log_deviations, COMPONENT_FAMILY_SCALING, DP_IE_PROFILE, MASS_SHEET_PROFILE, NFW_PROFILE, SAFE_RADIUS_MARGIN_ARCSEC,
@@ -21,11 +21,15 @@ class Evaluator:
     """Evaluates deflections, Jacobians and the log-likelihood for a fixed member classification."""
 
     def __init__(self, state: ModelState, likelihood: str = "smoothed") -> None:
-        """``likelihood``: "smoothed" (local image-plane, default) or "source-isotropic" (source-plane Gaussian with
-        variance sigma_def^2 + sigma_meas^2 per image and no Jacobian; cheap, biased, for searches only)."""
-        if likelihood not in {"smoothed", "source-isotropic", "source-anisotropic"}:
-            raise ValueError("likelihood must be 'smoothed', 'source-isotropic' or 'source-anisotropic'")
+        """``likelihood``: "smoothed" (local image-plane, default), "gp_image_plane" (correlated image-plane displacements
+        per family, see ``gp_image_plane``) or "source-isotropic" (source-plane Gaussian with variance sigma_def^2 +
+        sigma_meas^2 per image and no Jacobian; cheap, biased, for searches only)."""
+        if likelihood not in {"smoothed", "gp_image_plane", "source-isotropic", "source-anisotropic"}:
+            raise ValueError("likelihood must be 'smoothed', 'gp_image_plane', 'source-isotropic' or 'source-anisotropic'")
         self.likelihood_mode = likelihood
+        self.gp_mode = likelihood == "gp_image_plane"
+        if self.gp_mode != (int(state.sigma_shared_param_index) >= 0):
+            raise ValueError("gp_image_plane needs a state built with likelihood_mode='gp_image_plane', and the other modes one without")
         self.state = state
         specs = state.parameter_specs
         kinds = np.asarray([spec.transform_kind for spec in specs], dtype=object)
@@ -60,10 +64,19 @@ class Evaluator:
         self.far_field_barrier_strength = float(members.far_field_barrier_strength)
         self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index = int(state.sigma_def_param_index), int(state.sigma_extra_param_index), int(state.sigma_sel_param_index)
         self.lambda_sel_index = int(state.lambda_sel_param_index)
+        self.sigma_shared_index, self.sigma_white_index = int(state.sigma_shared_param_index), int(state.sigma_white_param_index)
+        self.gp_ell_index = int(getattr(state, "gp_ell_param_index", -1))
         self.freeze_determinant_gradient = bool(state.freeze_determinant_gradient)
-        self.scale_indices = jnp.asarray(sorted({self.sigma_def_index} | {int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
+        self.scale_indices = jnp.asarray(sorted({int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
                                                 | {int(i) for i in np.asarray(members.radius_scatter_param_index) if i >= 0}
-                                                | {i for i in (self.sigma_extra_index, self.sigma_sel_index, self.lambda_sel_index) if i >= 0}), dtype=jnp.int32)
+                                                | {i for i in (self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index, self.lambda_sel_index,
+                                                               self.sigma_shared_index, self.sigma_white_index, self.gp_ell_index) if i >= 0}), dtype=jnp.int32)
+        if self.gp_mode:
+            # Data-only quantities of the family covariance: slots, separations, instrumental variances and the kernel at
+            # the fixed ell (recomputed from the separations at every evaluation when ell is sampled).
+            self.gp = gp.precompute(images, state.gp_correlation_length_arcsec)
+            self.gp_floor = float(state.gp_floor_arcsec)
+            self.gp_ell_fixed = float(state.gp_correlation_length_arcsec)
         # Components whose geometry (centre, ellipticity) never changes: catalog members.  Their geometry at the image
         # positions is a constant of the computation and is precomputed once.
         packed_spec = state.packed_lens_spec
@@ -81,6 +94,11 @@ class Evaluator:
         self._total_fields_cache: dict = {}
         self.loglike = jax.jit(self.log_likelihood)
         self.value_and_grad = jax.jit(jax.value_and_grad(self.log_likelihood))
+        self.median_abs_determinant = jax.jit(lambda params: jnp.median(jnp.abs(self.statistics(params)["determinant"])))
+
+    def search_log_likelihood(self, params: jnp.ndarray) -> jnp.ndarray:
+        """The init-search target: ``log_likelihood`` without the source-transport volume factor."""
+        return self.log_likelihood(params, source_jacobian=False)
 
     # ------------------------------------------------------------------ parameters
     def physical(self, params: jnp.ndarray) -> jnp.ndarray:
@@ -339,17 +357,41 @@ class Evaluator:
         return -self.far_field_barrier_strength * jnp.sum(jax.nn.softplus(-x / self.far_field_barrier_width))
 
     # ------------------------------------------------------------------ likelihood
+    def error_scales(self, physical: jnp.ndarray) -> dict[str, Any]:
+        """The scales of the per-image source-plane covariance C_i = sigma_meas^2 A A^T + sigma_def^2 I + sigma_sel^2 R at
+        this model.  Under gp_image_plane C_i is the diagonal block of the family covariance: sigma_meas^2 = sigma_inst^2 +
+        sigma_white^2 + sigma_shared^2, sigma_def = sigma_fl and no selection term; sigma_img = sqrt(sigma_shared^2 + sigma_white^2)
+        is the total image-plane scale."""
+        images = self.state.images
+        zero, one = jnp.asarray(0.0, dtype=jnp.float64), jnp.asarray(1.0, dtype=jnp.float64)
+        if self.gp_mode:
+            sigma_shared, sigma_white = physical[self.sigma_shared_index], physical[self.sigma_white_index]
+            sigma_img = jnp.sqrt(jnp.square(sigma_shared) + jnp.square(sigma_white))
+            gp_ell = physical[self.gp_ell_index] if self.gp_ell_index >= 0 else jnp.asarray(self.gp_ell_fixed, dtype=jnp.float64)
+            return dict(sigma_def=jnp.asarray(self.gp_floor, dtype=jnp.float64), sigma_extra=sigma_img, sigma_sel=zero, lambda_sel=one,
+                        sigma_meas=jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_img)), sigma_img=sigma_img,
+                        sigma_shared=sigma_shared, sigma_white=sigma_white, gp_ell=gp_ell)
+        sigma_def = physical[self.sigma_def_index]
+        sigma_extra = physical[self.sigma_extra_index] if self.sigma_extra_index >= 0 else zero
+        sigma_sel = physical[self.sigma_sel_index] if self.sigma_sel_index >= 0 else zero
+        lambda_sel = physical[self.lambda_sel_index] if self.lambda_sel_index >= 0 else one
+        sigma_meas = jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_extra))   # the instrumental error is the floor
+        return dict(sigma_def=sigma_def, sigma_extra=sigma_extra, sigma_sel=sigma_sel, lambda_sel=lambda_sel, sigma_meas=sigma_meas)
+
+    def per_image_covariance(self, physical: jnp.ndarray, jacobian: jnp.ndarray) -> dict[str, Any]:
+        """``smoothed_likelihood.source_covariance`` at this model's scales (the diagonal blocks under gp_image_plane)."""
+        scales = self.error_scales(physical)
+        return sl.source_covariance(jacobian, scales["sigma_meas"], scales["sigma_def"], scales["sigma_sel"], scales["lambda_sel"])
+
     def statistics(self, params: jnp.ndarray, *, force_exact: bool = False) -> dict[str, Any]:
         physical = self.physical(params)
         images, members = self.state.images, self.state.members
         isotropic = self.likelihood_mode == "source-isotropic"
         fields = self.fields(physical, force_exact=force_exact, derivative=not isotropic)
-        zero = jnp.asarray(0.0, dtype=jnp.float64)
-        sigma_def = physical[self.sigma_def_index]
-        sigma_extra = physical[self.sigma_extra_index] if self.sigma_extra_index >= 0 else zero
-        sigma_sel = physical[self.sigma_sel_index] if self.sigma_sel_index >= 0 else zero
-        lambda_sel = physical[self.lambda_sel_index] if self.lambda_sel_index >= 0 else jnp.asarray(1.0, dtype=jnp.float64)
-        sigma_meas = jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_extra))   # the instrumental error is the floor
+        if self.gp_mode:
+            return self._gp_statistics(params, physical, fields)
+        scales = self.error_scales(physical)
+        sigma_def, sigma_extra, sigma_sel, lambda_sel, sigma_meas = (scales[k] for k in ("sigma_def", "sigma_extra", "sigma_sel", "lambda_sel", "sigma_meas"))
         jacobian = jnp.zeros_like(fields["jacobian"]) if isotropic else fields["jacobian"]
         cov = sl.source_covariance(jacobian, sigma_meas, sigma_def, sigma_sel, lambda_sel)
         whitening = sl.source_whitening(fields["backprojected"], cov["covariance"], images.family_index_per_image, images.n_families)
@@ -364,17 +406,59 @@ class Evaluator:
         if isotropic or self.likelihood_mode == "source-anisotropic":   # Gaussian source-plane term only: no determinant factor
             stats["loglike"] = stats["gaussian_loglike"]
             stats["valid"] = cov["valid"] & jnp.all(jnp.isfinite(stats["residual"]), axis=-1)
-        stats.update(source_by_family=source, source_correction=transported["log_correction"], whitening=whitening,
+        stats.update(source_by_family=source, source_correction=transported["log_correction"], source_jacobian=jnp.sum(transported["log_jacobian"]),
+                     whitening=whitening,
                      transport_valid=transported["valid"], sigma_def=sigma_def, sigma_extra=sigma_extra, sigma_meas=sigma_meas, sigma_sel=sigma_sel,
                      lambda_sel=lambda_sel,
                      fields=fields, physical=physical)
         return stats
 
-    def log_likelihood(self, params: jnp.ndarray) -> jnp.ndarray:
+    def _gp_statistics(self, params: jnp.ndarray, physical: jnp.ndarray, fields: dict[str, Any]) -> dict[str, Any]:
+        """gp_image_plane: one Cholesky factor of the family covariance serves the Gaussian term and the source conditional;
+        the smoothed determinant h_i keeps its per-image form with the diagonal block C_ii as its covariance."""
+        images, members, layout = self.state.images, self.state.members, self.gp
+        scales = self.error_scales(physical)
+        sigma_fl = jnp.asarray(self.gp_floor, dtype=jnp.float64)
+        jacobian, backprojected = fields["jacobian"], fields["backprojected"]
+        slots, mask, counts = layout["slots"], layout["mask"], layout["counts"]
+        kernel = layout["kernel"] if self.gp_ell_index < 0 else gp.kernel_from_separations(layout["squared_separations"], mask, scales["gp_ell"])
+        family_covariance, family_cholesky = gp.family_covariance(jacobian[slots], kernel, layout["sigma_inst2"], mask,
+                                                                  jnp.square(scales["sigma_shared"]), jnp.square(scales["sigma_white"]), jnp.square(sigma_fl))
+        padded_backprojected = backprojected[slots]
+        whitening = gp.family_source_whitening(family_cholesky, padded_backprojected, mask)
+        coordinates = jnp.stack((params[images.source_x_param_index], params[images.source_y_param_index]), -1)
+        transported = sl.transport_sources(coordinates, whitening, jnp.asarray(members.source_prior_mean), members.source_prior_sigma)
+        source = transported["source"]
+        family_loglike, quadratic, logdet = gp.family_gaussian_loglike(family_cholesky, padded_backprojected - source[:, None, :], mask, counts)
+        determinant_gradient = fields["determinant_gradient"]
+        if self.freeze_determinant_gradient:
+            determinant_gradient = jax.lax.stop_gradient(determinant_gradient)
+        # Per image: C_ii = (sigma_inst^2 + sigma_white^2 + sigma_shared^2) A A^T + sigma_fl^2 I (k_ii = 1) and the smoothed determinant on it.
+        stats = sl.statistics(backprojected, source[images.family_index_per_image], jacobian, determinant_gradient,
+                              scales["sigma_meas"], sigma_fl, 0.0, 1.0, parity=images.parity)
+        log_h = sl.log_expected_absolute_normal(stats["determinant_mean"], jnp.maximum(stats["determinant_variance"], 1e-16), images.parity)
+        family_of = images.family_index_per_image
+        family_ok = jnp.all(jnp.isfinite(family_cholesky), axis=(-2, -1)) & jnp.isfinite(family_loglike) & whitening["valid"]
+        share = (family_loglike / counts)[family_of]                                 # the family term, split equally for the per-image plots
+        valid = stats["valid"] & jnp.isfinite(log_h) & family_ok[family_of]
+        stats.update(log_h=log_h, gaussian_loglike=share, loglike=share + log_h, valid=valid,
+                     family_gaussian_loglike=family_loglike, family_quadratic=quadratic, family_logdet=logdet,
+                     family_covariance=family_covariance, family_cholesky=family_cholesky,
+                     source_by_family=source, source_correction=transported["log_correction"], source_jacobian=jnp.sum(transported["log_jacobian"]),
+                     whitening=whitening, transport_valid=transported["valid"], fields=fields, physical=physical, **scales)
+        return stats
+
+    def log_likelihood(self, params: jnp.ndarray, *, source_jacobian: bool = True) -> jnp.ndarray:
         """Log-likelihood plus the source transport correction, or BAD_LOG_LIKE / -inf when rejected.
 
         Rejected proposals are evaluated at the known-valid initial model so that every
         branch stays finite; the selected value is then the rejection constant with zero gradient.
+
+        ``source_jacobian=False`` leaves out the volume factor log|det L_beta| of the source transport, so the target is
+        the posterior density in the physical source coordinates instead of the unit offsets.  The init search uses it:
+        the two densities have the same marginal over the lens parameters but not the same maximum, and the volume
+        factor grows without bound with the magnification, which gives the joint density a spurious mode at a lens so
+        massive that every image is demagnified (M0416, 256 starts: +393 against -1213 at the physical mode).
         """
         reference = jnp.asarray(self.state.initial_theta, dtype=jnp.float64)
         physical = self.physical(params)
@@ -386,6 +470,8 @@ class Evaluator:
         safe_params = jnp.where(ok, params, reference)
         stats = self.statistics(safe_params)
         value = jnp.sum(stats["loglike"]) + stats["source_correction"]
+        if not source_jacobian:
+            value = value - stats["source_jacobian"]
         value = value + self.far_field_log_barrier(stats["fields"]["far_cut_radii"])
         valid = jnp.all(stats["valid"]) & jnp.all(stats["transport_valid"]) & ~jnp.isnan(value)
         value = jnp.where(valid, value, -jnp.inf)

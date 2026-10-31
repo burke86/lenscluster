@@ -235,6 +235,11 @@ class ModelState:
     sigma_extra_param_index: int = -1            # extra measurement scatter added in quadrature to sigma_inst; -1 when absent
     sigma_sel_param_index: int = -1              # feature-selection scatter; -1 when the term is disabled
     lambda_sel_param_index: int = -1             # stretching scale of the selection weight R = (I + A A^T / lambda_sel^2)^-1; -1 with the term
+    sigma_shared_param_index: int = -1           # gp_image_plane: the correlated image-plane scale; -1 under the other likelihoods
+    sigma_white_param_index: int = -1            # gp_image_plane: the independent image-plane scale
+    gp_ell_param_index: int = -1                 # gp_image_plane: the sampled correlation length; -1 when ell is fixed
+    gp_correlation_length_arcsec: float = 7.0    # gp_image_plane: ell (fixed value or start) and sigma_fl (LikelihoodConfig)
+    gp_floor_arcsec: float = 0.0015
     freeze_determinant_gradient: bool = False    # hold grad det A fixed in the backward pass (LikelihoodConfig)
     dropped_member_ids: tuple[str, ...] = ()  # catalog members removed from the lens model (members.min_deflection_arcsec)
     initial_theta: np.ndarray | None = None

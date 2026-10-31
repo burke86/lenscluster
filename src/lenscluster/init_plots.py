@@ -145,6 +145,8 @@ def plot_fit_at_start(state: ModelState, evaluator: Evaluator, theta: np.ndarray
                "worst_image": str(images.image_labels[int(np.argmax(whitened))]), "loglike_min": float(loglike.min()),
                "worst_loglike_image": str(images.image_labels[int(np.argmin(loglike))]), "sigma_def": float(stats["sigma_def"]),
                "sigma_extra": float(stats["sigma_extra"])}
+    if "sigma_img" in stats:
+        summary["sigma_img"] = float(stats["sigma_img"])
     return path, summary
 
 
@@ -223,7 +225,8 @@ def write_init_plots(state: ModelState, evaluator: Evaluator, search: dict[str, 
     plot_critical_curves(state, evaluator, theta, sources, z_source if z_source > state.z_lens else max(state.z_source_values),
                          figure_path(figures_dir, "init_critical_curves.pdf", prefix), grid_scale_arcsec=0.5)
     log(f"[init] fit at the start: whitened residual rms {fit['whitened_residual_rms']:.2f} (expected ~1.4), max {fit['whitened_residual_max']:.2f} "
-        f"({fit['worst_image']}), sigma_def {fit['sigma_def']:.3f}\", sigma_extra {fit['sigma_extra']:.3f}\"")
+        f"({fit['worst_image']}), " + (f"sigma_img {fit['sigma_img']:.3f}\" (floor sigma_fl {fit['sigma_def']:.4f}\")" if "sigma_img" in fit
+                                        else f"sigma_def {fit['sigma_def']:.3f}\", sigma_extra {fit['sigma_extra']:.3f}\""))
     if scaling:
         log(f"[init] members at the start: scatter {scaling['scatter']:.3f}, unit deviation rms {scaling['offset_rms']:.2f} (prior 1), "
             f"max |deviation| {scaling['offset_max_abs']:.2f} ({scaling['largest_deviation_member']}), "
