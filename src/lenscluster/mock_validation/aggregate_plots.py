@@ -1,4 +1,4 @@
-"""The five paper figures of a mock-validation campaign, from each seed's recovery.json."""
+"""Aggregate figures of a mock-validation campaign, from each seed's recovery.json."""
 from __future__ import annotations
 
 import argparse
@@ -46,8 +46,6 @@ COMPONENT_NAMES = {"halo": "Halo", "bcg": "BCG", "potfile": "Members"}
 
 def _polish(ax):
     ax.grid(False)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.tick_params(which="both", top=False, right=False)
 
 
 def _save(fig, path):
@@ -516,6 +514,7 @@ def coverage_table(campaign: Campaign) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@plt.rc_context(fname=STYLE, rc=PAPER_STYLE)
 def plot_calibration(campaign: Campaign, path: Path) -> Path | None:
     """Probability-integral-transform check: the truth's percentile rank in the posterior, pooled over all scored
     parameters and realizations, should be uniform; the cumulative curve should follow the diagonal."""
@@ -545,6 +544,112 @@ def plot_calibration(campaign: Campaign, path: Path) -> Path | None:
     return path
 
 
+def _standardized_parameter_panels(campaign: Campaign, *, sources: bool = True):
+    """Residuals in units of half the central 68% posterior width, not Gaussian z-scores."""
+    df = campaign.parameters.copy()
+    scale = (df["q84"] - df["q16"]) / 2
+    valid = np.isfinite(df["truth"]) & np.isfinite(df["median"]) & np.isfinite(scale) & (scale > 0)
+    df = df.loc[valid].copy()
+    df["residual"] = (df["median"] - df["truth"]) / scale.loc[valid]
+    df = df[np.isfinite(df["residual"])]
+    panels = [(p, df[df["parameter"] == p].copy()) for p in PAPER_PARAMETERS if (df["parameter"] == p).any()]
+    if sources:
+        for coordinate in ("beta_x", "beta_y"):
+            rows = df[df["parameter"].str.startswith("source.") & df["parameter"].str.endswith("." + coordinate)]
+            if not rows.empty:
+                panels.append(("source." + coordinate, rows.copy()))
+    return panels
+
+
+@plt.rc_context(fname=STYLE, rc=PAPER_STYLE)
+def plot_standardized_residuals(campaign: Campaign, path: Path, *, ncols: int = 4) -> Path | None:
+    """Truth-dependent residuals; binned SEM uses mocks as the independent units, including for pooled sources."""
+    panels = _standardized_parameter_panels(campaign)
+    if not panels:
+        return None
+    nrows = math.ceil(len(panels) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.36 * nrows), squeeze=False)
+    for ax, (parameter, data) in zip(axes.flat, panels):
+        ax.axhline(0, color=".25", linestyle="--", linewidth=.8)
+        ax.axhspan(-1, 1, color=".94", zorder=-3)
+        raw = ax.scatter(data.truth, data.residual, s=5, color=COLOR, alpha=.22, linewidths=0,
+                         rasterized=True, label="Individual estimates")
+        data["bin"] = pd.cut(data.truth, bins=5, labels=False, include_lowest=True)
+        mocks = data.groupby(["bin", "seed"])[["truth", "residual"]].mean()
+        binned = mocks.groupby("bin").agg(x=("truth", "mean"), y=("residual", "mean"), sem=("residual", "sem")).dropna()
+        trend = ax.errorbar(binned.x, binned.y, yerr=binned["sem"], fmt="o", markersize=4, color="tab:orange",
+                            elinewidth=1, capsize=2, label="Mean residual and SEM across mocks")
+        if parameter.startswith("source."):
+            symbol = r"$\beta_x$" if parameter.endswith("beta_x") else r"$\beta_y$"
+            label = f"True {symbol} (arcsec)"
+        else:
+            label = _axis_label(parameter, "truth")
+        ax.set_xlabel(label, fontsize=9)
+        ax.set_ylabel(r"$(\mathrm{median}-\mathrm{truth})/s_{68}$", fontsize=9)
+        ax.text(.04, .96, COMPONENT_NAMES.get(parameter.split(".")[0], "Sources"), transform=ax.transAxes,
+                va="top", fontsize=8)
+        ax.xaxis.set_major_locator(MaxNLocator(3))
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+        limit = max(3.5, data.residual.abs().max() * 1.1)
+        ax.set_ylim(-limit, limit)
+    for ax in list(axes.flat)[len(panels):]:
+        ax.axis("off")
+    fig.legend([raw, trend], [raw.get_label(), trend.get_label()], loc="upper center", ncol=2, frameon=False)
+    fig.tight_layout(rect=(0, 0, 1, .965), h_pad=1.3, w_pad=1.1)
+    return _save(fig, path)
+
+
+@plt.rc_context(fname=STYLE, rc=PAPER_STYLE)
+def plot_bias_and_coverage(campaign: Campaign, path: Path) -> Path | None:
+    """Global parameters only. Horizontal intervals describe residuals across mocks, not posterior intervals.
+
+    Coverage uses the saved posterior-interval flags for scored rows with finite truth, independently of whether
+    their central 68% width can be used to standardize the residual. Source coordinates are omitted.
+    """
+    from matplotlib.lines import Line2D
+
+    panels = _standardized_parameter_panels(campaign, sources=False)
+    if not panels:
+        return None
+    fig, (ax, coverage) = plt.subplots(1, 2, figsize=(9, max(3.5, .36 * len(panels) + 1)), sharey=True,
+                                      gridspec_kw={"width_ratios": [2, 1]})
+    labels, fractions = [], []
+    for i, (parameter, data) in enumerate(panels):
+        q = np.quantile(data.residual, [.025, .16, .5, .84, .975])
+        component, field = parameter.split(".", 1)
+        color = COMPONENT_COLORS["members" if component == "potfile" else component]
+        ax.plot(q[[0, 4]], [i, i], color=color, linewidth=1, alpha=.55)
+        ax.plot(q[[1, 3]], [i, i], color=color, linewidth=4, solid_capstyle="butt")
+        ax.plot(q[2], i, "o", color=color, markersize=5)
+        rows = campaign.parameters
+        rows = rows[(rows.parameter == parameter) & np.isfinite(rows.truth)]
+        if "scored" in rows:
+            rows = rows[rows.scored.astype(bool)]
+        for column, marker, alpha in (("covered_68", "o", 1), ("covered_95", "s", .55)):
+            if column in rows and rows[column].notna().any():
+                fraction = rows[column].dropna().astype(float).mean()
+                fractions.append(fraction)
+                coverage.plot(fraction, i, marker, color=color, alpha=alpha, markersize=5)
+        labels.append(COMPONENT_NAMES[component] + "  " + PARAMETER_LABELS.get(field, field))
+    ax.axvspan(-1, 1, color=".94", zorder=-3)
+    ax.axvline(0, color=".3", linestyle="--", linewidth=.8)
+    coverage.axvline(.68, color=".3", linestyle="--", linewidth=.8)
+    coverage.axvline(.95, color=".3", linestyle=":", linewidth=.8)
+    ax.set_yticks(range(len(panels)), labels)
+    ax.invert_yaxis()
+    ax.set_xlabel(r"$(\mathrm{median}-\mathrm{truth})/s_{68}$")
+    coverage.set_xlabel("Empirical coverage")
+    coverage.set_xlim(min(.35, min(fractions, default=.35) - .04), 1.03)
+    coverage.tick_params(labelleft=False)
+    fig.legend(handles=[Line2D([], [], color=".3", marker="o", linewidth=4, label="Median and central 68% across mocks"),
+                        Line2D([], [], color=".3", linewidth=1, label="Central 95%"),
+                        Line2D([], [], color=".3", marker="o", linestyle="", label="68% coverage"),
+                        Line2D([], [], color=".3", marker="s", alpha=.55, linestyle="", label="95% coverage")],
+               loc="upper center", ncol=2, fontsize=8)
+    fig.tight_layout(rect=(0, 0, 1, .93))
+    return _save(fig, path)
+
+
 # ----------------------------------------------------------------------------- driver
 def write_aggregate_plots(campaign_root: str | Path, output_dir: str | Path | None = None) -> list[Path]:
     try:
@@ -564,6 +669,8 @@ def write_aggregate_plots(campaign_root: str | Path, output_dir: str | Path | No
     from ..results_tex import write_mock_results
     write_mock_results(campaign, output, rhat_cut=CONVERGENCE_RHAT, min_ess=CONVERGENCE_MIN_NEFF)
     plots = [plot_parameter_recovery(campaign, output / "mock_parameter_recovery_paper.pdf"),
+             plot_standardized_residuals(campaign, output / "mock_standardized_residuals.pdf"),
+             plot_bias_and_coverage(campaign, output / "mock_bias_and_coverage.pdf"),
              plot_subhalo_mass_function(campaign, output / "mock_aggregate_subhalo_recovery_shmf.pdf"),
              plot_magnification_recovery(campaign, output / "mock_magnification_recovery.pdf"),
              plot_m2d_components(campaign, output / "mock_m2d_aperture_recovery_components.pdf"),

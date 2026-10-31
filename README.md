@@ -94,10 +94,15 @@ Each realization generates a single-BCG mock cluster with a Schechter population
 subhalos (`lenscluster.mock_validation.generation`), runs the single stage on it, and
 writes `seed_*/recovery/recovery.json` with parameter, magnification, image-residual,
 subhalo-mass and aperture-mass comparisons against the truth. `--aggregate-only` (or
-`python -m lenscluster.mock_validation.aggregate_plots <campaign dir>`) renders the five
+`python -m lenscluster.mock_validation.aggregate_plots <campaign dir>`) renders the nine
 paper figures under `aggregate_plots/`: parameter recovery, subhalo mass function,
 magnification recovery, aperture-mass components of the representative seed, and the
-image-residual distribution.
+image-residual distribution, posterior calibration, scaling-relation recovery, standardized
+parameter residuals, and compact bias and coverage. The standardized residual is
+`(median - truth) / s68`, where `s68 = (q84 - q16) / 2`. Binned residual errors
+are SEM across mocks. In the compact figure, horizontal intervals show the central
+68% and 95% of residuals across mocks; the right panel shows empirical coverage
+of the posterior intervals. Source coordinates are omitted from the compact figure.
 
 ## Member diagnostics
 
