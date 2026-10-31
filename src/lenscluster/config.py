@@ -328,6 +328,7 @@ class LikelihoodConfig:
 
 @dataclass(frozen=True)
 class ImageDiagnosticsConfig:
+    fold_pair_max_separation_arcsec: float = 5.0  # automatic, model-verified local fold candidates
     posterior_image_diagnostic_draws: int = 32
     exact_image_min_distance_arcsec: float = 0.5
     exact_image_precision_limit: float = 1.0e-2
@@ -530,6 +531,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     count = diagnostics.posterior_diagnostic_draws
     if isinstance(count, bool) or not isinstance(count, Integral) or count < 0:
         raise ValueError("image_diagnostics.posterior_diagnostic_draws must be a nonnegative integer.")
+    if not math.isfinite(diagnostics.fold_pair_max_separation_arcsec) or diagnostics.fold_pair_max_separation_arcsec <= 0:
+        raise ValueError("image_diagnostics.fold_pair_max_separation_arcsec must be finite and positive.")
     if int(diagnostics.posterior_image_diagnostic_draws) < 0:
         raise ValueError("image_diagnostics.posterior_image_diagnostic_draws must be nonnegative.")
     if diagnostics.exact_image_finder not in {"global-jax", "lenstronomy", "local-lm", "local-lm-adaptive"}:

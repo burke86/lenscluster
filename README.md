@@ -205,6 +205,27 @@ Posterior corner axes retain log10 coordinates for log-transformed parameters.
 The summaries above the histograms report physical values and asymmetric
 uncertainties in linear units. Sampling priors and stored draws are unchanged.
 
+Fold-pair posterior diagnostics are generated automatically alongside the RGB figures
+when suitable pairs are identified. The default search selects mutual nearest
+same-family images within 5 arcsec, requires opposite exact best-fit parity, and
+verifies a regular critical curve between them. These are model-identified candidates,
+not catalog morphology classifications. Adjust
+`image_diagnostics.fold_pair_max_separation_arcsec` to change the search radius.
+
+`<prefix>_fold_pairs_source_caustics.pdf` (and `_jwst.pdf` when available) contains
+three pairs per page. At most 128 deterministically selected joint draws, including the best fit, enter
+the source calculation, including draws
+with unrecovered images. Each source is registered to its own caustic. Image contours
+reuse the standard batched local posterior finder once per draw, with the configured
+tolerances and no grid or adaptive fallback. They are conditional on local root recovery; failures do not establish global image absence.
+Numerical arrays, selection rules, draw indices, and failed solves are saved in
+`final/tables/fold_pairs_source_caustics.{npz,json}`. Calculations are shared across
+imaging variants. Regenerate only this diagnostic with:
+
+```bash
+/home/dutra/.conda/envs/lenstronomy/bin/python scripts/regenerate_fold_diagnostics.py RUN_DIRECTORY
+```
+
 JWST cluster overviews use posterior image-position contours (68.3% solid and
 95.4% dashed), with tiny catalog crosses colored by best-fit recovery status. Blue
 contours describe recovered catalog images; purple contours track known best-fit
