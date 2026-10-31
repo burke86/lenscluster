@@ -61,9 +61,11 @@ class Objective:
     """
 
     def __init__(self, state: ModelState, evaluator: Evaluator, reference_theta: np.ndarray, *, include_latent: bool = False,
-                 pinned: dict[str, float] | None = None, active_sites: set[str] | None = None) -> None:
+                 pinned: dict[str, float] | None = None, active_sites: set[str] | None = None, log_likelihood: Callable | None = None) -> None:
         self.specs = state.parameter_specs
-        self.model = posterior_model(self.specs, evaluator.log_likelihood)
+        # The search maximizes the density in the physical source coordinates (no transport volume factor): see
+        # Evaluator.log_likelihood.  NUTS keeps the full target.
+        self.model = posterior_model(self.specs, log_likelihood or evaluator.search_log_likelihood)
         sites = unconstrained_from_theta(self.specs, np.asarray(reference_theta))
         sites = {k: jnp.asarray(v, dtype=jnp.float64) for k, v in sites.items()}
         pinned = pinned or {}
@@ -316,11 +318,24 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
     if not finite.any():
         raise RuntimeError("Every multi-start optimization ended at a non-finite or invalid potential.")
     modes, assignment = cluster_modes(final_g, potential, finite, starts_g, config.mode_parameter_tolerance)
+    # A degenerate mode (median |det A| at the images above the limit: the lens demagnifies the images) cannot seed chains.
+    limit = float(config.max_median_abs_determinant)
+    for mode in modes:
+        theta_mode = objective.theta(objective.expand(final_g[mode["representative"]]))
+        mode["median_abs_determinant"] = float(evaluator.median_abs_determinant(jnp.asarray(theta_mode)))
+        mode["degenerate"] = not (mode["median_abs_determinant"] <= limit)
+    degenerate = [m for m in modes if m["degenerate"]]
+    if len(degenerate) == len(modes):
+        raise RuntimeError(f"Every mode of the {label} is degenerate: median |det A| at the images above {limit:g} "
+                           f"(smallest {min(m['median_abs_determinant'] for m in modes):.3g}).")
+    if degenerate:
+        log(f"[{label}] {len(degenerate)} of {len(modes)} modes rejected as degenerate: median |det A| at the images above {limit:g} "
+            f"(largest {max(m['median_abs_determinant'] for m in degenerate):.3g}, best rejected log posterior {-degenerate[0]['potential']:.2f})")
     # Polish the modes that can seed chains in full dimension (offsets and sources now free).
     started = time.perf_counter()
-    best_potential = modes[0]["potential"]
+    best_potential = min(m["potential"] for m in modes if not m["degenerate"])
     for mode in progress(modes, desc="polish modes"):
-        mode["within_margin"] = bool(mode["potential"] - best_potential <= float(config.mode_margin))
+        mode["within_margin"] = (not mode["degenerate"]) and bool(mode["potential"] - best_potential <= float(config.mode_margin))
         u = objective.expand(final_g[mode["representative"]])
         if mode["within_margin"] and len([m for m in modes if m.get("polished")]) < int(config.max_chain_modes):
             active = polish_objective.flatten(objective.theta(u))[np.asarray(polish_objective.global_index)]
@@ -334,10 +349,10 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
         mode["log_posterior"] = -mode["potential_polished"]
         mode["count"] = len(mode["members"])
     polish_seconds = time.perf_counter() - started
-    modes.sort(key=lambda m: m["potential_polished"])
+    modes.sort(key=lambda m: (m["degenerate"], m["potential_polished"]))
     best = modes[0]
     for mode in modes:        # the margin is re-evaluated after the polish: an unpolished mode that fell behind cannot seed a chain
-        mode["within_margin"] = bool(mode["potential_polished"] - best["potential_polished"] <= float(config.mode_margin))
+        mode["within_margin"] = (not mode["degenerate"]) and bool(mode["potential_polished"] - best["potential_polished"] <= float(config.mode_margin))
     polished = [m for m in modes if m.get("polished")]
     log(f"[{label}] {method}: {len(starts)} starts -> {int(finite.sum())} finite, {len(modes)} modes, {sum(m['within_margin'] for m in modes)} within "
         f"the margin of {config.mode_margin:g}; best log posterior {-best['potential']:.2f} after {out['iterations'].mean():.0f} iterations on average, "

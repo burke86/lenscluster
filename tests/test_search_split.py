@@ -65,3 +65,45 @@ def test_search_summary_table_lists_the_three_stages(synthetic_config):
     text = search_summary_table(result)
     assert "Init search" in text and "large-scale" in text and "polish" in text and "best log posterior" in text
     assert any("search stage A" in l for l in lines) and any("search stage B" in l for l in lines) and any("Init search" in l for l in lines)
+
+
+def test_search_target_drops_the_source_transport_jacobian(synthetic_config):
+    """The search maximizes the density in the physical source coordinates: full target minus log|det L_beta|."""
+    for likelihood in ("smoothed", "gp_image_plane"):
+        state = build_state(replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, likelihood_mode=likelihood)))
+        evaluator = Evaluator(state, likelihood)
+        theta = jnp.asarray(state.initial_theta)
+        stats = evaluator.statistics(theta)
+        jacobian = float(stats["source_jacobian"])
+        assert np.isclose(jacobian, float(jnp.sum(-0.5 * stats["whitening"]["logdet_precision"])))
+        assert jacobian != 0.0
+        full, search = float(evaluator.log_likelihood(theta)), float(evaluator.search_log_likelihood(theta))
+        assert np.isclose(search, full - jacobian, rtol=0, atol=1e-9)
+
+
+def test_degenerate_modes_cannot_seed_chains(synthetic_config):
+    from lenscluster.search import multistart_map
+    state = build_state(synthetic_config)
+    evaluator = Evaluator(state)
+    starts = prior_starts(state, 3, 7)
+    quiet = lambda *a, **k: None
+    base = SearchConfig(n_starts=3, lbfgs_max_iter=20, polish_max_iter=5)
+    result = multistart_map(state, evaluator, starts, base, method="lbfgs", seed=7, log=quiet)
+    determinants = [m["median_abs_determinant"] for m in result["modes"]]
+    assert all(np.isfinite(determinants)) and not any(m["degenerate"] for m in result["modes"])
+    # A limit below every mode's value rejects them all; the log posterior of the carried modes is unchanged.
+    with pytest.raises(RuntimeError, match="degenerate"):
+        multistart_map(state, evaluator, starts, replace(base, max_median_abs_determinant=0.5 * min(determinants)), method="lbfgs", seed=7, log=quiet)
+    if len(set(np.round(determinants, 12))) > 1:
+        limit = 0.5 * (min(determinants) + max(determinants))
+        lines = []
+        guarded = multistart_map(state, evaluator, starts, replace(base, max_median_abs_determinant=limit), method="lbfgs", seed=7, log=lines.append)
+        rejected = [m for m in guarded["modes"] if m["degenerate"]]
+        assert rejected and not any(m["within_margin"] for m in rejected) and not guarded["modes"][0]["degenerate"]
+        assert any("rejected as degenerate" in line for line in lines)
+
+
+def test_sigma_shared_prior_is_truncated_at_one_arcsec(synthetic_config):
+    state = build_state(replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, likelihood_mode="gp_image_plane")))
+    spec = state.parameter_specs[state.sigma_shared_param_index]
+    assert spec.prior_kind == "truncated_normal" and np.isclose(spec.upper, np.log(1.0)) and spec.physical_upper == 1.0
