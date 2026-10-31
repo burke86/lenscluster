@@ -101,8 +101,9 @@ def plot_parameter_corner(samples, selection, path, *, grouped_physical=None, be
             density = prior.pdf(x)
             axes[j, j].plot(x, density, color='tab:orange', ls='--', lw=1.5)
             axes[j, j].set_ylim(0, max(axes[j,j].get_ylim()[1], 1.05*density.max()))
-            low, median, high = np.quantile(values[:, j], [.16, .5, .86])
-            symbol = labels[j].split('$')[1] if '$' in labels[j] else labels[j].replace('_', r'\_')
+            index, spec, physical_label = selection[j]
+            low, median, high = np.quantile(samples[:, index], [.16, .5, .86])
+            symbol = physical_label.split('$')[1] if '$' in physical_label else physical_label.replace('_', r'\_')
             axes[j, j].text(.5, 1.04, rf'${symbol}={median:.3f}^{{+{high-median:.3f}}}_{{-{median-low:.3f}}}$',
                             transform=axes[j,j].transAxes, ha='center', fontsize=8)
             if best_index is not None:
@@ -148,6 +149,7 @@ def plot_parameter_corner(samples, selection, path, *, grouped_physical=None, be
                     trace_draws_per_chain=0 if grouped is None else grouped.shape[1],
                     contour_probabilities=[.68,.95], marginal_quantiles=[.16,.5,.86],
                     uniform_joint_prior='support boundary; highest-density regions are not unique',
+                    marginal_summary_coordinates='physical',
                     coordinates='log10 for log-transformed parameters; physical otherwise')
     path.with_suffix('.json').write_text(json.dumps(metadata, indent=2))
     return path

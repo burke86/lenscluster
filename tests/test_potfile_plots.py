@@ -113,3 +113,24 @@ def test_uniform_global_prior_and_coordinate_transforms(tmp_path):
     prior = DisplayPrior(spec)
     np.testing.assert_allclose(prior.pdf(0.), np.log(10)/np.sqrt(2*np.pi))
     np.testing.assert_allclose(display_values(np.array([1., 10.]), spec), [0., 1.])
+
+
+def test_corner_headers_physical_with_log_axes(tmp_path, monkeypatch):
+    from lenscluster.corner_plots import plot_parameter_corner
+    from matplotlib.figure import Figure
+    spec = SimpleNamespace(name='images.sigma_def', transform_kind='log_positive',
+                           prior_kind='normal', mean=np.log(.01), std=.5)
+    samples = np.geomspace(.005, .02, 101)[:,None]
+    captured = []
+    save = Figure.savefig
+    def capture(fig, *args, **kwargs):
+        captured.extend(text.get_text() for ax in fig.axes for text in ax.texts)
+        captured.extend(ax.get_xlabel() for ax in fig.axes)
+        return save(fig, *args, **kwargs)
+    monkeypatch.setattr(Figure, 'savefig', capture)
+    path = plot_parameter_corner(samples, [(0,spec,r'$\sigma_{\rm def}$')], tmp_path/'corner.pdf')
+    assert any(r'\sigma_{\rm def}=0.010' in text for text in captured)
+    assert any(r'\log_{10}' in text for text in captured)
+    metadata = json.loads(path.with_suffix('.json').read_text())
+    assert metadata['marginal_summary_coordinates'] == 'physical'
+    assert metadata['coordinates'].startswith('log10')

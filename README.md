@@ -192,3 +192,7 @@ Regenerate just this plot, without inference:
 - scripts/make_farfield_illustrations.py: synthetic member-image geometry, precomputed-matrix diagram, and circular dPIE convergence figures. Run with the ggsl conda Python interpreter; vector PDFs and PNG previews are written to output/pdf/farfield_candidates/.
 
 - scripts/make_jacobian_smoothing_illustrations.py: synthetic Gaussian determinant averaging, smoothed normalization, and conditioning figures. Run in ggsl, hdm or lenstronomy; outputs are in output/pdf/jacobian_smoothing_candidates/.
+
+Posterior corner axes retain log10 coordinates for log-transformed parameters.
+The summaries above the histograms report physical values and asymmetric
+uncertainties in linear units. Sampling priors and stored draws are unchanged.
