@@ -61,13 +61,17 @@ def main():
         extra = pd.read_csv(final / "tables" / "image_recovery_extra_images.csv", dtype={"family_id": str})
     except pd.errors.EmptyDataError:
         extra = pd.DataFrame()  # No extra images were recovered in this saved run.
+    position_contours = None
+    if args.imaging == 'jwst' or config.image_catalog.figure_suffix == '_jwst':
+        from lenscluster.image_position_contours import load_or_compute_contours
+        position_contours = load_or_compute_contours(config, state, evaluator, posterior, extra, final / 'tables', log=lambda x: print(x,flush=True))
     imaging = load_cluster_imaging(config.image_catalog, config.model, config.paths.run_name)
     plt.style.use(str(ROOT / "src" / "lenscluster" / "style.mplstyle"))
     output = plots.figure_path(final / "figures", f"image_catalog_family_cluster_mass{config.image_catalog.figure_suffix}.pdf", config.paths.figure_prefix)
     print(f"Rendering saved draw {best_index}: {output}", flush=True)
     provenance = render_cluster_mass_figure(evaluator, theta, catalog, extra, imaging,
         z_source=float(config.truth.caustic_source_redshift), kappa_true_fits=config.truth.kappa_true_fits,
-        figure_path=output, tables_dir=final / "tables", fits_dir=final / "fits")
+        figure_path=output, tables_dir=final / "tables", fits_dir=final / "fits", artifact_suffix=config.image_catalog.figure_suffix, position_contours=position_contours)
     print(json.dumps(provenance["arc_directions"], indent=2))
 
 

@@ -193,8 +193,37 @@ def convergence_maps(evaluator: Evaluator, theta: np.ndarray, geometry: dict[str
                               truth_path=str(kappa_true_fits) if kappa_true_fits else None)
 
 
+def covariance_ellipse_curves(evaluator, theta, catalog):
+    """Unit-Mahalanobis image-plane contours, at observed positions and family redshifts."""
+    from .covariance_cutouts import best_geometry
+    g = best_geometry(evaluator.state, evaluator, theta)
+    labels = list(map(str, evaluator.state.images.image_labels))
+    if len(set(labels)) != len(labels) or catalog["image_label"].astype(str).duplicated().any():
+        raise ValueError("Covariance ellipses require unique image labels")
+    indices = {label: i for i, label in enumerate(labels)}
+    phase = np.linspace(0., 2*np.pi, 181)
+    circle = np.stack([np.cos(phase), np.sin(phase)])
+    curves, records = [], []
+    for row in catalog.itertuples():
+        i = indices[str(row.image_label)]
+        if not g["valid"][i]:
+            records.append(dict(image_label=str(row.image_label), defined=False))
+            continue
+        inverse = np.linalg.solve(g["a"][i], np.eye(2))
+        covariance = inverse @ g["c"][i] @ inverse.T
+        values, vectors = np.linalg.eigh(covariance)
+        widths = np.sqrt(values)
+        offset = (vectors @ (widths[:, None]*circle)).T
+        curves.append(offset + [row.x_obs_arcsec, row.y_obs_arcsec])
+        records.append(dict(image_label=str(row.image_label), defined=True,
+                            minor_arcsec=float(widths[0]), major_arcsec=float(widths[1]),
+                            covariance_xx=float(covariance[0,0]), covariance_xy=float(covariance[0,1]),
+                            covariance_yy=float(covariance[1,1])))
+    return curves, pd.DataFrame(records)
+
+
 def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra, geometry, *, arc_directions=None, extra_directions=None,
-                  max_side_pixels: int | None = 3200) -> None:
+                  max_side_pixels: int | None = 3200, covariance_curves=None, position_contours=None) -> None:
     """RGB overview with recovery-status circles, scale bar and compass on the solver-aligned grid."""
     rgb = cutouts.rgb_cutout(images, bands, display, geometry["center"], geometry["size"])
     rgb = cutouts.downsample_rgb(aligned_rgb(rgb, display_image, geometry), max_side_pixels)
@@ -206,10 +235,19 @@ def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra
     observed = np.column_stack(grid_pixels(geometry, catalog["x_obs_arcsec"].to_numpy(float), catalog["y_obs_arcsec"].to_numpy(float)))
     model = np.column_stack(grid_pixels(geometry, catalog["x_model_arcsec"].to_numpy(float), catalog["y_model_arcsec"].to_numpy(float)))
     valid = np.isfinite(model).all(axis=1)
-    for obs, pred in zip(observed[valid], model[valid]):
-        ax.plot([obs[0], pred[0]], [obs[1], pred[1]], color="white", lw=0.65, alpha=0.9, zorder=4)
-    ax.scatter(*observed[valid].T, s=42, facecolors="none", edgecolors="tab:blue", linewidths=0.85, zorder=5)
-    if arc_directions is not None:
+    if position_contours is None:
+        for obs, pred in zip(observed[valid], model[valid]):
+            ax.plot([obs[0], pred[0]], [obs[1], pred[1]], color="white", lw=0.65, alpha=0.9, zorder=4)
+        ax.scatter(*observed[valid].T, s=42, facecolors="none", edgecolors="tab:blue", linewidths=0.5, zorder=5)
+    else:
+        ax.scatter(*observed[valid].T, s=4, marker='x', color='white', linewidths=.2, zorder=10)
+        ax.scatter(*observed[~valid].T, s=4, marker='x', color='tab:red', linewidths=.2, zorder=10)
+        for level in position_contours['curves']:
+            color = 'tab:blue' if level['kind']=='recovered' else 'tab:purple'
+            linestyle = '-' if level['probability']<.9 else '--'
+            for segment in level['segments']:
+                ax.plot(*grid_pixels(geometry,*segment.T), color=color, ls=linestyle, lw=.35, zorder=8)
+    if arc_directions is not None and position_contours is None:
         xy = catalog[["x_obs_arcsec", "y_obs_arcsec"]].to_numpy(float)
         directions = arc_directions[["e_arc_x", "e_arc_y"]].to_numpy(float)
         if extra_directions is not None and not extra_directions.empty:
@@ -220,13 +258,16 @@ def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra
                 continue
             ends = center + np.array([[-.5], [.5]]) * ARC_STICK_LENGTH_ARCSEC * direction
             px, py = grid_pixels(geometry, ends[:, 0], ends[:, 1])
-            ax.plot(px, py, color=ARC_DIRECTION_COLOR, lw=.8, alpha=.9,
+            ax.plot(px, py, color=ARC_DIRECTION_COLOR, lw=.45, alpha=.9,
                     solid_capstyle="round", zorder=8)
-    if (~valid).any():
-        ax.scatter(*observed[~valid].T, s=42, facecolors="none", edgecolors="tab:red", linewidths=0.85, zorder=7)
-    if extra is not None and not extra.empty:
+    if (~valid).any() and position_contours is None:
+        ax.scatter(*observed[~valid].T, s=42, facecolors="none", edgecolors="tab:red", linewidths=0.5, zorder=7)
+    if position_contours is None and extra is not None and not extra.empty:
         extras = np.column_stack(grid_pixels(geometry, extra["x_model_arcsec"].to_numpy(float), extra["y_model_arcsec"].to_numpy(float)))
-        ax.scatter(*extras.T, s=42, facecolors="none", edgecolors="tab:purple", linewidths=0.85, zorder=6)
+        ax.scatter(*extras.T, s=42, facecolors="none", edgecolors="tab:purple", linewidths=0.5, zorder=6)
+    if covariance_curves is not None:
+        for curve in covariance_curves:
+            ax.plot(*grid_pixels(geometry, curve[:, 0], curve[:, 1]), color="cyan", lw=.4, alpha=.95, zorder=9)
     bar = 10.0 / abs(np.diff(geometry["xlim"])[0]) * n
     x0, y0 = 0.06 * n, 0.055 * n
     ax.plot([x0, x0 + bar], [y0, y0], color="white", lw=2.0, solid_capstyle="butt")
@@ -240,18 +281,27 @@ def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra
         end = compass + direction * 0.055 * n
         ax.annotate("", end, compass, arrowprops=dict(arrowstyle="->", color="white", lw=1.0))
         ax.text(*(end + direction * 0.018 * n), label, color="white", fontsize=9, ha="center", va="center")
-    handles = [Line2D([], [], marker="o", ls="none", mfc="none", mec=color, ms=6, label=label)
+    handles = [Line2D([], [], marker="o", ls="none", mfc="none", mec=color, mew=.5, ms=6, label=label)
                for color, label in (("tab:blue", "Recovered image"), ("tab:purple", "Extra image"),
                                     ("tab:red", "Missed image"))]
-    if arc_directions is not None:
-        handles.append(Line2D([], [], color=ARC_DIRECTION_COLOR, lw=.8, alpha=.9,
+    if position_contours is not None:
+        handles = [Line2D([], [], color='tab:blue', lw=.35, label='Recovered positions'),
+                   Line2D([], [], color='tab:purple', lw=.35, label='Tracked extra positions'),
+                   Line2D([], [], color='white', marker='x', ls='none', ms=2, mew=.2, label='Catalog: recovered (best fit)'),
+                   Line2D([], [], color='tab:red', marker='x', ls='none', ms=2, mew=.2, label='Catalog: missed (best fit)'),
+                   Line2D([], [], color='white', lw=.35, label='1σ (68.3%)'),
+                   Line2D([], [], color='white', lw=.35, ls='--', label='2σ (95.4%)')]
+    if arc_directions is not None and position_contours is None:
+        handles.append(Line2D([], [], color=ARC_DIRECTION_COLOR, lw=.45, alpha=.9,
                               label="Stretching direction"))
+    if covariance_curves is not None:
+        handles.append(Line2D([], [], color="cyan", lw=.4, label="Covariance ellipse"))
     ax.legend(handles=handles, loc="upper right", bbox_to_anchor=(0.985, 0.985), fontsize=7, labelcolor="white", frameon=True,
               facecolor="black", edgecolor="none", framealpha=0.65, borderpad=0.6, handletextpad=0.5, handlelength=1.2)
 
 
 def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog: pd.DataFrame, extra: pd.DataFrame, imaging, *,
-                               z_source: float, kappa_true_fits: str | Path | None, figure_path: Path, tables_dir: Path, fits_dir: Path) -> dict[str, Any]:
+                               z_source: float, kappa_true_fits: str | Path | None, figure_path: Path, tables_dir: Path, fits_dir: Path, artifact_suffix: str = "", position_contours=None) -> dict[str, Any]:
     """Write the overview-plus-mass-panels figure, the strip profiles and the convergence FITS. Returns provenance."""
     images, bands, display, cluster = imaging
     display_image = images[cutouts.rgb_reference_band(bands)]
@@ -275,23 +325,34 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
         profiles[name] = (px, py)
         provenance[f"{name}_mass_in_window_msun"] = total
     tables_dir.mkdir(parents=True, exist_ok=True)
-    arc_directions.to_csv(tables_dir / "image_catalog_arc_directions.csv", index=False)
-    extra_directions.to_csv(tables_dir / "image_catalog_extra_arc_directions.csv", index=False)
+    arc_directions.to_csv(tables_dir / f"image_catalog_arc_directions{artifact_suffix}.csv", index=False)
+    extra_directions.to_csv(tables_dir / f"image_catalog_extra_arc_directions{artifact_suffix}.csv", index=False)
     provenance["arc_directions"] = {"kernel": "exact", "redshift": "per image", "vector": "minimum right-singular vector",
                                    "stick_length_arcsec": ARC_STICK_LENGTH_ARCSEC, "length_encodes_strength": False,
                                    "defined_count": int(arc_directions["direction_defined"].sum())}
     fits_dir.mkdir(parents=True, exist_ok=True)
-    profile.to_csv(tables_dir / "image_catalog_mass_profile.csv", index=False)
-    yprofile.to_csv(tables_dir / "image_catalog_mass_profile_y.csv", index=False)
+    profile.to_csv(tables_dir / f"image_catalog_mass_profile{artifact_suffix}.csv", index=False)
+    yprofile.to_csv(tables_dir / f"image_catalog_mass_profile_y{artifact_suffix}.csv", index=False)
     header = geometry["wcs"].to_header()
     header["ZSOURCE"] = physical["z_source"]
-    fits.writeto(fits_dir / "image_catalog_mass_kappa_model.fits", model, header, overwrite=True)
+    fits.writeto(fits_dir / f"image_catalog_mass_kappa_model{artifact_suffix}.fits", model, header, overwrite=True)
 
+    covariance_curves = None
+    if cutouts.rgb_instrument(bands) == "jwst" and position_contours is None:
+        covariance_curves, covariance_table = covariance_ellipse_curves(evaluator, theta, catalog)
+        covariance_table.to_csv(tables_dir / f"image_catalog_covariance_ellipses{artifact_suffix}.csv", index=False)
+        provenance["covariance_ellipses"] = dict(kernel="exact", redshift="per image", center="observed",
+            contour="unit Mahalanobis", display_scale=1., plane="image", defined_count=len(covariance_curves),
+            covariance="inverse(A) C inverse(A).T", extra_images="not defined: no observed positional covariance")
+
+    if position_contours is not None:
+        provenance['posterior_position_contours'] = dict(contours='KDE 68.3/95.4% highest-density regions',
+            conditional_on='successful local recovery', catalog_markers='tiny crosses; best-fit recovery status', stretch_sticks=False, summaries=position_contours['summaries'])
     fig = plt.figure(figsize=(7.1, 7.1), facecolor="white")
     grid = fig.add_gridspec(2, 2, width_ratios=[3.2, 1], height_ratios=[3.2, 1], left=0.09, right=0.95, bottom=0.10, top=0.96, wspace=0.025, hspace=0.025)
     ax = fig.add_subplot(grid[0, 0])
     overview_axes(fig, ax, images, bands, display, display_image, catalog, extra, geometry,
-                  arc_directions=arc_directions, extra_directions=extra_directions)
+                  arc_directions=arc_directions, extra_directions=extra_directions, covariance_curves=covariance_curves, position_contours=position_contours)
     lower, right, corner = fig.add_subplot(grid[1, 0]), fig.add_subplot(grid[0, 1]), fig.add_subplot(grid[1, 1])
     levels = CONTOUR_LEVELS_MSUN_PER_KPC2
 
@@ -367,5 +428,5 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
     plt.close(fig)
     provenance.update(bounds_arcsec=dict(zip(("xmin", "xmax", "ymin", "ymax"), bounds)), contour_levels_msun_per_kpc2=selected.tolist(),
                       grid_shape=list(model.shape))
-    (tables_dir / "image_catalog_mass_provenance.json").write_text(json.dumps(provenance, indent=2, default=float) + "\n")
+    (tables_dir / f"image_catalog_mass_provenance{artifact_suffix}.json").write_text(json.dumps(provenance, indent=2, default=float) + "\n")
     return provenance

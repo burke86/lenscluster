@@ -53,3 +53,19 @@ def test_stick_endpoints_follow_display_axis_reflections():
     ends = np.array([[-1.5], [1.5]]) * direction
     x, y = grid_pixels(geometry, ends[:, 0], ends[:, 1])
     np.testing.assert_allclose([np.diff(x)[0], np.diff(y)[0]], [-9., 12.])
+
+
+def test_covariance_ellipse_contours_and_identity(monkeypatch):
+    from lenscluster import covariance_cutouts
+    from lenscluster.mass_figure import covariance_ellipse_curves
+    a = np.array([[[.1,.03],[.03,.8]], [[-.2,0.],[0.,.6]]])
+    c = np.array([[[.04,.002],[.002,.01]], [[.01,0.],[0.,.02]]])
+    monkeypatch.setattr(covariance_cutouts, 'best_geometry', lambda *args: dict(a=a,c=c,valid=np.array([True,True])))
+    evaluator = SimpleNamespace(state=SimpleNamespace(images=SimpleNamespace(image_labels=['a','b'])))
+    catalog = pd.DataFrame(dict(image_label=['b','a'], x_obs_arcsec=[3.,5.], y_obs_arcsec=[7.,9.]))
+    curves, table = covariance_ellipse_curves(evaluator, np.zeros(1), catalog)
+    assert table.image_label.tolist() == ['b','a']
+    for curve, center, i in zip(curves, [[3.,7.],[5.,9.]], [1,0]):
+        source = (curve-center) @ a[i].T
+        q = np.einsum('ni,ij,nj->n',source,np.linalg.inv(c[i]),source)
+        np.testing.assert_allclose(q,1.,rtol=0.,atol=2e-14)

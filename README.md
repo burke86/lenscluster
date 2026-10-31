@@ -204,3 +204,16 @@ Regenerate just this plot, without inference:
 Posterior corner axes retain log10 coordinates for log-transformed parameters.
 The summaries above the histograms report physical values and asymmetric
 uncertainties in linear units. Sampling priors and stored draws are unchanged.
+
+JWST cluster overviews use posterior image-position contours (68.3% solid and
+95.4% dashed), with tiny catalog crosses colored by best-fit recovery status. Blue
+contours describe recovered catalog images; purple contours track known best-fit
+extra images. At most 256 deterministic joint draws, including the best fit, are
+evaluated with the existing local LM solver,
+seeded at catalog positions and those known extras, without global searches.
+Catalog matching takes priority, preventing an observed root from also entering
+an extra contour. The contours are conditional on successful local recovery;
+unknown extra images elsewhere are not exhaustively discovered. Numerical draws
+and recovery counts are cached in `posterior_overview_positions.npz` and `.json`.
+HST overviews retain their existing markers. Regenerate with
+`scripts/regenerate_cluster_mass_figure.py RUN_DIRECTORY --imaging jwst`.
