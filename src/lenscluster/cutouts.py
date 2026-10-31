@@ -1,4 +1,4 @@
-"""HST band images: locating, loading, cutouts and RGB display."""
+"""HST and JWST band images: locating, loading, cutouts and RGB display."""
 from __future__ import annotations
 
 import math
@@ -81,6 +81,23 @@ def cluster_from_config(model_config: Any, run_name: str = "") -> str:
             if any(token in text for token in tokens):
                 return cluster
     return str(run_name).split("_", 1)[0].lower() or "cluster"
+
+
+def imaging_variants(config):
+    """Saved imaging plus the standard JWST view for M0416 and AS1063."""
+    from dataclasses import replace
+    from .config import RGBDisplayConfig as DisplayConfig
+
+    primary = config.image_catalog
+    variants = [primary]
+    cluster = cluster_from_config(config.model, config.paths.run_name)
+    if cluster in {"m0416", "as1063"} and not any(
+        str(band).upper() in DEFAULT_JWST_RGB_BANDS for band in (primary.bands or ())
+    ):
+        variants.append(replace(primary, image_dir="data/JWST_Images", image_scale="auto",
+                                bands=tuple(DEFAULT_JWST_RGB_BANDS), rgb=DisplayConfig(),
+                                figure_suffix="_jwst"))
+    return variants
 
 
 def _fits_like(path: Path) -> bool:

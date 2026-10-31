@@ -83,6 +83,14 @@ For a run root `results/<campaign>/<cluster>/<run-label>`:
 
 Figure names carry the cluster prefix from `RunPathsConfig.figure_prefix`.
 
+When RGB imaging is configured and available, smoothed fits also write
+`small_lambda_covariance_cutouts.pdf`. Its three columns compare RGB cutouts,
+linear covariance ellipses, and second-order lens-map contours for the twelve
+images with the smallest absolute Jacobian eigenvalues. Measurement circles
+show their actual angular size. Exact-ray-tracing checks and selected image
+identities are saved in matching CSV/JSON tables; contour vertices are saved
+in NPZ format. These are geometric diagnostics, not a modified likelihood.
+
 ## Mock validation
 
 ```bash
