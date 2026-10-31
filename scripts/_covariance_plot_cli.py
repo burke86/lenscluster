@@ -17,8 +17,8 @@ def load_run(run_directory):
     run = Path(run_directory).resolve()
     init, final = run / 'init/artifacts', run / 'final'
     config = artifacts.load_config(final / 'artifacts')
-    state = build_state(config)
     classes = json.loads((init / artifacts.CLASSIFICATION_FILE).read_text())
+    state = build_state(config, drop_member_ids=classes.get('dropped_members', ()))
     centered = set(classes.get('centered_members', []))
     state = with_member_classes(state, artifacts.load_exact_positions(init), classes,
                                 centered=np.array([m in centered for m in state.members.member_ids]))

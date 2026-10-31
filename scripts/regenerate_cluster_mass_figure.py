@@ -39,8 +39,8 @@ def main():
         config = replace(config, image_catalog=replace(config.image_catalog, image_dir="data/JWST_Images" if jwst else "data/BUFFALO_Images",
                                                        image_scale="auto", bands=tuple(DEFAULT_JWST_RGB_BANDS if jwst else DEFAULT_HFF_RGB_BANDS),
                                                        rgb=RGBDisplayConfig(), figure_suffix="_jwst" if jwst else ""))
-    state = build_state(config)
     classes = json.loads((init / artifacts.CLASSIFICATION_FILE).read_text())
+    state = build_state(config, drop_member_ids=classes.get("dropped_members", ()))
     centered_ids = set(classes.get("centered_members", []))
     state = with_member_classes(state, artifacts.load_exact_positions(init), classes,
                                 centered=np.array([m in centered_ids for m in state.members.member_ids]))
