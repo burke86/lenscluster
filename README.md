@@ -201,6 +201,16 @@ Regenerate just this plot, without inference:
 
 - scripts/make_jacobian_smoothing_illustrations.py: synthetic Gaussian determinant averaging, smoothed normalization, and conditioning figures. Run in ggsl, hdm or lenstronomy; outputs are in output/pdf/jacobian_smoothing_candidates/.
 
+For M0416 and AS1063, normal post-fit plotting also creates the JWST cluster
+mass overview and covariance cutouts using `data/JWST_Images`. These PDFs and
+their numerical/provenance files have an `_jwst` suffix; the saved HST view is
+retained. Missing imaging is reported and skipped independently. A run already
+configured with JWST produces that view once. To regenerate just the overview:
+
+```bash
+/home/dutra/.conda/envs/lenstronomy/bin/python scripts/regenerate_cluster_mass_figure.py RUN_DIRECTORY --imaging jwst
+```
+
 Posterior corner axes retain log10 coordinates for log-transformed parameters.
 The summaries above the histograms report physical values and asymmetric
 uncertainties in linear units. Sampling priors and stored draws are unchanged.

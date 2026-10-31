@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from .member_diagnostic_plots import write_member_diagnostic_plots
 from .truth_recovery import compute_truth_recovery
 from .results_tex import write_run_results
 from .covariance_plots import write_covariance_plots
+from .covariance_cutouts import write_covariance_cutouts
+from .fold_diagnostics import compute_fold_diagnostics, save_fold_data, render_fold_diagnostics
 
 
 def posterior_summary_table(state: ModelState, posterior: PosteriorResults) -> pd.DataFrame:
@@ -109,19 +112,32 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
             ratio = truth["profile"]
             summary["truth"] = {"m2d_ratio_at_max_radius": float(ratio["m2d_ratio_median"].iloc[-1]), "n_radii": int(len(ratio))}
     if config.image_catalog.image_dir and not image_df.empty:
-        from .cutouts import load_cluster_imaging
+        from .cutouts import imaging_variants, load_cluster_imaging
         from .mass_figure import render_cluster_mass_figure
-        try:
-            imaging = load_cluster_imaging(config.image_catalog, config.model, config.paths.run_name)
-        except FileNotFoundError as error:
-            # The imaging lives on an external volume; a run must not lose its outputs because that volume is absent.
-            log(f"[outputs] cluster mass figure skipped: {error}")
-        else:
+        fold_data = None
+        for image_config in imaging_variants(config):
+            try:
+                imaging = load_cluster_imaging(image_config, config.model, config.paths.run_name)
+            except FileNotFoundError as error:
+                # Missing external imaging must not prevent the other outputs.
+                log(f"[outputs] cluster mass figure and covariance RGB cutouts skipped: {error}")
+                continue
+            position_contours = None
+            if image_config.figure_suffix == '_jwst':
+                from .image_position_contours import load_or_compute_contours
+                position_contours = load_or_compute_contours(replace(config, image_catalog=image_config), state, evaluator,
+                    posterior, recovery['image_recovery_extra_images'], tables, log=log)
             render_cluster_mass_figure(evaluator, best, image_df, recovery["image_recovery_extra_images"], imaging,
                                        z_source=z_crit, kappa_true_fits=config.truth.kappa_true_fits,
-                                       figure_path=plots.figure_path(figures, f"image_catalog_family_cluster_mass{config.image_catalog.figure_suffix}.pdf", prefix),
-                                       tables_dir=tables, fits_dir=paths.fits)
-            log(f"[outputs] cluster mass figure rendered from {imaging[3]} imaging")
+                                       figure_path=plots.figure_path(figures, f"image_catalog_family_cluster_mass{image_config.figure_suffix}.pdf", prefix),
+                                       tables_dir=tables, fits_dir=paths.fits, artifact_suffix=image_config.figure_suffix, position_contours=position_contours)
+            log(f"[outputs] cluster mass figure rendered from {imaging[3]} imaging ({image_config.image_dir})")
+            write_covariance_cutouts(replace(config, image_catalog=image_config), state, evaluator, posterior,
+                                     paths, imaging, log=log)
+            if fold_data is None:
+                fold_data = compute_fold_diagnostics(config, state, evaluator, posterior, log=log)
+                save_fold_data(fold_data, tables)
+            render_fold_diagnostics(replace(config, image_catalog=image_config), state, fold_data, paths, imaging, log=log)
     (tables / "run_summary.json").write_text(json.dumps(summary, indent=2, default=float))
     write_run_results(paths.root, name=prefix)
     return summary
