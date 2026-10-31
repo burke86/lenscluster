@@ -234,7 +234,7 @@ def _hff_clusters():
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
             # Instrumental astrometric error per image (HST WFC3/IR F160W).
-            "sigma_inst_arcsec": 0.1,
+            "sigma_inst_arcsec": 0.01,
             # Classify at the current model (reclassified at the MAP) rather than at the prior's 0.975 quantile, which for a
             # log-uniform cut radius is 90 kpc (198 of 222 exact).  The library defaults (guard 3, inflation 3) give the
             # sampled r_cut* a factor of three before any far-field member reaches the guard.
@@ -246,8 +246,8 @@ def _hff_clusters():
 
 # MACS J0416, two image catalogs over the same mass model: the HST + MUSE catalog of Bergamini et al. 2023 (237 spectroscopic
 # images in 88 families; the files are their 2022 release) and the JWST CANUCS gold catalog.  Native configuration transcribed from data/Bergamini/M0416_Bergamini22/Bergamini22_MACS0416_Normal.par:
-# four dark-matter dPIE halos with their prior boxes, a foreground galaxy and the galaxy 8971 as free galaxy-scale dPIEs
-# (8971 is not in the member catalog), four fixed hot-gas clumps, and the members on the neutral relation.
+# four dark-matter dPIE halos with their prior boxes, a free foreground galaxy, four fixed hot-gas clumps,
+# and the members (including galaxy 8971) on the neutral relation.
 def _m0416_bergamini2023_cluster():
     kpc = kpc_per_arcsec_from_config(0.396, {"H0": 70.0, "Om0": 0.3})
     catalog_dir = "data/Bergamini/M0416_Bergamini22"
@@ -288,12 +288,12 @@ def _m0416_bergamini2023_cluster():
         DPIEHaloConfig(id="5", x_centre=31.96420, y_centre=-65.55168, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.01, cut_radius_kpc=33.6321 * kpc,
                        v_disp=235.2454, z_lens=z, priors={"v_disp": PriorConfig("truncated_normal", mean=200.0, std=150.0, lower=50.0, upper=inf),
                                                           "cut_radius_kpc": PriorConfig("uniform", lower=5.0 * kpc, upper=100.0 * kpc, step=0.1 * kpc)}),
-        # Galaxy 8971, a member with its own arcs, outside the catalog.
-        DPIEHaloConfig(id="8971", x_centre=13.33912, y_centre=2.62495, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.01, cut_radius_kpc=33.6321 * kpc,
-                       v_disp=180.2454, z_lens=z, priors={"v_disp": PriorConfig("truncated_normal", mean=130.0, std=70.0, lower=60.0, upper=inf),
-                                                          "cut_radius_kpc": PriorConfig("uniform", lower=0.5, upper=50.0 * kpc, step=0.1 * kpc),
-                                                          "angle_pos": PriorConfig("uniform", lower=-90.0, upper=90.0, step=0.1),
-                                                          "ellipticite": PriorConfig("uniform", lower=0.0, upper=0.6, step=0.05)}),
+        # Galaxy 8971 now belongs to the member scaling relation in both catalogs.
+        # DPIEHaloConfig(id="8971", x_centre=13.33912, y_centre=2.62495, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.01, cut_radius_kpc=33.6321 * kpc,
+        #                v_disp=180.2454, z_lens=z, priors={"v_disp": PriorConfig("truncated_normal", mean=130.0, std=70.0, lower=60.0, upper=inf),
+        #                                                   "cut_radius_kpc": PriorConfig("uniform", lower=0.5, upper=50.0 * kpc, step=0.1 * kpc),
+        #                                                   "angle_pos": PriorConfig("uniform", lower=-90.0, upper=90.0, step=0.1),
+        #                                                   "ellipticite": PriorConfig("uniform", lower=0.0, upper=0.6, step=0.05)}),
         # Hot-gas clumps from the X-ray model, fixed.
         fixed("gas1", -18.137002925379967, -12.133967959650562, 0.11802924806826215, -156.7566690854322, 149.2054944000091, 149.82423360000914, 433.0248792121149),
         fixed("gas2", 30.787477074623045, -48.67185595965274, 0.4166205427409096, -71.5005491699657, 34.77330048000212, 165.77093760001011, 248.99144885049094),
@@ -316,17 +316,19 @@ def _m0416_bergamini2023_cluster():
             "softening_length_prior_log_sigma": 0.15,
             "sigma_inst_arcsec": sigma_inst_arcsec,
             "classification_prior_quantile": None,
+            # Far-field error at 2 r_cut is < 1 uas (oct28a); the default inflation 3 keeps the headroom.
+            "far_field_cut_radii": 2.0,
         }
 
     canucs_dir = "data/CANUCS/M0416_Rihtarsic2025"
     return {
         # HST + MUSE: 237 spectroscopic images in 88 families (Bergamini et al. 2023), HST astrometry.
         "M0416_BERGAMINI2023": entry("m0416_bergamini2023", reference=(64.0381417, -24.0674722), image_catalog=f"{catalog_dir}/obs_arcs.cat",
-                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.1),
+                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.01),
         # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 111 families (Rihtarsic et al. 2025), NIRCam
         # positions; the same halo set-up and member catalog (their copy has the BCG shifted), their reference centre.
         "M0416_CANUCS2025": entry("m0416_canucs2025", reference=(64.03821668520617, -24.06750122335985), image_catalog=f"{canucs_dir}/obs_arcs.cat",
-                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.05),
+                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.01),
     }
 
 
@@ -374,13 +376,14 @@ def build_config(
             image_constraints=ImageConstraintsConfig(catalog_path=cluster_config["image_catalog"], metadata_path=image_metadata,
                                                      sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
-        likelihood=LikelihoodConfig(),
+        # No selection term: in the oct28a M0416 run sigma_sel and sigma_def fit equally well and lambda_sel stayed at its prior.
+        likelihood=LikelihoodConfig(sigma_sel_prior=None),
         paths=RunPathsConfig(output_dir=f"results/{campaign_name}/{cluster_config['cluster_key']}",
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
         runtime=runtime if runtime is not None else build_runtime(cores),
         search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search),
-        sampling=SamplingConfig(warmup=1000, samples=500, max_tree_depth=8, target_accept=0.85),
+        sampling=SamplingConfig(warmup=1000, samples=1000, max_tree_depth=12, target_accept=0.85),
         scaling=replace(cluster_config.get("scaling", ScalingModelConfig()), softening_length_kpc=float(cluster_config.get("softening_length_kpc", 0.0))),
         members=MemberConfig(far_field_cut_radii=float(cluster_config.get("far_field_cut_radii", MemberConfig.far_field_cut_radii)),
                              cut_radius_inflation=float(cluster_config.get("cut_radius_inflation", MemberConfig.cut_radius_inflation)),
@@ -401,7 +404,7 @@ def build_config(
         config = replace(
             config,
             search=replace(config.search, n_starts=32),
-            sampling=SamplingConfig(warmup=500, samples=500, max_tree_depth=7, target_accept=0.8),
+            sampling=SamplingConfig(warmup=500, samples=250, max_tree_depth=10, target_accept=0.8),
             members=replace(config.members, far_field_cut_radii=2.0, classification_prior_quantile=None, min_deflection_arcsec=0.03),
         )
     return config
