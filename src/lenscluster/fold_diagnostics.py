@@ -19,6 +19,8 @@ from scipy.stats import gaussian_kde
 
 STYLE = Path(__file__).with_name('style.mplstyle')
 BLUE, ORANGE, MAGENTA = '#0072B2', '#D55E00', '#CC33AA'
+NEWTON_ITERATIONS = 15   # damped Newton steps per caustic root; the seeds are tracked critical points
+CRITICAL_TRACK_STEPS = 16  # Newton steps along the normal that move the reference seeds onto each draw's critical curve
 
 
 def fold_draw_indices(count, best):
@@ -108,24 +110,104 @@ def _kernels(evaluator):
             safe = jnp.where(abs(denom)>1e-12, denom, 1.)
             shift = jnp.where(abs(denom)>1e-12, det/safe, 0.)
             return points-jnp.clip(shift, -.3, .3)[:, None]*normal
-        points = jax.lax.fori_loop(0, 24, step, seeds)
+        points = jax.lax.fori_loop(0, CRITICAL_TRACK_STEPS, step, seeds)
         beta, a = fields(packed, points)
         return points, beta, jnp.linalg.det(a)
-    return fields, critical
+
+    def point(packed, x):
+        beta, a = fields(packed, x[None])
+        return beta[0], a[0]
+
+    def newton(equation, packed, seed, args, iterations=NEWTON_ITERATIONS):
+        """Damped Newton on a 2x2 system; a singular step leaves the point where it is and the residual check rejects it."""
+        def step(_, x):
+            residual = equation(packed, x, *args)
+            jacobian = jax.jacfwd(equation, argnums=1)(packed, x, *args)
+            shift = jnp.linalg.solve(jacobian, residual)
+            shift = jnp.where(jnp.isfinite(shift), shift, 0.)
+            return x-jnp.clip(shift, -.5, .5)
+        x = jax.lax.fori_loop(0, iterations, step, seed)
+        return x, jnp.linalg.norm(equation(packed, x, *args))
+
+    def first_root(equation, packed, seeds, usable, args, tolerance=1e-8):
+        """The first verified root in seed order (checked_root), or the last seed's end point and found=False."""
+        xs, errors = jax.vmap(lambda s: newton(equation, packed, s, args))(seeds)
+        ok = usable & jnp.isfinite(xs).all(1) & jnp.isfinite(errors) & (errors < tolerance)
+        k = jnp.argmax(ok)
+        return xs[k], errors[k], ok.any()
+
+    def nearest_equation(packed, x, source):
+        beta, a = point(packed, x)
+        u, _, _ = jnp.linalg.svd(a, full_matrices=False)
+        return jnp.array([jnp.linalg.det(a), jnp.dot(beta-source, u[:, 0])])
+
+    def anchor_equation(packed, x, origin, image_tangent):
+        _, a = point(packed, x)
+        return jnp.array([jnp.linalg.det(a), jnp.dot(x-origin, image_tangent)])
+
+    @jax.jit
+    def relative_batch(packed, sources, seeds, normal, origin, image_tangent, reference_tangent):
+        """relative_source for every draw at once: ``packed`` is stacked over draws, ``sources`` is (draws, 2).
+        Returns the tracked critical points, the relative source, the root residual and a failure code per draw
+        (0 ok; the codes index FAILURE_REASONS in the order of the sequential checks)."""
+        def one(packed, source):
+            points, betas, det = critical(packed, seeds, normal)
+            valid = jnp.isfinite(det) & (jnp.abs(det) < 1e-6)
+            curve = jnp.where(valid[:, None], points, jnp.nan)
+            distance = jnp.where(valid, jnp.linalg.norm(betas-source, axis=1), jnp.inf)
+            order = jnp.argsort(distance)[:3]
+            x, error, found = first_root(nearest_equation, packed, points[order], valid[order], (source,))
+            beta, a = point(packed, x)
+            u, singular, vh = jnp.linalg.svd(a, full_matrices=False)
+            fold_normal, null = u[:, -1], vh[-1]
+            def bend(h):
+                b, _ = fields(packed, jnp.stack([x+h*null, x, x-h*null]))
+                return jnp.dot(fold_normal, (b[0]-2*b[1]+b[2])/h**2)
+            bends = jnp.array([bend(.001), bend(.0005)])
+            fold_normal = fold_normal*jnp.sign(bends[1])
+            anchor, anchor_error, anchor_found = first_root(anchor_equation, packed, jnp.stack([origin, x]), jnp.array([True, True]),
+                                                            (origin, image_tangent))
+            anchor_beta, anchor_a = point(packed, anchor)
+            tangent = jnp.linalg.svd(anchor_a, full_matrices=False)[0][:, 0]
+            tangent = tangent*jnp.where(tangent @ reference_tangent < 0, -1., 1.)
+            relative = jnp.array([(source-anchor_beta) @ tangent, (source-beta) @ fold_normal])
+            code = jnp.where(~valid.any(), 1,
+                   jnp.where(~found, 2,
+                   jnp.where(singular[0] < 1e-6, 3,
+                   jnp.where((bends[0]*bends[1] <= 0) | (jnp.abs(bends[1]) < 1e-8), 4,
+                   jnp.where(~anchor_found, 2, 0)))))
+            return curve, relative, jnp.maximum(error, anchor_error), code
+        return jax.vmap(one)(packed, sources)
+    return fields, critical, relative_batch
 
 
-def posterior_image_positions(config, state, evaluator, posterior, *, log=print):
-    """Reuse the standard batched posterior finder once per draw, without fallback."""
+FAILURE_REASONS = {1: 'No tracked local critical points', 2: 'No verified local caustic root',
+                   3: 'Degenerate critical point, not a regular fold', 4: 'Fold-side orientation is degenerate or unresolved',
+                   5: 'Caustic solution left the local neighborhood'}
+
+
+def posterior_image_positions(config, state, evaluator, posterior, *, family_ids=None, log=print):
+    """Reuse the standard batched posterior finder once per draw, without fallback.  ``family_ids`` restricts the solve
+    to those families (the fold-pair families); the other rows of the (draws, images, 2) result stay NaN."""
     from .exact_images import ExactImageSolver
     solver = ExactImageSolver(evaluator, config.image_diagnostics)
     families_by_id = {str(f.family_id): f for f in state.family_data}
-    families = [families_by_id[str(fid)] for fid in state.images.family_ids]
+    all_ids = [str(fid) for fid in state.images.family_ids]
+    selected = all_ids if family_ids is None else [fid for fid in all_ids if fid in {str(f) for f in family_ids}]
+    families = [families_by_id[fid] for fid in selected]
+    selected_index = np.array([all_ids.index(fid) for fid in selected], dtype=int)
+    family_index = np.asarray(state.images.family_index_per_image, dtype=int)
+    rows = np.flatnonzero(np.isin(family_index, selected_index))
+    remap = {int(f): k for k, f in enumerate(selected_index)}
+    images = SimpleNamespace(x_obs=np.asarray(state.images.x_obs, dtype=float)[rows], y_obs=np.asarray(state.images.y_obs, dtype=float)[rows],
+                             family_index_per_image=np.array([remap[int(f)] for f in family_index[rows]], dtype=int))
+    factors = jnp.asarray(np.asarray(evaluator.factor_by_z)[np.asarray(state.images.z_index_per_image)[rows]])
     label_index = {str(label): i for i, label in enumerate(state.images.image_labels)}
     positions = np.full((len(posterior.samples), len(label_index), 2), np.nan)
-    physical_source = jax.jit(lambda t: (evaluator.physical(t), evaluator.source_positions(t)))
+    physical_source = jax.jit(lambda t: (evaluator.physical(t), evaluator.source_positions(t)[selected_index]))
     for draw, theta in enumerate(posterior.samples):
         physical, sources = physical_source(theta)
-        details = solver.predict_all_local(state.images, families, evaluator.packed_state(physical)[0], np.asarray(sources))
+        details = solver.predict_all_local(images, families, evaluator.packed_state(physical, factor_per_image=factors)[0], np.asarray(sources))
         for family, detail in zip(families, details):
             rows = [label_index[str(label)] for label in family.image_labels]
             xy = np.column_stack([detail['matched_model_x_arcsec'], detail['matched_model_y_arcsec']])
@@ -162,19 +244,27 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
     labels = np.asarray(state.images.image_labels)
     family_index = np.asarray(state.images.family_index_per_image)
     families = {str(f.family_id): f for f in state.family_data}
-    fields, critical = _kernels(evaluator)
+    fields, critical, relative_batch = _kernels(evaluator)
     determinants = np.linalg.det(np.asarray(evaluator.fields(physical, force_exact=True)['jacobian']))
     pairs = candidate_pairs(xy, family_index, labels, determinants, config.image_diagnostics.fold_pair_max_separation_arcsec)
     log(f"[outputs] fold search: {len(pairs)} candidates, {len(posterior.samples)} draws")
-    image_positions = posterior_image_positions(config, state, evaluator, posterior, log=log) if pairs else None
+    pair_family_ids = sorted({str(state.images.family_ids[int(family_index[i])]) for i, _ in pairs})
+    image_positions = posterior_image_positions(config, state, evaluator, posterior, family_ids=pair_family_ids, log=log) if pairs else None
+
+    def mapped_with(packed):
+        def mapped(points):
+            return tuple(map(np.asarray, fields(packed, jnp.asarray(points))))
+        return mapped
+
+    # The reference branch of every pair at the best fit; the draws are then visited once each, all pairs per draw.
+    verified = []
     for i, j in pairs:
         pair_labels = labels[[i, j]].tolist()
         fi = int(family_index[i]); fid = str(state.images.family_ids[fi]); z = float(families[fid].z_source)
         observed = xy[[i, j]]; mid = observed.mean(0); separation = np.linalg.norm(observed[1]-observed[0])
         fov = max(4., 1.8*separation)
         packed = evaluator.packed_state_for_z(physical, z)
-        def mapped(points):
-            return tuple(map(np.asarray, fields(packed, jnp.asarray(points))))
+        mapped = mapped_with(packed)
         direction = (observed[1]-observed[0])/separation
         tangent = np.array([direction[1], -direction[0]])
         log(f"[outputs] fold {pair_labels}: verifying reference branch")
@@ -193,7 +283,7 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
                 raise ValueError('Degenerate critical-curve gradient')
             normal /= np.linalg.norm(normal); tangent = np.array([normal[1], -normal[0]])
             _, a = mapped(origin[None]); ref_tangent = np.linalg.svd(a[0])[0][:, 0]
-            axis = np.linspace(-fov*.85, fov*.85, 401)
+            axis = np.linspace(-fov*.85, fov*.85, 201)     # seeds only: Newton refines them onto the curve
             xx, yy = np.meshgrid(mid[0]+axis, mid[1]+axis)
             _, u = evaluator.total_fields_at(np.column_stack([xx.ravel(), yy.ravel()]), packed)
             segments = contourpy.contour_generator(x=xx, y=yy, z=np.linalg.det(np.eye(2)-u).reshape(xx.shape)).lines(0.)
@@ -211,30 +301,32 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
             result['skipped'].append(dict(labels=pair_labels, reason=str(error)))
             continue
         n = len(posterior.samples)
-        relative = np.full((n, 2), np.nan); positions = image_positions[:, [i, j]].copy()
-        curves = np.full((n, 97, 2), np.nan); errors = np.full(n, np.nan); failures = []
-        for draw, theta in enumerate(posterior.samples):
-            pv, sources = physical_source(theta); source = np.asarray(sources[fi])
-            packed = evaluator.packed_state_for_z(pv, z)
-            points, betas, det = map(np.asarray, critical(packed, seeds, normal))
-            valid = np.isfinite(det) & (abs(det)<1e-6)
-            curves[draw] = np.where(valid[:, None], points, np.nan)
-            try:
-                if not valid.any():
-                    raise ValueError('No tracked local critical points')
-                order = np.argsort(np.linalg.norm(betas[valid]-source, axis=1))[:3]
-                relative[draw], errors[draw] = relative_source(mapped, source, points[valid][order], origin, tangent, ref_tangent)
-                if np.linalg.norm(relative[draw]) > 10*fov:
-                    raise ValueError('Caustic solution left the local neighborhood')
-            except (ValueError, np.linalg.LinAlgError) as error:
-                relative[draw] = np.nan
-                failures.append(dict(draw=draw, reason=str(error)))
-            if draw % 100 == 0:
-                log(f'[outputs] fold {pair_labels}: {draw}/{n} draws')
-        result['pairs'].append(dict(labels=pair_labels, family_id=fid, z_source=z, observed=observed,
-                                   separation=float(separation), fov=fov, relative=relative, positions=positions,
-                                   critical=curves, source_root_residual=errors, failures=failures,
-                                   normal=normal, origin=origin, seeds=seeds))
+        verified.append(dict(labels=pair_labels, family_id=fid, z_source=z, observed=observed,
+                             separation=float(separation), fov=fov, relative=np.full((n, 2), np.nan),
+                             positions=image_positions[:, [i, j]].copy(), critical=np.full((n, 97, 2), np.nan),
+                             source_root_residual=np.full(n, np.nan), failures=[],
+                             normal=normal, origin=origin, seeds=seeds, tangent=tangent, reference_tangent=ref_tangent, family_index=fi))
+    # All draws of a pair in one batched solve; the packed lens states are stacked over draws once per source redshift.
+    if verified:
+        physical_all, sources_all = jax.jit(jax.vmap(physical_source))(jnp.asarray(posterior.samples))
+    packed_by_z = {}
+    for pair in verified:
+        z = pair['z_source']
+        if z not in packed_by_z:
+            packed_by_z[z] = jax.jit(jax.vmap(lambda p, z=z: evaluator.packed_state_for_z(p, z)))(physical_all)
+        curves, relative, errors, codes = relative_batch(packed_by_z[z], sources_all[:, pair['family_index']], pair['seeds'], pair['normal'],
+                                                         pair['origin'], pair['tangent'], pair['reference_tangent'])
+        curves, relative, errors, codes = map(np.asarray, (curves, relative, errors, codes))
+        codes = np.where((codes == 0) & (np.linalg.norm(relative, axis=1) > 10*pair['fov']), 5, codes)
+        failed = codes != 0
+        pair['critical'][:] = curves
+        pair['relative'][:] = np.where(failed[:, None], np.nan, relative)
+        pair['source_root_residual'][:] = np.where(failed, np.nan, errors)
+        pair['failures'] = [dict(draw=int(draw), reason=FAILURE_REASONS[int(codes[draw])]) for draw in np.flatnonzero(failed)]
+        log(f"[outputs] fold {pair['labels']}: {len(posterior.samples)} draws, {int(failed.sum())} failed")
+    for pair in verified:
+        pair.pop('tangent'); pair.pop('reference_tangent'); pair.pop('family_index')
+        result['pairs'].append(pair)
     result['elapsed_seconds'] = time.monotonic()-started
     log(f"[outputs] fold diagnostics: {len(result['pairs'])} candidate pairs, {result['elapsed_seconds']:.1f}s")
     return result
