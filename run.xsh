@@ -58,6 +58,8 @@ def _usage() -> str:
         "Usage: xonsh run.xsh <cluster> [--campaign NAME] [--run-label NAME] [--image-metadata PATH] [--halo-search lbfgs|optax-lbfgs|adam|svi] [--member-search lbfgs|optax-lbfgs|adam|svi] [--stage init|final|both] [--imaging hst|jwst] [--fast] [--dry-run]\n"
         "  --imaging jwst: draw the cluster mass figure on the NIRCam mosaics (file suffix _jwst) instead of the HST ones\n"
         "  --halo-search, --member-search: optimizer of the large-scale stage and of the member stage of the init (default lbfgs)\n"
+        "  --likelihood: gp_image_plane (default; correlated image-plane displacements per family, one sampled scale sigma_img,\n"
+        "          no source-plane floor) or smoothed (the per-image source-plane floors sigma_def, sigma_extra)\n"
         "  --fast: exploratory settings: members deflecting every image by < 0.03\" are dropped, far-field members allowed down to\n"
         "          2 cut radii from an image, classification at the current model, 16 search starts, 300+150 draws at tree depth 7\n"
         "          (check the audit's far-field error before trusting a fast run)\n"
@@ -74,9 +76,9 @@ def _parse_args(argv: list[str]) -> dict:
         raise SystemExit(2)
     cluster = str(argv[1]).strip().upper()
     values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "image_metadata": None, "dry_run": False, "fast": False, "stage": "both", "imaging": "hst",
-              "halo_search": "lbfgs", "member_search": "lbfgs"}
+              "halo_search": "lbfgs", "member_search": "lbfgs", "likelihood": "gp_image_plane"}
     flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--image-metadata": "image_metadata", "--stage": "stage", "--imaging": "imaging",
-                   "--halo-search": "halo_search", "--member-search": "member_search"}
+                   "--halo-search": "halo_search", "--member-search": "member_search", "--likelihood": "likelihood"}
     index = 2
     while index < len(argv):
         flag = argv[index]
@@ -106,9 +108,12 @@ def _parse_args(argv: list[str]) -> dict:
     if values["imaging"] not in {"hst", "jwst"}:
         print("--imaging must be hst or jwst.")
         raise SystemExit(2)
+    if values["likelihood"] not in {"smoothed", "gp_image_plane"}:
+        print("--likelihood must be smoothed or gp_image_plane.")
+        raise SystemExit(2)
     return dict(cluster=cluster, campaign_name=str(values["campaign"]).strip(), run_label=values["run_label"],
                 dry_run=values["dry_run"], fast=values["fast"], image_metadata=values["image_metadata"], stage=values["stage"], imaging=values["imaging"],
-                halo_search=values["halo_search"], member_search=values["member_search"])
+                halo_search=values["halo_search"], member_search=values["member_search"], likelihood=values["likelihood"])
 
 
 # The solver's tuned defaults live in lenscluster.config; a cluster entry carries only what is specific to it: the
@@ -233,7 +238,7 @@ def _hff_clusters():
             "independent_member_halos": (),
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
-            # Instrumental astrometric error per image (HST WFC3/IR F160W).
+            # Instrumental astrometric error per image (HST WFC3/IR F160W): the measurement floor; the gp likelihood samples sigma_white above it.
             "sigma_inst_arcsec": 0.01,
             # Classify at the current model (reclassified at the MAP) rather than at the prior's 0.975 quantile, which for a
             # log-uniform cut radius is 90 kpc (198 of 222 exact).  The library defaults (guard 3, inflation 3) give the
@@ -318,6 +323,9 @@ def _m0416_bergamini2023_cluster():
             "classification_prior_quantile": None,
             # Far-field error at 2 r_cut is < 1 uas (oct28a); the default inflation 3 keeps the headroom.
             "far_field_cut_radii": 2.0,
+            # gp_image_plane: the shallow-pair check at the oct29a best fit gives 203.b/c an own depth of 2.5 mas and 211.b/c
+            # 3.8 mas, below 4.5 mas, so the smoothness floor drops from 1.5 to 0.5 mas (Section 5 of the GP instructions).
+            "gp_floor_arcsec": 0.0005,
         }
 
     canucs_dir = "data/CANUCS/M0416_Rihtarsic2025"
@@ -354,6 +362,7 @@ def build_config(
     campaign_name: str,
     run_label: str | None = None,
     image_metadata: str | None = None,
+    likelihood: str = "gp_image_plane",
     runtime: RuntimeConfig | None = None,
     fast: bool = False,
     imaging: str = "hst",
@@ -377,13 +386,14 @@ def build_config(
                                                      sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
         # No selection term: in the oct28a M0416 run sigma_sel and sigma_def fit equally well and lambda_sel stayed at its prior.
-        likelihood=LikelihoodConfig(sigma_sel_prior=None),
+        likelihood=LikelihoodConfig(likelihood_mode=likelihood, sigma_sel_prior=None,
+                                    gp_floor_arcsec=float(cluster_config.get("gp_floor_arcsec", LikelihoodConfig.gp_floor_arcsec))),
         paths=RunPathsConfig(output_dir=f"results/{campaign_name}/{cluster_config['cluster_key']}",
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
         runtime=runtime if runtime is not None else build_runtime(cores),
         search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search),
-        sampling=SamplingConfig(warmup=1000, samples=1000, max_tree_depth=12, target_accept=0.85),
+        sampling=SamplingConfig(warmup=1000, samples=1000, max_tree_depth=10, target_accept=0.85),
         scaling=replace(cluster_config.get("scaling", ScalingModelConfig()), softening_length_kpc=float(cluster_config.get("softening_length_kpc", 0.0))),
         members=MemberConfig(far_field_cut_radii=float(cluster_config.get("far_field_cut_radii", MemberConfig.far_field_cut_radii)),
                              cut_radius_inflation=float(cluster_config.get("cut_radius_inflation", MemberConfig.cut_radius_inflation)),
@@ -403,8 +413,8 @@ def build_config(
         # allowed down to 2 cut radii, classification at the current model, fewer starts, shorter chains at tree depth 7.
         config = replace(
             config,
-            search=replace(config.search, n_starts=32),
-            sampling=SamplingConfig(warmup=500, samples=250, max_tree_depth=10, target_accept=0.8),
+            search=replace(config.search, n_starts=256),
+            sampling=SamplingConfig(warmup=500, samples=500, max_tree_depth=8, target_accept=0.8),
             members=replace(config.members, far_field_cut_radii=2.0, classification_prior_quantile=None, min_deflection_arcsec=0.03),
         )
     return config
@@ -434,7 +444,7 @@ def main(argv=None):
         configure_cpu_runtime(runtime.chains, runtime.nuts_chain_method, runtime.cpu_threads_per_chain)
     config = build_config(cluster, cores=cores, campaign_name=options["campaign_name"], run_label=options["run_label"],
                           image_metadata=options["image_metadata"], runtime=runtime, fast=options["fast"], imaging=options["imaging"],
-                          halo_search=options["halo_search"], member_search=options["member_search"]).validate()
+                          halo_search=options["halo_search"], member_search=options["member_search"], likelihood=options["likelihood"]).validate()
     if options["dry_run"]:
         from lenscluster.pipeline import dry_run
         print(json.dumps({"dry_run": True, "cpu_plan": cpu_plan.to_dict(), **dry_run(config)}, indent=2, default=str))
@@ -444,7 +454,8 @@ def main(argv=None):
         _fast_mode_warning(config)
     print(f"[config] cluster={cluster} run_name={config.paths.run_name} output_dir={config.paths.output_dir} "
           f"stage={options['stage']} chains={runtime.chains} search={config.search.halo_method}+{config.search.member_method} "
-          f"n_starts={config.search.n_starts} fast={options['fast']} sigma_inst_arcsec={config.model.image_constraints.sigma_inst_arcsec}")
+          f"n_starts={config.search.n_starts} fast={options['fast']} sigma_inst_arcsec={config.model.image_constraints.sigma_inst_arcsec} "
+          f"likelihood={config.likelihood.likelihood_mode}")
     start = time.monotonic()
     try:
         run(config, stage=options["stage"])
