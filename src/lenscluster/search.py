@@ -128,15 +128,29 @@ def _scipy_lbfgs(fun: Callable, x0: np.ndarray, max_iter: int, trace: list[float
 
 
 def run_lbfgs(objective: Objective, starts_g: np.ndarray, config: SearchConfig) -> dict[str, Any]:
-    """scipy L-BFGS-B on the active block, one start at a time (1 to 2 evaluations per iteration)."""
-    def one(g):
-        trace: list[float] = [float(objective.reduced(jnp.asarray(g)))]
-        x, value, nit, nfev = _scipy_lbfgs(objective.reduced_value_and_grad, g, config.lbfgs_max_iter, trace)
-        return x, value, nit, nfev, np.asarray(trace)
-    results = [one(g) for g in progress(starts_g, desc="L-BFGS starts")]
-    final, potentials, iterations, evaluations, traces = zip(*results)
+    """scipy L-BFGS-B on the active block, one start at a time (1 to 2 evaluations per iteration).  With
+    ``config.screen_iterations``, every start first runs that many iterations and only the ``screen_keep`` best continue
+    (a restart of L-BFGS from the screened point, so the total stays within lbfgs_max_iter)."""
+    total = int(config.lbfgs_max_iter)
+    screen = config.screen_iterations
+    first = total if screen is None else min(int(screen), total)
+
+    def one(g, max_iter, trace):
+        x, value, nit, nfev = _scipy_lbfgs(objective.reduced_value_and_grad, g, max_iter, trace)
+        return x, value, nit, nfev
+
+    traces = [[float(objective.reduced(jnp.asarray(g)))] for g in starts_g]
+    results = [one(g, first, t) for g, t in zip(progress(starts_g, desc="L-BFGS starts" if screen is None else "L-BFGS screen"), traces)]
+    final, potentials, iterations, evaluations = (list(v) for v in zip(*results))
+    if screen is not None and first < total:
+        keep = np.argsort(np.where(np.isfinite(potentials), potentials, np.inf))[:int(config.screen_keep)]
+        for i in progress(keep, desc="L-BFGS continue"):
+            x, value, nit, nfev = one(final[i], total - first, traces[i])
+            final[i], potentials[i] = x, value
+            iterations[i] += nit
+            evaluations[i] += nfev
     return dict(final=np.stack(final), potential=np.asarray(potentials), iterations=np.asarray(iterations), evaluations=np.asarray(evaluations),
-                traces=_pad_traces(list(traces)))
+                traces=_pad_traces([np.asarray(t) for t in traces]))
 
 
 def _pad_traces(traces: list[np.ndarray]) -> np.ndarray:
@@ -294,12 +308,17 @@ def cluster_modes(final_g: np.ndarray, potential: np.ndarray, finite: np.ndarray
 
 
 def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, config: SearchConfig, *, method: str, seed: int = 0,
-                   log=print, active_sites: set[str] | None = None, label: str = "search") -> dict[str, Any]:
-    """Optimize from every start with ``method``, cluster the end points into modes, polish the best modes with L-BFGS in
-    full dimension.  ``active_sites`` restricts the search to those sample sites (the polish still frees everything)."""
+                   log=print, active_sites: set[str] | None = None, polish_sites: set[str] | None = None, label: str = "search") -> dict[str, Any]:
+    """Optimize from every start with ``method``, cluster the end points into modes, polish the best modes with L-BFGS.
+    ``active_sites`` restricts the search to those sample sites; the polish frees everything unless ``polish_sites`` is
+    given (then only those sites move, the rest stay at the start's values)."""
     pinned = pinned_scatter_values(state, config.polish_scatter)
     objective = Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned, active_sites=active_sites)
-    polish_objective = objective if active_sites is None else Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned)
+    if polish_sites is not None:
+        polish_objective = objective if polish_sites == active_sites else Objective(state, evaluator, starts[0], include_latent=True,
+                                                                                    pinned=pinned, active_sites=polish_sites)
+    else:
+        polish_objective = objective if active_sites is None else Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned)
     starts_g = np.stack([objective.flatten(s)[np.asarray(objective.global_index)] for s in starts])
     started = time.perf_counter()
     if method == "lbfgs":

@@ -252,11 +252,71 @@ def chain_start_check(evaluator: Evaluator, starts: np.ndarray, reference_theta:
 
 def search_is_fragile(search: dict[str, Any]) -> bool:
     """True when at most one start reaches the best basin: the result rests on a single optimization, whether that was
-    the configured model or one lucky prior draw."""
+    the configured model or one lucky prior draw.  A warm start inherits the verdict of the run it started from."""
+    if "warm_start" in search:
+        return bool(search.get("warm_start_fragile", True))
     if "starts_in_basin" in search:
         return int(search["starts_in_basin"]) <= 1
     modes = search["modes"]
     return sum(int(m.get("count", 1)) for m in modes if m["within_margin"]) <= 1
+
+
+def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[str, Any], config: LensClusterSolverConfig, *, log) -> dict[str, Any]:
+    """Move the chain-start modes to modes of the posterior NUTS samples, then keep only those within the mode margin of
+    the best.  The search optimizes the density without the source-transport volume, with the provisional member classes
+    and the member scatter pinned, so its modes are not modes of the final target.  All chain starts are optimized together
+    by the batched optax L-BFGS (its zoom line search backs off from invalid models; scipy's stopped after one iteration
+    at a far-field guard on CANUCS), every parameter free.  A start is replaced only by a finite, better, non-degenerate
+    point.  Starts that still trail the best by more than ``mode_margin`` are dropped (within_margin False), so no chain
+    starts there; the best start comes first.  Logs the global-block Hessian negative eigenvalues of the best start."""
+    from .sampling import block_mass_seed, posterior_model
+    from .search import Objective, run_optax_lbfgs
+    max_iter = int(config.search.nuts_start_max_iter)
+    if max_iter <= 0:
+        return search
+    limit, margin = float(config.search.max_median_abs_determinant), float(config.search.mode_margin)
+    reference = np.asarray(search["theta"], dtype=float)
+    objective = Objective(state, evaluator, reference, include_latent=True, log_likelihood=evaluator.log_likelihood)
+    index = np.asarray(objective.global_index)
+    out = dict(search, modes=[dict(m) for m in search["modes"]])
+    candidates = [m for m in out["modes"] if m["within_margin"]][:int(config.search.max_chain_modes)]
+    if not candidates:
+        return out
+    started = time.perf_counter()
+    thetas = [np.asarray(m["theta"], dtype=float) for m in candidates]
+    x0 = np.stack([objective.flatten(t)[index] for t in thetas])
+    before = np.array([-float(objective.reduced(jnp.asarray(x))) for x in x0])
+    result = run_optax_lbfgs(objective, x0, max_iter)
+    for k, mode in enumerate(candidates):
+        after = -float(result["potential"][k])
+        theta_new = objective.theta(objective.expand(result["final"][k]))
+        determinant = float(evaluator.median_abs_determinant(jnp.asarray(theta_new)))
+        accepted = bool(np.isfinite(after) and after > before[k] and determinant <= limit)
+        value = after if accepted else before[k]
+        log(f"[init] chain start {k}: optax L-BFGS on the NUTS target, {max_iter} iterations: log posterior {before[k]:.2f} -> {after:.2f}, "
+            f"median |det A| {determinant:.3f}" + ("" if accepted else " (kept the search mode)"))
+        mode.update(nuts_target_log_posterior=float(value), converged_iterations=max_iter if accepted else 0)
+        if accepted:
+            mode["theta"] = theta_new.tolist()
+    best = max(m["nuts_target_log_posterior"] for m in candidates)
+    kept = sorted([m for m in candidates if m["nuts_target_log_posterior"] >= best - margin], key=lambda m: -m["nuts_target_log_posterior"])
+    for mode in candidates:
+        if not any(mode is m for m in kept):
+            log(f"[init] chain start dropped: log posterior on the NUTS target {mode['nuts_target_log_posterior']:.2f}, "
+                f"{best - mode['nuts_target_log_posterior']:.1f} below the best (margin {margin:g}); its chains start at the kept modes")
+            mode["dropped_for_nuts"] = True
+    # Only the kept starts may seed chains: they come first, best first; every other mode leaves the margin.
+    for mode in out["modes"]:
+        if not any(mode is m for m in kept):
+            mode["within_margin"] = False
+    out["modes"] = kept + [m for m in out["modes"] if not any(m is k for k in kept)]
+    out["theta"] = np.asarray(kept[0]["theta"], dtype=float)
+    model = posterior_model(state.parameter_specs, evaluator.log_likelihood)
+    negative = block_mass_seed(model, state.parameter_specs, out["theta"])[2]
+    log(f"[init] chain starts: {len(kept)} of {len(candidates)} kept; best start: global-block Hessian negative eigenvalues "
+        f"{negative.get('n_negative_eigenvalues')} of {negative.get('global_dim')}; {time.perf_counter() - started:.0f}s")
+    out["nuts_start_seconds"] = float(time.perf_counter() - started)
+    return out
 
 
 def init_verdict(search: dict[str, Any], *, fit: dict[str, Any] | None) -> str:
@@ -352,6 +412,12 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         log(report)
         (paths.tables / "classification_report.txt").write_text(report + "\n")
         evaluator = Evaluator(state, config.likelihood.likelihood_mode)
+        # 4. Converge the chain starts on the posterior NUTS samples (final classes, transport volume, scatter free).
+        # Without it the start stays the state's own converted theta, which the final stage checks the chain starts against.
+        if int(config.search.nuts_start_max_iter) > 0:
+            search = converge_chain_starts(state, evaluator, search, config, log=log)
+            theta = np.asarray(search["theta"], dtype=float)
+            state.initial_theta = theta
         value = float(evaluator.loglike(jnp.asarray(theta)))
         log(f"[init] log-likelihood at the start with final classes: {value:.3f}")
         if not np.isfinite(value):

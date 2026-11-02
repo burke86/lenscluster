@@ -13,6 +13,7 @@ from lenscluster.config import ImageDiagnosticsConfig, RuntimeConfig, SamplingCo
 from lenscluster.evaluator import Evaluator
 from lenscluster.search import chain_starts
 from lenscluster.state import build_state, convert_member_centering, with_member_classes
+from conftest import SMOKE_SAMPLING_GATES, SMOKE_SEARCH_GATES
 
 
 def _offset_indices(state):
@@ -69,11 +70,13 @@ def _starts_and_hessian(config, init, monkeypatch):
 
 
 def test_chain_starts_and_hessian_use_the_converted_modes(synthetic_config, monkeypatch):
+    # The converged-start step (nuts_start_max_iter) moves the starts on purpose; it is off here so that the conversion
+    # alone is tested (test_init_speedups covers the converging step).
     config = replace(synthetic_config,
                      runtime=RuntimeConfig(seed=5, chains=3, nuts_chain_method="sequential", resume=True),
-                     search=SearchConfig(n_starts=6, member_starts=3, lbfgs_max_iter=30, polish_max_iter=20, mode_margin=1.0e9,
+                     search=SearchConfig(**SMOKE_SEARCH_GATES, nuts_start_max_iter=0, n_starts=6, member_starts=3, lbfgs_max_iter=30, polish_max_iter=20, mode_margin=1.0e9,
                                          mode_parameter_tolerance=1.0e-9, max_chain_modes=3),
-                     sampling=SamplingConfig(warmup=5, samples=5, max_tree_depth=3),
+                     sampling=SamplingConfig(**SMOKE_SAMPLING_GATES, warmup=5, samples=5, max_tree_depth=3),
                      image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=2),
                      members=replace(synthetic_config.members, centering="exact"))
     captured = {}
@@ -121,8 +124,8 @@ def test_a_misplaced_chain_start_is_reported(synthetic_config, monkeypatch, tmp_
     from lenscluster.sampling import hessian_seed_warning
     config = replace(synthetic_config,
                      runtime=RuntimeConfig(seed=5, chains=2, nuts_chain_method="sequential", resume=True),
-                     search=SearchConfig(n_starts=4, member_starts=2, lbfgs_max_iter=30, polish_max_iter=20),
-                     sampling=SamplingConfig(warmup=5, samples=5, max_tree_depth=3),
+                     search=SearchConfig(**SMOKE_SEARCH_GATES, nuts_start_max_iter=0, n_starts=4, member_starts=2, lbfgs_max_iter=30, polish_max_iter=20),
+                     sampling=SamplingConfig(**SMOKE_SAMPLING_GATES, warmup=5, samples=5, max_tree_depth=3),
                      image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=2),
                      members=replace(synthetic_config.members, centering="exact"))
     good = pipeline.run(config)

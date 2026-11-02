@@ -75,7 +75,8 @@ def save_search(directory: Path, search: dict[str, Any]) -> None:
                                            "method": search["method"], "n_global": search["n_global"], "search_seconds": search["search_seconds"],
                                            "polish_seconds": search["polish_seconds"], "n_finite": search["n_finite"],
                                            "stages": search.get("stages"), "stage_traces": search.get("stage_traces"),
-                                           "starts_in_basin": search.get("starts_in_basin"), "configured_in_basin": search.get("configured_in_basin")})
+                                           "starts_in_basin": search.get("starts_in_basin"), "configured_in_basin": search.get("configured_in_basin"),
+                                           **{k: search[k] for k in ("warm_start", "warm_start_shared", "warm_start_fragile") if k in search}})
 
 
 def save_posterior(directory: Path, posterior: PosteriorResults) -> None:
@@ -110,7 +111,9 @@ def load_search(directory: Path) -> dict[str, Any]:
         arrays = {k: np.asarray(data[k]) for k in data.files}
     return {**arrays, "theta": np.asarray(arrays["theta"], dtype=float), "modes": payload["modes"], "method": payload.get("method"),
             "n_finite": payload.get("n_finite"), "search_seconds": payload.get("search_seconds"), "polish_seconds": payload.get("polish_seconds"),
-            **({"stages": payload["stages"], "stage_traces": payload["stage_traces"]} if payload.get("stages") else {})}
+            **({"stages": payload["stages"], "stage_traces": payload["stage_traces"]} if payload.get("stages") else {}),
+            **({"starts_in_basin": payload["starts_in_basin"]} if payload.get("starts_in_basin") is not None else {}),
+            **{k: payload[k] for k in ("warm_start", "warm_start_shared", "warm_start_fragile") if k in payload}}
 
 
 def save_start(directory: Path, theta: np.ndarray, info: dict[str, Any]) -> None:

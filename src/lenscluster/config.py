@@ -214,6 +214,20 @@ class SearchConfig:
     member_method: str = "lbfgs"
     member_starts: int = 8
     lbfgs_max_iter: int = 400
+    # Screening (method "lbfgs"): every start runs screen_iterations first; only the screen_keep best continue to
+    # lbfgs_max_iter in total, from where they stopped.  None runs every start to the end.  On CANUCS (256 starts) 50/16
+    # reaches the same best stage-A mode as running all starts (log posterior equal to 1e-4) in 54 s instead of 201 s.
+    screen_iterations: int | None = 50
+    screen_keep: int = 16
+    # Converged chain starts: after the final classification, the chain-start modes are optimized together by the batched
+    # optax L-BFGS on the posterior NUTS samples (all parameters free, source-transport volume included) for this many
+    # iterations; starts still more than mode_margin below the best are dropped.  0 skips it.  On CANUCS
+    # (w500s500_fast_fixed_samplek) scipy stopped after one iteration at a far-field guard; optax lifted the second start
+    # by 119 in 100 iterations (most of its gain), at about 4 gradients per iteration plus ~2 min of compilation.
+    nuts_start_max_iter: int = 200
+    # Warm start: a previous run directory (or its init/artifacts); its saved start, mapped by parameter name, replaces
+    # stages A and B, and the polish runs from it.  Parameters it lacks start at the configured model.
+    warm_start: str | None = None
     adam_steps: int = 2000
     adam_learning_rate: float = 0.05
     svi_steps: int = 2000
