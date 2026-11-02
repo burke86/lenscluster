@@ -52,7 +52,8 @@ def generate_mock(root: Path, config, seed: int, *, log=None) -> MockPaths:
     """Draw the truth for ``seed``, lens it, and write the realization under ``root``."""
     truth = draw_truth(config, seed)
     sources, images = generate_images(truth, config, np.random.default_rng(int(seed) + 1_000_003), log=log)
-    return write_mock(root, truth, sources, images, config.with_updates(seed=int(seed)).to_json_dict())
+    return write_mock(root, truth, sources, images, config.with_updates(seed=int(seed)).to_json_dict(),
+                      reference=(float(config.reference_ra_deg), float(config.reference_dec_deg)))
 
 
 # ----------------------------------------------------------------------------- recovery tables

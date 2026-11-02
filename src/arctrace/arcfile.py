@@ -1,12 +1,9 @@
 """Arcfile and side-table writers.
 
-The arcfile format is the one consumed by
-``lenscluster.lenstool_parser._load_arc_constraints_catalog``: whitespace
-columns ``arc_id coord_1 coord_2 z_arc tangent_angle_rad
-curvature_arcsec_inv sigma_tangent sigma_curvature [reliability]`` with a
-``#REFERENCE 0`` header (coordinates are then absolute RA/Dec in degrees). The
-writer pre-validates everything the loader enforces so a written file always
-parses.
+The arcfile format: whitespace columns ``arc_id coord_1 coord_2 z_arc
+tangent_angle_rad curvature_arcsec_inv sigma_tangent sigma_curvature
+[reliability]`` with a ``#REFERENCE 0`` header (coordinates are then absolute
+RA/Dec in degrees). The writer validates every field before writing.
 """
 
 from __future__ import annotations

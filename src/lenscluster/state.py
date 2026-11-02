@@ -540,13 +540,20 @@ def build_image_data(families: list[FamilyData], images_df: pd.DataFrame, z_valu
     ordered = sorted(range(len(families)), key=lambda i: (families[i].z_source, i))
     xs, ys, sigmas, parities, zi, fi, labels = [], [], [], [], [], [], []
     family_ids, sx, sy = [], [], []
+    system_of_family = {str(r["family_id"]): str(r["system_id"]) for _, r in images_df.iterrows()} if "system_id" in images_df.columns else {}
+    system_ids: list[str] = []
+    si: list[int] = []
     z_index = {float(z): i for i, z in enumerate(z_values)}
     for new_index, family_index in enumerate(ordered):
         family = families[family_index]
         family_ids.append(family.family_id)
         ix, iy = source_param_indices[family.family_id]
         sx.append(int(ix)); sy.append(int(iy))
+        system = system_of_family.get(family.family_id, family.family_id)
+        if system not in system_ids:
+            system_ids.append(system)
         for label, x, y in zip(family.image_labels, family.x_obs, family.y_obs):
+            si.append(system_ids.index(system))
             row = by_label.loc[label]
             sigma = float(row["sigma_inst_arcsec"]) if "sigma_inst_arcsec" in by_label.columns else float(family.sigma_inst_arcsec)
             parity = int(row["parity"]) if "parity" in by_label.columns and np.isfinite(float(row["parity"])) else 0
@@ -562,7 +569,7 @@ def build_image_data(families: list[FamilyData], images_df: pd.DataFrame, z_valu
         sigma_inst_per_image=jnp.asarray(sigmas, dtype=jnp.float64), parity=jnp.asarray(parities, dtype=jnp.int32),
         z_index_per_image=jnp.asarray(zi, dtype=jnp.int32), family_index_per_image=jnp.asarray(fi, dtype=jnp.int32),
         source_x_param_index=jnp.asarray(sx, dtype=jnp.int32), source_y_param_index=jnp.asarray(sy, dtype=jnp.int32),
-        image_labels=tuple(labels))
+        image_labels=tuple(labels), system_ids=tuple(system_ids), system_index_per_image=jnp.asarray(si, dtype=jnp.int32))
 
 
 def source_sample_name(family_id: str, axis: str) -> str:

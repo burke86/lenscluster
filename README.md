@@ -167,7 +167,8 @@ summaries still use the full posterior.
 ## Package layout
 
 - `config.py`: typed configuration dataclasses and validation.
-- `inputs.py`, `lenstool_parser.py`: catalogs and Lenstool-style potential definitions.
+- `inputs.py`: halos, member populations and images from the configuration.
+- `image_catalog.py`: the YAML multiple-image catalog (systems, images, optional knots); `member_catalog.py`: member catalogs; `sky.py`: RA/Dec and arcsecond offsets.
 - `state.py`, `model.py`: parameter specifications, packed lens state, transforms.
 - `evaluator.py`, `farfield.py`, `smoothed_likelihood.py`, `jax_lensing.py`: the likelihood.
 - `classification.py`, `audit.py`: exact versus far-field members and the posterior audit.
@@ -180,8 +181,8 @@ summaries still use the full posterior.
 
 ## Data preparation scripts
 
-- `scripts/build_ff_sims_lenscluster_inputs.py`: FF-sims (Ares, Hera) catalogs.
-- `scripts/build_hff_master_catalog.py`, `scripts/build_hff_lenscluster_pars.py`: HFF inputs.
+- `scripts/convert_lenstool_catalog.py`: converts a Lenstool multiple-image catalog to the YAML image catalog.
+- `scripts/build_hff_master_catalog.py`: HFF inputs.
 - `scripts/make_ff_sims_truth_magnitudes.py`, `scripts/measure_ff_sims_image_magnitudes.py`.
 - `scripts/make_dpie_figure.py`, `scripts/make_covariance_figure.py`: paper figures.
 - `scripts/make_covariance_mapping.py`: current measurement, deflection and feature-selection covariance figure. Run with the `ggsl`, `hdm`, or `lenstronomy` conda Python interpreter, e.g. `/Users/isaque.dutra/miniforge3/envs/ggsl/bin/python scripts/make_covariance_mapping.py`. Uses only the Python standard library plus `pdflatex` (PGFPlots) and `pdftoppm`; no Node.js dependency. The reviewed layout is in `scripts/templates/covariance_mapping.tex`. Writes the PDF, TeX, PNG preview and checked illustrative parameters to `output/pdf/covariance_candidates/`.

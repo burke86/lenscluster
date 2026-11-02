@@ -8,19 +8,20 @@ import numpy as np
 import pandas as pd
 
 from .config import IndependentMemberHaloConfig, LensModelConfig, MemberPopulationConfig, PriorConfig
-from .lenstool_parser import (
-    _load_dat_catalog as load_dat_catalog,
-    _load_multiple_images_catalog as load_multiple_images_catalog,
-    _normalize_potential_definition as normalize_potential_definition,
-)
+from .image_catalog import load_image_catalog
+from .member_catalog import load_member_catalog
 from .profiles import profile as lens_profile
+from .sky import radec_to_offsets_arcsec
 
 
-def radec_to_offsets_arcsec(ra_deg: np.ndarray, dec_deg: np.ndarray, ra0_deg: float, dec0_deg: float) -> tuple[np.ndarray, np.ndarray]:
-    cos_dec0 = math.cos(math.radians(dec0_deg))
-    x_arcsec = (ra0_deg - np.asarray(ra_deg, dtype=float)) * cos_dec0 * 3600.0
-    y_arcsec = (np.asarray(dec_deg, dtype=float) - dec0_deg) * 3600.0
-    return x_arcsec, y_arcsec
+def check_potential_fields(potential: dict[str, Any]) -> dict[str, Any]:
+    """The potential with its profile's required fields and z_lens checked to be finite numbers."""
+    info = lens_profile(int(potential["profil"]))
+    for name in (*info.required_fields, "z_lens"):
+        value = potential.get(name)
+        if value is None or not math.isfinite(float(value)):
+            raise ValueError(f"Potential {potential.get('id', '?')} is missing a finite {name}.")
+    return potential
 
 
 def lenstool_ellipticite_to_axis_ratio(ellipticite: float | np.ndarray) -> np.ndarray:
@@ -134,8 +135,8 @@ def _independent_member_halo_potential(independent: IndependentMemberHaloConfig,
                      **(independent.priors or {})}
     prior_entries = {name: prior_config_to_limit_entry(prior, default_fixed_value=float(potential.get(name, 0.0)))
                      for name, prior in merged_priors.items()}
-    normalized, normalized_priors = normalize_potential_definition(potential, prior_entries, cosmo_config)
-    normalized["priors"] = normalized_priors
+    normalized = check_potential_fields(dict(potential))
+    normalized["priors"] = prior_entries
     normalized["independent_member_population_id"] = str(population.id)
     normalized["independent_member_catalog_id"] = catalog_id
     return normalized
@@ -186,9 +187,8 @@ def declared_model_inputs(model_config: LensModelConfig, scaling: Any = None) ->
     if model_config.image_constraints is None:
         raise ValueError("model.image_constraints is required.")
     constraints = model_config.image_constraints
-    images_df = load_multiple_images_catalog(
-        constraints.catalog_path, reference, metadata_path=constraints.metadata_path,
-        sigma_inst_arcsec=constraints.sigma_inst_arcsec, sigma_floor_arcsec=constraints.sigma_floor_arcsec)
+    images_df = load_image_catalog(constraints.catalog_path, sigma_inst_arcsec=constraints.sigma_inst_arcsec,
+                                   sigma_floor_arcsec=constraints.sigma_floor_arcsec)
     if images_df.empty:
         raise ValueError("No multiple-image constraints found in the image catalog.")
 
@@ -199,8 +199,8 @@ def declared_model_inputs(model_config: LensModelConfig, scaling: Any = None) ->
                      **{name: float(getattr(halo, name)) for name in info.required_fields}}
         priors = {name: prior_config_to_limit_entry(prior, default_fixed_value=float(potential.get(name, 0.0)))
                   for name, prior in (halo.priors or {}).items()}
-        normalized, normalized_priors = normalize_potential_definition(potential, priors, cosmo_config)
-        normalized["priors"] = normalized_priors
+        normalized = check_potential_fields(potential)
+        normalized["priors"] = priors
         potentials.append(normalized)
 
     independent_by_population: dict[str, list[IndependentMemberHaloConfig]] = {}
@@ -208,7 +208,7 @@ def declared_model_inputs(model_config: LensModelConfig, scaling: Any = None) ->
         independent_by_population.setdefault(str(item.population_id), []).append(item)
     potfiles: list[dict[str, Any]] = []
     for population in model_config.member_populations:
-        catalog_df = load_dat_catalog(population.catalog_path, reference, catalog_kind="potfile_galaxies")
+        catalog_df = load_member_catalog(population.catalog_path, reference)
         independent_items = independent_by_population.get(str(population.id), [])
         if independent_items:
             catalog_ids = catalog_df["id"].astype(str)

@@ -10,9 +10,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ..image_catalog import systems_from_offsets, write_image_catalog
 from .truth import MockTruth
 
-IMAGE_CATALOG = "obs_arcs.cat"
+IMAGE_CATALOG = "images.yaml"
 MEMBER_CATALOG = "members.cat"
 TRUTH_FILE = "truth.json"
 IMAGES_FILE = "mock_images.json"
@@ -35,14 +36,20 @@ class MockPaths:
         return self.image_catalog.is_file() and self.truth.is_file() and self.images.is_file()
 
 
-def write_mock(root: Path, truth: MockTruth, sources: list[dict[str, Any]], images: pd.DataFrame, config_json: dict[str, Any]) -> MockPaths:
+def write_mock(root: Path, truth: MockTruth, sources: list[dict[str, Any]], images: pd.DataFrame, config_json: dict[str, Any],
+               *, reference: tuple[float, float]) -> MockPaths:
+    """``reference`` is the (ra0, dec0) the image offsets are measured from, the solver's reference point."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     paths = MockPaths(root)
-    # Image catalog, Lenstool arcs format: label x y a b theta z magnitude weight magnitude_error.
-    paths.image_catalog.write_text("#REFERENCE 3\n" + "".join(
-        f"{r.image_label} {r.x_obs_arcsec:.8f} {r.y_obs_arcsec:.8f} 0.3734 0.3734 90.0 {r.z_source:.8f} {r.image_magnitude_obs:.6f} 1.0 {r.image_magnitude_err:.4f}\n"
-        for r in images.itertuples(index=False)), encoding="utf-8")
+    # Image catalog (lenscluster.image_catalog): one system per family, observed positions and magnitudes.
+    rows = []
+    for r in images.itertuples(index=False):
+        family, image = str(r.image_label).split(".")
+        rows.append((family, image, r.x_obs_arcsec, r.y_obs_arcsec, r.z_source,
+                     {"mag": float(r.image_magnitude_obs), "mag_err": float(r.image_magnitude_err)}))
+    write_image_catalog(paths.image_catalog, systems_from_offsets(rows, reference),
+                        header=f"Mock realization, seed {config_json.get('seed')}: observed image positions and magnitudes.")
     # Member catalog, potfile format: id x y a b theta magnitude luminosity colour; only the modelled members.
     modelled = truth.modelled_members
     if modelled:

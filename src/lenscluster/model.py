@@ -185,6 +185,8 @@ class ImageData:
     source_x_param_index: jnp.ndarray
     source_y_param_index: jnp.ndarray
     image_labels: tuple[str, ...]
+    system_ids: tuple[str, ...] = ()                 # galaxies: a system holds the knots (families) of one source galaxy
+    system_index_per_image: jnp.ndarray | None = None
 
     @property
     def n_images(self) -> int:

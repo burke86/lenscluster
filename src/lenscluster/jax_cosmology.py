@@ -48,19 +48,6 @@ M_SUN_KG = 1.9891e30
 ARCSEC_TO_RAD = np.deg2rad(1.0 / 3600.0)
 
 
-def cosmology_config_from_parsed(parsed: dict[str, Any]) -> dict[str, float | str]:
-    cosmo_block = parsed.get("cosmology")
-    if not isinstance(cosmo_block, dict):
-        cosmo_block = parsed.get("cosmologie")
-    if not isinstance(cosmo_block, dict):
-        return flat_wcdm_config()
-    h0 = float(cosmo_block.get("H0", 70.0))
-    om0 = float(cosmo_block.get("omegaM", cosmo_block.get("omega", 0.3)))
-    ode0 = float(cosmo_block.get("omegaX", cosmo_block.get("lambda", 1.0 - om0)))
-    w0 = float(cosmo_block.get("wX", cosmo_block.get("w", -1.0)))
-    return flat_wcdm_config(h0=h0, om0=om0, ode0=ode0, w0=w0)
-
-
 def flat_wcdm_config(
     *,
     h0: float = 70.0,

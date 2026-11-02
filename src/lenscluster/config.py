@@ -175,9 +175,8 @@ class MemberPopulationConfig:
 
 @dataclass(frozen=True)
 class ImageConstraintsConfig:
-    catalog_path: str | Path
-    sigma_inst_arcsec: float = 0.1           # instrumental astrometric error per image (sigma_inst); model systematics belong to sigma_def
-    metadata_path: str | Path | None = None
+    catalog_path: str | Path                 # YAML image catalog (lenscluster.image_catalog); convert Lenstool files with scripts/convert_lenstool_catalog.py
+    sigma_inst_arcsec: float = 0.1           # astrometric error of images whose catalog entry gives none (sigma_inst)
     sigma_floor_arcsec: float = 0.0
 
 
