@@ -787,7 +787,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         gp_sigma_large_param_index=int(gp_sigma_large_index), gp_ell_large_arcsec=float(config.likelihood.gp_ell_large_arcsec),
         gp_reference_redshift=float(config.likelihood.gp_reference_redshift),
         gp_blocks=str(config.likelihood.gp_blocks),
-        gp_knee=dict(gamma=float(config.likelihood.gp_knee_gamma), project=bool(config.likelihood.gp_knee_project_low_order),
+        gp_knee=dict(gamma=float(config.likelihood.gp_knee_gamma), project=tuple(str(m) for m in config.likelihood.gp_knee_project_modes),
                      gamma_grid=(None if config.likelihood.gp_knee_gamma_prior is None else
                                  (float(config.likelihood.gp_knee_gamma_prior[0]), float(config.likelihood.gp_knee_gamma_prior[1]),
                                   int(round((float(config.likelihood.gp_knee_gamma_prior[1]) - float(config.likelihood.gp_knee_gamma_prior[0]))

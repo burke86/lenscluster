@@ -162,30 +162,67 @@ def pair_coefficients(restricted: dict, local, r_fraction, lam, gamma=None):
     return ((1.0 - f) * c_l[local] + f * c_l[n + local], (1.0 - f) * c_t[local] + f * c_t[n + local])
 
 
-def project_low_order(k_alpha, xy, mask, weights, scale: float = 50.0):
-    """The weighted mass-field covariance blocks (S, M, M, 2, 2) conditioned on the field having no uniform translation,
-    convergence or shear over each block's images:  K' = K - K Psi (Psi^T K Psi)^-1 Psi^T K, with Psi_i = Phi_i / w_i the
-    five low-order deflection modes of the field at z_ref (translation x, y; convergence; shear 1, 2) at image i, in
-    coordinates (theta - centre) / ``scale``.  These modes belong to the external shear, the halos and the sources; on one
-    covariance over all images the field otherwise absorbs the shear.  Padded slots carry zero modes."""
-    k_alpha, xy, mask, weights = jnp.asarray(k_alpha), jnp.asarray(xy), jnp.asarray(mask), jnp.asarray(weights)
-    n_blocks, size = mask.shape
+LOW_ORDER_MODES = ("translation", "convergence", "shear")
+PROJECTION_SCALE_ARCSEC = 50.0
+
+
+def low_order_basis(xy, mask, modes, scale: float = PROJECTION_SCALE_ARCSEC):
+    """Deflection patterns of the low-order modes at points ``xy`` (..., M, 2) about each block's image centre: translation
+    (x, y), convergence (theta), shear (gamma_1: (x, -y); gamma_2: (y, x)), in coordinates (theta - centre) / ``scale``.
+    Returns the patterns (..., M, 2, n) and the centres (..., 2); padded slots carry zero patterns."""
+    xy, mask = jnp.asarray(xy), jnp.asarray(mask)
     m = mask.astype(xy.dtype)
-    centre = jnp.sum(xy * m[..., None], axis=1) / jnp.maximum(jnp.sum(m, axis=1), 1.0)[:, None]
-    u = (xy - centre[:, None, :]) / scale
+    centre = jnp.sum(xy * m[..., None], axis=-2) / jnp.maximum(jnp.sum(m, axis=-1), 1.0)[..., None]
+    return low_order_patterns(xy, centre, modes, scale) * m[..., None, None], centre
+
+
+def low_order_patterns(points, centre, modes, scale: float = PROJECTION_SCALE_ARCSEC):
+    """The patterns of ``low_order_basis`` at arbitrary points (..., P, 2) for given centres (..., 2): (..., P, 2, n)."""
+    u = (jnp.asarray(points) - jnp.asarray(centre)[..., None, :]) / scale
     ux, uy = u[..., 0], u[..., 1]
     one, zero = jnp.ones_like(ux), jnp.zeros_like(ux)
-    phi = jnp.stack([jnp.stack([one, zero], -1), jnp.stack([zero, one], -1), jnp.stack([ux, uy], -1),
-                     jnp.stack([ux, -uy], -1), jnp.stack([uy, ux], -1)], -1)                  # (S, M, 2, 5)
-    inverse_w = jnp.where(mask, 1.0 / jnp.where(mask, weights, 1.0), 0.0)
-    psi = (phi * inverse_w[..., None, None]).reshape(n_blocks, 2 * size, 5)
+    columns = []
+    for mode in modes:
+        if mode == "translation":
+            columns += [jnp.stack([one, zero], -1), jnp.stack([zero, one], -1)]
+        elif mode == "convergence":
+            columns += [jnp.stack([ux, uy], -1)]
+        elif mode == "shear":
+            columns += [jnp.stack([ux, -uy], -1), jnp.stack([uy, ux], -1)]
+        else:
+            raise ValueError(f"unknown low-order mode {mode!r}; use {LOW_ORDER_MODES}")
+    return jnp.stack(columns, -1)
+
+
+def low_order_projector(xy, mask, modes):
+    """Orthonormal basis Q (S, 2M, n) of the low-order patterns over each block's images (QR, so P = Q Q^T is the
+    least-squares projector onto them) and the factor R (S, n, n) with patterns = Q R; plus the centres (S, 2)."""
+    basis, centre = low_order_basis(xy, mask, modes)
+    n_blocks, size = jnp.asarray(mask).shape
+    q, r = jnp.linalg.qr(basis.reshape(n_blocks, 2 * size, -1))
+    return q, r, centre
+
+
+def project_low_order(k_alpha, xy, mask, weights, modes):
+    """The weighted mass-field covariance blocks (S, M, M, 2, 2) with the low-order modes removed from the field:  the
+    field at z_ref is split at the images into its least-squares low-order fit and a residual, alpha = Phi c + r, and only r
+    is kept,  K_r = (I - P) K (I - P),  P = Q Q^T,  with K = W^-1 k_alpha W^-1 the unweighted field covariance; then
+    k_alpha' = W K_r W.  A congruence, so k_alpha' stays positive semidefinite, and Phi^T W^-1 k_alpha' = 0.  With flat priors
+    on the external shear and the sources, the likelihood is unchanged (the removed modes are absorbed by them); the shear
+    parameter then means the total shear over the images.  This is not the field conditioned on c = 0, which is a
+    different (smoother) residual field and changes the likelihood."""
+    k_alpha, mask, weights = jnp.asarray(k_alpha), jnp.asarray(mask), jnp.asarray(weights)
+    n_blocks, size = mask.shape
+    inverse_w = jnp.repeat(jnp.where(mask, 1.0 / jnp.where(mask, weights, 1.0), 0.0), 2, axis=-1)          # (S, 2M)
+    w2 = jnp.repeat(jnp.where(mask, weights, 0.0), 2, axis=-1)
     k = k_alpha.transpose(0, 1, 3, 2, 4).reshape(n_blocks, 2 * size, 2 * size)
-    kp = k @ psi                                                                               # (S, 2M, 5)
-    gram = jnp.swapaxes(psi, -1, -2) @ kp                                                      # (S, 5, 5)
-    gram = 0.5 * (gram + jnp.swapaxes(gram, -1, -2)) + 1e-12 * jnp.trace(gram, axis1=-2, axis2=-1)[:, None, None] * jnp.eye(5)
-    projected = k - kp @ jnp.linalg.solve(gram, jnp.swapaxes(kp, -1, -2))
-    projected = 0.5 * (projected + jnp.swapaxes(projected, -1, -2))
-    return projected.reshape(n_blocks, size, 2, size, 2).transpose(0, 1, 3, 2, 4)
+    k = k * inverse_w[:, :, None] * inverse_w[:, None, :]
+    q, _, _ = low_order_projector(xy, mask, modes)
+    a = k - q @ (jnp.swapaxes(q, -1, -2) @ k)                                                          # (I - P) K
+    kr = a - (a @ q) @ jnp.swapaxes(q, -1, -2)                                                         # (I - P) K (I - P)
+    kr = 0.5 * (kr + jnp.swapaxes(kr, -1, -2))
+    kr = kr * w2[:, :, None] * w2[:, None, :]
+    return kr.reshape(n_blocks, size, 2, size, 2).transpose(0, 1, 3, 2, 4)
 
 
 def deflection_blocks(c_l, c_t, nn, pair_mask, sigma_alpha2):
@@ -383,7 +420,8 @@ class MeanDeflectionKnee:
     its Jacobian like ``gp_image_plane.MeanDeflection``.  The knee curves are evaluated once at the draw's lambda_t
     and interpolated linearly in r (their derivative in r is then piecewise constant, which the solver tolerates)."""
 
-    def __init__(self, layout: dict, tables: dict, coefficients, lam: float, sigma_alpha2: float, weights_per_family, gamma=None) -> None:
+    def __init__(self, layout: dict, tables: dict, coefficients, lam: float, sigma_alpha2: float, weights_per_family, gamma=None,
+                 modes: tuple[str, ...] = ()) -> None:
         c_l, c_t = (np.asarray(v) for v in knee_curves(tables, jnp.asarray(float(lam)), None if gamma is None else jnp.asarray(float(gamma))))
         r_grid, xy, mask, weights = tables["r_grid"], layout["xy"], layout["mask"], layout["weights"]
         block_of_family = layout["block_of_family"]
@@ -391,15 +429,35 @@ class MeanDeflectionKnee:
         w_family = jnp.asarray(weights_per_family, dtype=jnp.float64)
         c_l, c_t = jnp.asarray(c_l), jnp.asarray(c_t)
 
+        def field_rows(points, s):
+            """Unweighted field covariance between points (P, 2) and the images of block s: (P, M, 2, 2)."""
+            d = points[:, None, :] - xy[s][None]
+            r = jnp.sqrt(jnp.sum(d * d, axis=-1) + 1e-30)
+            n = d / r[..., None]
+            cl, ct = jnp.interp(r, r_grid, c_l), jnp.interp(r, r_grid, c_t)
+            return sigma_alpha2 * (ct[..., None, None] * jnp.eye(2) + (cl - ct)[..., None, None] * n[..., :, None] * n[..., None, :])
+
+        # u = W v per block (the field-space coefficients).  With the low-order modes removed (project_low_order), the field
+        # is r = alpha - Phi c, c the least-squares fit at the images: E[r(theta) | F] = k(theta)^T u' - Phi(theta) g, with
+        # u' = (I - P) u and g = R^-1 Q^T K u' (Phi = Q R at the images), so that at the images it equals (I - P) K (I - P) u.
+        n_blocks, size = mask.shape
+        u = (coef * (mask * weights)[..., None]).reshape(n_blocks, 2 * size)
+        if modes:
+            q, r_factor, centre = low_order_projector(xy, mask, modes)
+            u = u - jnp.einsum("sin,sn->si", q, jnp.einsum("sin,si->sn", q, u))
+            k_images = jax.vmap(lambda s: field_rows(xy[s], s))(jnp.arange(n_blocks))                  # (S, M, M, 2, 2)
+            k_images = k_images * (mask[:, :, None] & mask[:, None, :])[..., None, None]
+            ku = jnp.einsum("simab,smb->sia", k_images, u.reshape(n_blocks, size, 2)).reshape(n_blocks, 2 * size)
+            g = jnp.linalg.solve(r_factor, jnp.einsum("sin,si->sn", q, ku)[..., None])[..., 0]          # (S, n)
+        u = u.reshape(n_blocks, size, 2)
+
         def single(point, family):
             s = block_of_family[family]
-            d = point[None, :] - xy[s]                                                         # (M, 2)
-            r = jnp.sqrt(jnp.sum(d * d, axis=-1) + 1e-30)
-            n = d / r[:, None]
-            cl, ct = jnp.interp(r, r_grid, c_l), jnp.interp(r, r_grid, c_t)
-            block = sigma_alpha2 * (ct[:, None, None] * jnp.eye(2) + (cl - ct)[:, None, None] * n[:, :, None] * n[:, None, :])
-            block = block * (mask[s] * weights[s])[:, None, None]
-            return w_family[family] * jnp.einsum("mab,mb->a", block, coef[s])
+            block = field_rows(point[None], s)[0] * mask[s][:, None, None]
+            value = jnp.einsum("mab,mb->a", block, u[s])
+            if modes:
+                value = value - low_order_patterns(point[None], centre[s], modes)[0] @ g[s]
+            return w_family[family] * value
 
         value = jax.vmap(single)
         jac = jax.vmap(jax.jacfwd(single, argnums=0))

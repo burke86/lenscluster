@@ -382,14 +382,14 @@ class LikelihoodConfig:
     gp_knee_gamma: float = 4.0                                        # fixed slope, or the start when it is sampled
     gp_knee_gamma_prior: tuple[float, float] | None = (2.0, 6.0)      # uniform bounds on the sampled slope; None fixes it
     gp_knee_gamma_step: float = 0.25                                  # spacing of the tabulated slopes (cubic spline between)
-    # Wavelength range of the GRF (arcsec).  The long end is 30" (about 160 kpc at M0416), the scale the halos and the
-    # external shear resolve: with 100" the flat part of the spectrum carried field-wide modes (a uniform deflection
-    # gradient = convergence + shear), and on one covariance over all images the GRF absorbed the external shear
-    # (w500s500_fast_fixed_samplek: gamma2 0.057 -> 0.009, sigma_alpha and the knee at their caps).
-    gp_knee_scales_arcsec: tuple[float, float] = (0.2, 30.0)
-    # Condition the mass field on no uniform translation, convergence or shear over the images (gp_knee.project_low_order):
-    # keeps the long wavelengths but leaves the field-wide modes to the external shear and the halos.  gp_blocks "all" only.
-    gp_knee_project_low_order: bool = False
+    # Wavelength range of the GRF (arcsec).  A 30" long end was tried (2026-11-02) when the shear seemed absorbed by the GRF;
+    # at a fixed lens it cost 12.6 in log L and pushed the image-plane GP to its 5" cap, and the shear was in fact taken
+    # by swapped halos, not by the GRF (its own shear over the images is ~0.002), so the long end is back at 100".
+    gp_knee_scales_arcsec: tuple[float, float] = (0.2, 100.0)
+    # Low-order modes removed from the mass field over the images ("translation", "convergence", "shear"; empty = none):
+    # the residual projection of gp_knee.project_low_order.  Under the flat shear prior it leaves the likelihood unchanged
+    # and makes the external shear the total shear over the images.  gp_blocks "all" only.
+    gp_knee_project_modes: tuple[str, ...] = ()
     gp_knee_lambda_grid: tuple[float, float, int] = (0.5, 80.0, 64)   # tabulated knee wavelengths: min, max, count (ln lambda clamped to it)
     gp_knee_r_step_arcsec: float = 0.02
     # Upper bounds (truncations) keep the error model from replacing the lens: a deflection error above 0.3" is a missing
@@ -608,8 +608,11 @@ def validate_config(config: LensClusterSolverConfig) -> None:
             raise ValueError("likelihood.gp_knee_gamma_prior must be (min, max) with 0 < min < max, holding gp_knee_gamma (the start).")
         if step <= 0.0 or abs((g_hi - g_lo) / step - round((g_hi - g_lo) / step)) > 1e-9 or round((g_hi - g_lo) / step) < 2:
             raise ValueError("likelihood.gp_knee_gamma_step must divide the gp_knee_gamma_prior range into at least 2 intervals.")
-    if config.likelihood.gp_knee_project_low_order and config.likelihood.gp_blocks != "all":
-        raise ValueError("likelihood.gp_knee_project_low_order needs gp_blocks = 'all' (field-wide modes over one covariance).")
+    modes = tuple(config.likelihood.gp_knee_project_modes)
+    if any(m not in {"translation", "convergence", "shear"} for m in modes) or len(set(modes)) != len(modes):
+        raise ValueError("likelihood.gp_knee_project_modes takes distinct names among 'translation', 'convergence', 'shear'.")
+    if modes and config.likelihood.gp_blocks != "all":
+        raise ValueError("likelihood.gp_knee_project_modes needs gp_blocks = 'all' (field-wide modes over one covariance).")
     lo, hi = config.likelihood.gp_knee_scales_arcsec
     if not (0.0 < float(lo) < float(hi)):
         raise ValueError("likelihood.gp_knee_scales_arcsec must be (min, max) with 0 < min < max.")

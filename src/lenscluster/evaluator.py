@@ -101,12 +101,15 @@ class Evaluator:
                 # the redshift weight of each family for the mean-deflection correction.
                 knee = dict(getattr(state, "gp_knee", {}))
                 lam_lo, lam_hi, lam_n = knee.get("lambda_grid", (0.5, 80.0, 64))
-                scale_lo, scale_hi = knee.get("scales", (0.2, 30.0))
+                scale_lo, scale_hi = knee.get("scales", (0.2, 100.0))
                 xy = np.asarray(self.xy)
                 r_max = float(np.hypot(np.ptp(xy[:, 0]), np.ptp(xy[:, 1]))) + 1.0
                 gamma_grid = knee.get("gamma_grid") if self.gp_knee_gamma_index >= 0 else None
                 self.gp_knee_gamma_fixed = float(knee.get("gamma", 4.0))
-                self.gp_project_low_order = bool(knee.get("project", False)) and str(getattr(state, "gp_blocks", "all")) == "all"
+                project = knee.get("project", ())
+                # Older states stored a bool for the (since replaced) conditioning; only named residual-projection modes count.
+                modes = tuple(project) if isinstance(project, (tuple, list)) else ()
+                self.gp_project_modes = modes if str(getattr(state, "gp_blocks", "all")) == "all" else ()
                 self.gp_tables = gp_knee.knee_tables(r_max=r_max, r_step=float(knee.get("r_step", 0.02)), lam_min=float(lam_lo), lam_max=float(lam_hi),
                                                      n_lam=int(lam_n), scale_min=float(scale_lo), scale_max=float(scale_hi),
                                                      gamma=None if gamma_grid is not None else self.gp_knee_gamma_fixed, gamma_grid=gamma_grid)
@@ -510,8 +513,8 @@ class Evaluator:
                                                      scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
                 k_alpha = gp_knee.deflection_blocks(c_l, c_t, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha"]))
                 k_alpha = k_alpha * (w[:, :, None] * w[:, None, :])[..., None, None]
-                if getattr(self, "gp_project_low_order", False):
-                    k_alpha = gp_knee.project_low_order(k_alpha, layout["xy"], mask, w)
+                if getattr(self, "gp_project_modes", ()):
+                    k_alpha = gp_knee.project_low_order(k_alpha, layout["xy"], mask, w, self.gp_project_modes)
             else:
                 k_alpha = jnp.zeros(layout["nn"].shape, dtype=jnp.float64)
             k_img = jnp.square(scales["sigma_shared"]) * jnp.exp(-layout["squared_separations"] / (2.0 * jnp.square(scales["gp_ell"]))) * pair_mask
@@ -566,6 +569,8 @@ class Evaluator:
             padded = backprojected[group["slots"]]
             whitening = gp_knee.block_source_whitening(cholesky, padded, group["indicator"], group["mask"], group["knot_mask"])
             parts.append((group, covariance, cholesky, padded, whitening))
+            if getattr(self, "gp_project_modes", ()):
+                projected_blocks = blocks["k_alpha"]
         coordinates = jnp.stack((params[images.source_x_param_index], params[images.source_y_param_index]), -1)
         transported = gp_knee.transport_grouped_sources(coordinates, [p[4] for p in parts], groups, jnp.asarray(members.source_prior_mean),
                                                         members.source_prior_sigma)
@@ -583,8 +588,14 @@ class Evaluator:
         determinant_gradient = fields["determinant_gradient"]
         if self.freeze_determinant_gradient:
             determinant_gradient = jax.lax.stop_gradient(determinant_gradient)
+        sigma_def = scales["sigma_def"]
+        if getattr(self, "gp_project_modes", ()):
+            # The smoothed determinant uses each image's own deflection variance, which the projection lowers (one block).
+            diagonal = jnp.moveaxis(jnp.diagonal(projected_blocks[0], axis1=0, axis2=1), -1, 0)             # (M, 2, 2)
+            variance = jnp.zeros(images.n_images, dtype=jnp.float64).at[layout["slots"][0]].set(0.5 * (diagonal[:, 0, 0] + diagonal[:, 1, 1]))
+            sigma_def = jnp.sqrt(variance + jnp.square(sigma_fl))
         stats = sl.statistics(backprojected, source[images.family_index_per_image], jacobian, determinant_gradient,
-                              scales["sigma_meas"], scales["sigma_def"], 0.0, 1.0, parity=images.parity)
+                              scales["sigma_meas"], sigma_def, 0.0, 1.0, parity=images.parity)
         log_h = sl.log_expected_absolute_normal(stats["determinant_mean"], jnp.maximum(stats["determinant_variance"], 1e-16), images.parity)
         block_of_image = self.gp_block_position[layout["block_of_family"][images.family_index_per_image]]
         block_ok = block_finite & jnp.isfinite(family_loglike)
@@ -624,7 +635,8 @@ class Evaluator:
             v, s = self._knee_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))
             s = np.asarray(s, dtype=float)
             return gp_knee.MeanDeflectionKnee(self.gp, self.gp_tables, v, float(s[1]), float(s[0]) ** 2, self.gp_weights_per_family,
-                                              gamma=float(s[2]) if self.gp_knee_gamma_index >= 0 else None)
+                                              gamma=float(s[2]) if self.gp_knee_gamma_index >= 0 else None,
+                                              modes=tuple(getattr(self, "gp_project_modes", ())))
         if not hasattr(self, "_gp_mean_inputs_jit"):
             self._gp_mean_inputs_jit = jax.jit(self._gp_mean_inputs)
         v, s = self._gp_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))
