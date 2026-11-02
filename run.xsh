@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-cores = 4  # NUTS chains; one JAX CPU device per chain.
+cores = 8  # NUTS chains; one JAX CPU device per chain.
 seed = 12345
 
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster"
@@ -498,7 +498,7 @@ def build_config(
         config = replace(
             config,
             search=replace(config.search, n_starts=256),
-            sampling=SamplingConfig(warmup=500, samples=500, max_tree_depth=8, target_accept=0.8),
+            sampling=SamplingConfig(warmup=250, samples=100, max_tree_depth=8, target_accept=0.8),
             members=replace(config.members, far_field_cut_radii=2.0, classification_prior_quantile=None, min_deflection_arcsec=0.03),
         )
     return config
