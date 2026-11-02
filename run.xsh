@@ -55,16 +55,29 @@ FF_RGB_DISPLAY = RGBDisplayConfig(q=6.8, stretch=0.0158, minimum=0.00105, red_ga
 
 def _usage() -> str:
     return (
-        "Usage: xonsh run.xsh <cluster> [--campaign NAME] [--run-label NAME] [--image-metadata PATH] [--halo-search lbfgs|optax-lbfgs|adam|svi] [--member-search lbfgs|optax-lbfgs|adam|svi] [--stage init|final|both] [--imaging hst|jwst] [--fast] [--dry-run]\n"
+        "Usage: xonsh run.xsh <cluster> [--campaign NAME] [--run-label NAME] [--halo-search lbfgs|optax-lbfgs|adam|svi] [--member-search lbfgs|optax-lbfgs|adam|svi] [--stage init|final|both] [--imaging hst|jwst] [--warm-start RUN_DIR] [--fast] [--dry-run]\n"
         "  --imaging jwst: draw the cluster mass figure on the NIRCam mosaics (file suffix _jwst) instead of the HST ones\n"
         "  --halo-search, --member-search: optimizer of the large-scale stage and of the member stage of the init (default lbfgs)\n"
-        "  --likelihood: gp_image_plane (default; correlated image-plane displacements per family, one sampled scale sigma_img,\n"
-        "          no source-plane floor) or smoothed (the per-image source-plane floors sigma_def, sigma_extra)\n"
+        "  --likelihood: grf_gp (default; a Gaussian random field of unmodelled mass on the lens potential with a knee convergence\n"
+        "          spectrum, sigma_alpha, lambda_t and the slope (uniform 2-6), plus the image-plane GP sigma_shared, ell, sigma_white), gp_image_plane\n"
+        "          (the image-plane GP alone, per family), potential (two Gaussian/Matern deflection scales, per family) or\n"
+        "          smoothed (the per-image source-plane floors sigma_def, sigma_extra)\n"
+        "  --warm-start RUN_DIR: start the init search from a previous run's saved start (parameters matched by name; the\n"
+        "          256-start search is skipped; NUTS still requires that run's init to have been robust)\n"
+        "  --gp-blocks: grf_gp only: all (default; one covariance over every image), system (all knots of a galaxy; what --fast uses)\n"
+        "          or family\n"
+        "  --gp-kernel-family: potential only: matern52 (default) or gaussian\n"
         "  --fast: exploratory settings: members deflecting every image by < 0.03\" are dropped, far-field members allowed down to\n"
         "          2 cut radii from an image, classification at the current model, 16 search starts, 300+150 draws at tree depth 7\n"
         "          (check the audit's far-field error before trusting a fast run)\n"
         f"Valid clusters: {VALID_CLUSTERS}"
     )
+
+
+# Command-line likelihood names -> (LikelihoodConfig.likelihood_mode, gp_kernel).  "gp_image_plane" is the library's mode
+# name for every GP likelihood; the kernel says which model it is.
+LIKELIHOODS = {"grf_gp": ("gp_image_plane", "knee"), "gp_image_plane": ("gp_image_plane", "image_plane"),
+               "potential": ("gp_image_plane", "potential"), "smoothed": ("smoothed", "image_plane")}
 
 
 def _parse_args(argv: list[str]) -> dict:
@@ -75,10 +88,12 @@ def _parse_args(argv: list[str]) -> dict:
         print(_usage())
         raise SystemExit(2)
     cluster = str(argv[1]).strip().upper()
-    values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "image_metadata": None, "dry_run": False, "fast": False, "stage": "both", "imaging": "hst",
-              "halo_search": "lbfgs", "member_search": "lbfgs", "likelihood": "gp_image_plane"}
-    flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--image-metadata": "image_metadata", "--stage": "stage", "--imaging": "imaging",
-                   "--halo-search": "halo_search", "--member-search": "member_search", "--likelihood": "likelihood"}
+    values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "dry_run": False, "fast": False, "stage": "both", "imaging": "hst",
+              "halo_search": "lbfgs", "member_search": "lbfgs", "likelihood": "grf_gp", "gp_kernel_family": None, "gp_blocks": None,
+              "warm_start": None}
+    flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--stage": "stage", "--imaging": "imaging",
+                   "--halo-search": "halo_search", "--member-search": "member_search", "--likelihood": "likelihood",
+                   "--gp-kernel-family": "gp_kernel_family", "--gp-blocks": "gp_blocks", "--warm-start": "warm_start"}
     index = 2
     while index < len(argv):
         flag = argv[index]
@@ -108,12 +123,25 @@ def _parse_args(argv: list[str]) -> dict:
     if values["imaging"] not in {"hst", "jwst"}:
         print("--imaging must be hst or jwst.")
         raise SystemExit(2)
-    if values["likelihood"] not in {"smoothed", "gp_image_plane"}:
-        print("--likelihood must be smoothed or gp_image_plane.")
+    if values["likelihood"] not in LIKELIHOODS:
+        print(f"--likelihood must be one of {', '.join(LIKELIHOODS)}.")
+        raise SystemExit(2)
+    if values["gp_blocks"] not in {None, "all", "system", "family"}:
+        print("--gp-blocks must be all, system or family.")
+        raise SystemExit(2)
+    if values["gp_blocks"] is not None and values["likelihood"] != "grf_gp":
+        print("--gp-blocks applies to the grf_gp likelihood only.")
+        raise SystemExit(2)
+    if values["gp_kernel_family"] not in {None, "gaussian", "matern52"}:
+        print("--gp-kernel-family must be gaussian or matern52.")
+        raise SystemExit(2)
+    if values["gp_kernel_family"] is not None and values["likelihood"] != "potential":
+        print("--gp-kernel-family applies to the potential likelihood only.")
         raise SystemExit(2)
     return dict(cluster=cluster, campaign_name=str(values["campaign"]).strip(), run_label=values["run_label"],
-                dry_run=values["dry_run"], fast=values["fast"], image_metadata=values["image_metadata"], stage=values["stage"], imaging=values["imaging"],
-                halo_search=values["halo_search"], member_search=values["member_search"], likelihood=values["likelihood"])
+                dry_run=values["dry_run"], fast=values["fast"], stage=values["stage"], imaging=values["imaging"],
+                halo_search=values["halo_search"], member_search=values["member_search"], likelihood=values["likelihood"],
+                gp_kernel_family=values["gp_kernel_family"], gp_blocks=values["gp_blocks"], warm_start=values["warm_start"])
 
 
 # The solver's tuned defaults live in lenscluster.config; a cluster entry carries only what is specific to it: the
@@ -172,7 +200,7 @@ def _hff_clusters():
         "AS1063": {
             "cluster_key": "as1063",
             "reference": ReferenceFrameConfig(reference=3, ra0_deg=342.18321, dec0_deg=-44.530878),
-            "image_catalog": f"{AS1063_CATALOG_DIR}/obs_arcs.dat",
+            "image_catalog": f"{AS1063_CATALOG_DIR}/images.yaml",
             "cosmology": CosmologyConfig(H0=70.0, Om0=0.3, Ode0=0.7),
             "halos": (
                 DPIEHaloConfig(
@@ -305,7 +333,55 @@ def _m0416_bergamini2023_cluster():
         fixed("gas3", -2.3693869253788935, -1.2627359596498962, 0.4248370668779292, -54.743768197790125, 8.281737600000504, 37.5947433600023, 101.7305750041091),
         fixed("gas4", -20.12861892537998, 14.74104004035109, 0.4013796817764777, -49.32427500520669, 51.67495680000315, 52.337385600003195, 281.8472712670227),
     )
-    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec):
+
+    # The CANUCS independent halos (Rihtarsic et al. 2025), from data/CANUCS/M0416_Rihtarsic2025/
+    # hlsp_canucs_jwst-hst_multi_macs0416-lenstool-param_multi_v1_model.txt: starts and uniform limits as published, in
+    # offsets from the CANUCS reference.  Starts outside their own limits are moved inside: halo 1 and 2 angles by 180 deg (the
+    # same ellipse), halo 3 x to the box edge.  Galaxy 8971 (their potential 6) is on the member scaling relation instead.
+    def canucs_halo(id, x, y, e, angle, core_arcsec, v_disp, *, v_box, x_box, y_box, core_box_arcsec, e_box=None, angle_box=None,
+                    position_sigma=None):
+        # position_sigma (arcsec): a normal prior on the centre around the CANUCS position, truncated to the box; else uniform.
+        if position_sigma is None:
+            position = {"x_centre": PriorConfig("uniform", lower=x_box[0], upper=x_box[1], step=0.1),
+                        "y_centre": PriorConfig("uniform", lower=y_box[0], upper=y_box[1], step=0.1)}
+        else:
+            position = {"x_centre": PriorConfig("truncated_normal", mean=x, std=position_sigma, lower=x_box[0], upper=x_box[1]),
+                        "y_centre": PriorConfig("truncated_normal", mean=y, std=position_sigma, lower=y_box[0], upper=y_box[1])}
+        priors = {**position,
+                  "core_radius_kpc": PriorConfig("uniform", lower=max(0.5, core_box_arcsec[0] * kpc), upper=core_box_arcsec[1] * kpc, step=0.1 * kpc),
+                  "v_disp": PriorConfig("uniform", lower=v_box[0], upper=v_box[1], step=0.1)}
+        if e_box is not None:
+            priors["ellipticite"] = PriorConfig("uniform", lower=e_box[0], upper=e_box[1], step=0.05)
+        if angle_box is not None:
+            priors["angle_pos"] = PriorConfig("uniform", lower=angle_box[0], upper=angle_box[1], step=0.1)
+        return DPIEHaloConfig(id=id, x_centre=x, y_centre=y, ellipticite=e, angle_pos=angle, core_radius_kpc=core_arcsec * kpc,
+                              cut_radius_kpc=2000.0 * kpc, v_disp=v_disp, z_lens=z, priors=priors)
+
+    canucs_halos = (
+        canucs_halo("1", 0.13392, -0.04501, 0.8, -35.7557 + 180.0, 13.5871, 650.0, v_box=(350.0, 1000.0), x_box=(-15.0, 15.0),
+                    y_box=(-15.0, 15.0), core_box_arcsec=(0.0, 20.0), e_box=(0.2, 0.9), angle_box=(100.0, 180.0)),       # NE
+        # Halos 2 and 4 are 9" apart: with overlapping position boxes they swapped identities between chains
+        # (w500s500_fast_fixed_samplek, R-hat 2.8).  Normal priors around the CANUCS centres (3"), in boxes split at x = 24.5"
+        # (the centres differ mostly in x), make them identifiable.
+        canucs_halo("2", 20.29565, -35.83494, 0.6417, -55.3798 + 180.0, 14.416, 805.1496, v_box=(350.0, 1200.0), x_box=(15.0, 24.5),
+                    y_box=(-45.0, -30.0), core_box_arcsec=(0.0, 25.0), e_box=(0.2, 0.9), angle_box=(90.0, 170.0),
+                    position_sigma=3.0),                                                                                # SW
+        canucs_halo("3", -39.0, 15.0, 0.0, 0.0, 13.5871, 650.0, v_box=(50.0, 750.0), x_box=(-39.0, -25.0), y_box=(2.0, 16.0),
+                    core_box_arcsec=(0.0, 35.0)),                                                                       # third, circular
+        canucs_halo("4", 28.772, -39.454, 0.9, 134.202, 10.671, 476.784, v_box=(100.0, 1000.0), x_box=(24.5, 40.0), y_box=(-50.0, -30.0),
+                    core_box_arcsec=(0.0, 20.0), e_box=(0.2, 0.9), angle_box=(0.0, 180.0), position_sigma=3.0),          # fourth
+        DPIEHaloConfig(id="5", x_centre=31.96420, y_centre=-65.55168, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.0001 * kpc,
+                       cut_radius_kpc=33.6321 * kpc, v_disp=235.2454, z_lens=z,                                         # foreground galaxy
+                       priors={"v_disp": PriorConfig("uniform", lower=50.0, upper=350.0, step=0.1),
+                               "cut_radius_kpc": PriorConfig("uniform", lower=5.0 * kpc, upper=100.0 * kpc, step=0.1 * kpc)}),
+        *halos[-4:],                        # the four fixed hot-gas clumps, identical in the CANUCS configuration
+        # External shear, free amplitude and angle: not in the CANUCS configuration, but worth +35 in the lens log L for 2
+        # parameters at the fast init (nov01b), and it moves the mass field's knee from 15" to 5" (.agents/gp-knee-plan.md).
+        ShearHaloConfig.free("shear", z, gamma_upper=0.3),
+    )
+    assert [h.id for h in halos[-4:]] == ["gas1", "gas2", "gas3", "gas4"]
+
+    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec, halos=halos):
         return {
             "cluster_key": key,
             "reference": ReferenceFrameConfig(reference=3, ra0_deg=reference[0], dec0_deg=reference[1]),
@@ -323,20 +399,23 @@ def _m0416_bergamini2023_cluster():
             "classification_prior_quantile": None,
             # Far-field error at 2 r_cut is < 1 uas (oct28a); the default inflation 3 keeps the headroom.
             "far_field_cut_radii": 2.0,
-            # gp_image_plane: the shallow-pair check at the oct29a best fit gives 203.b/c an own depth of 2.5 mas and 211.b/c
-            # 3.8 mas, below 4.5 mas, so the smoothness floor drops from 1.5 to 0.5 mas (Section 5 of the GP instructions).
-            "gp_floor_arcsec": 0.0005,
+            # The image-plane GP needed a 0.5 mas floor here (203.b/c depth 2.5 mas, 211.b/c 3.8 mas at the oct29a best fit).
+            # Under the potential kernel the pair depth error is the common-mode deflection error, not the floor, so the
+            # default 1.5 mas floor applies; pass gp_floor_arcsec 0.0005 again for a --likelihood gp_image_plane run.
         }
 
     canucs_dir = "data/CANUCS/M0416_Rihtarsic2025"
     return {
-        # HST + MUSE: 237 spectroscopic images in 88 families (Bergamini et al. 2023), HST astrometry.
-        "M0416_BERGAMINI2023": entry("m0416_bergamini2023", reference=(64.0381417, -24.0674722), image_catalog=f"{catalog_dir}/obs_arcs.cat",
+        # HST + MUSE: 237 spectroscopic images in 88 families (Bergamini et al. 2023), HST astrometry; images.yaml groups
+        # them into 60 systems, 12 with knots (scripts/group_bergamini_knots.py).
+        "M0416_BERGAMINI2023": entry("m0416_bergamini2023", reference=(64.0381417, -24.0674722), image_catalog=f"{catalog_dir}/images.yaml",
                                      member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.01),
-        # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 111 families (Rihtarsic et al. 2025), NIRCam
-        # positions; the same halo set-up and member catalog (their copy has the BCG shifted), their reference centre.
-        "M0416_CANUCS2025": entry("m0416_canucs2025", reference=(64.03821668520617, -24.06750122335985), image_catalog=f"{canucs_dir}/obs_arcs.cat",
-                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.01),
+        # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 83 systems, 15 with knots, 111 knot-families
+        # (Rihtarsic et al. 2025; scripts/convert_canucs_catalog.py), NIRCam positions in the frame of their lens model; their
+        # member catalog (+ galaxy 8971, on the relation), their independent halos and reference centre.  The members are fitted
+        # exactly as for Bergamini: same relation, priors, free slopes, scatter and deviations.
+        "M0416_CANUCS2025": entry("m0416_canucs2025", reference=(64.03821668520617, -24.06750122335985), image_catalog=f"{canucs_dir}/images.yaml",
+                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.01, halos=canucs_halos),
     }
 
 
@@ -361,13 +440,15 @@ def build_config(
     cores: int,
     campaign_name: str,
     run_label: str | None = None,
-    image_metadata: str | None = None,
-    likelihood: str = "gp_image_plane",
+    likelihood: str = "grf_gp",
+    gp_kernel_family: str | None = None,
+    gp_blocks: str | None = None,
     runtime: RuntimeConfig | None = None,
     fast: bool = False,
     imaging: str = "hst",
     halo_search: str = "lbfgs",
     member_search: str = "lbfgs",
+    warm_start: str | None = None,
 ) -> LensClusterSolverConfig:
     """The solver configuration for one cluster: library defaults plus the cluster entry, the command-line choices and,
     with ``fast``, the exploratory overrides."""
@@ -382,18 +463,21 @@ def build_config(
             large_halos=cluster_config["halos"],
             independent_member_halos=cluster_config["independent_member_halos"],
             member_populations=(cluster_config["member_population"],),
-            image_constraints=ImageConstraintsConfig(catalog_path=cluster_config["image_catalog"], metadata_path=image_metadata,
+            image_constraints=ImageConstraintsConfig(catalog_path=cluster_config["image_catalog"],
                                                      sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
         # No selection term: in the oct28a M0416 run sigma_sel and sigma_def fit equally well and lambda_sel stayed at its prior.
-        likelihood=LikelihoodConfig(likelihood_mode=likelihood, sigma_sel_prior=None,
+        # gp_blocks: "all" unless given; --fast switches to "system" (8x cheaper covariance, the last nats do not matter there).
+        likelihood=LikelihoodConfig(likelihood_mode=LIKELIHOODS[likelihood][0], sigma_sel_prior=None, gp_kernel=LIKELIHOODS[likelihood][1],
+                                    gp_kernel_family=gp_kernel_family or "matern52",
+                                    gp_blocks=gp_blocks or ("system" if fast else "all"),
                                     gp_floor_arcsec=float(cluster_config.get("gp_floor_arcsec", LikelihoodConfig.gp_floor_arcsec))),
         paths=RunPathsConfig(output_dir=f"results/{campaign_name}/{cluster_config['cluster_key']}",
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
         runtime=runtime if runtime is not None else build_runtime(cores),
-        search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search),
-        sampling=SamplingConfig(warmup=1000, samples=1000, max_tree_depth=10, target_accept=0.85),
+        search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search, warm_start=warm_start),
+        sampling=SamplingConfig(warmup=500, samples=250, max_tree_depth=8, target_accept=0.85),
         scaling=replace(cluster_config.get("scaling", ScalingModelConfig()), softening_length_kpc=float(cluster_config.get("softening_length_kpc", 0.0))),
         members=MemberConfig(far_field_cut_radii=float(cluster_config.get("far_field_cut_radii", MemberConfig.far_field_cut_radii)),
                              cut_radius_inflation=float(cluster_config.get("cut_radius_inflation", MemberConfig.cut_radius_inflation)),
@@ -428,7 +512,9 @@ def _fast_mode_warning(config) -> None:
             f"  - members deflecting every image by less than {members.min_deflection_arcsec:g}\" are dropped from the model\n"
             f"  - far-field members are allowed down to {members.far_field_cut_radii:g} cut radii from an image (default 3)\n"
             f"  - {config.search.n_starts} search starts, {config.sampling.warmup} warmup + {config.sampling.samples} draws per chain "
-            f"at tree depth {config.sampling.max_tree_depth}, target accept {config.sampling.target_accept:g}")
+            f"at tree depth {config.sampling.max_tree_depth}, target accept {config.sampling.target_accept:g}\n"
+            f"  - GP covariance blocks: {config.likelihood.gp_blocks} (a full run uses one covariance over all images; the two\n"
+            f"    are not comparable in log-likelihood or hyperparameters)")
     Console(stderr=False).print(Panel(text, title="[bold]WARNING: --fast[/bold]", border_style="yellow", style="yellow", expand=False))
 
 
@@ -443,8 +529,10 @@ def main(argv=None):
     if not options["dry_run"]:
         configure_cpu_runtime(runtime.chains, runtime.nuts_chain_method, runtime.cpu_threads_per_chain)
     config = build_config(cluster, cores=cores, campaign_name=options["campaign_name"], run_label=options["run_label"],
-                          image_metadata=options["image_metadata"], runtime=runtime, fast=options["fast"], imaging=options["imaging"],
-                          halo_search=options["halo_search"], member_search=options["member_search"], likelihood=options["likelihood"]).validate()
+                          runtime=runtime, fast=options["fast"], imaging=options["imaging"],
+                          halo_search=options["halo_search"], member_search=options["member_search"], likelihood=options["likelihood"],
+                          gp_kernel_family=options["gp_kernel_family"], gp_blocks=options["gp_blocks"],
+                          warm_start=options["warm_start"]).validate()
     if options["dry_run"]:
         from lenscluster.pipeline import dry_run
         print(json.dumps({"dry_run": True, "cpu_plan": cpu_plan.to_dict(), **dry_run(config)}, indent=2, default=str))
@@ -455,7 +543,10 @@ def main(argv=None):
     print(f"[config] cluster={cluster} run_name={config.paths.run_name} output_dir={config.paths.output_dir} "
           f"stage={options['stage']} chains={runtime.chains} search={config.search.halo_method}+{config.search.member_method} "
           f"n_starts={config.search.n_starts} fast={options['fast']} sigma_inst_arcsec={config.model.image_constraints.sigma_inst_arcsec} "
-          f"likelihood={config.likelihood.likelihood_mode}")
+          f"likelihood={options['likelihood']}"
+          + {"grf_gp": f" (GRF of unmodelled mass with a knee spectrum + image-plane GP) gp_blocks={config.likelihood.gp_blocks}",
+             "potential": f" (two deflection scales per family) gp_kernel_family={config.likelihood.gp_kernel_family}",
+             "gp_image_plane": " (image-plane GP per family)", "smoothed": " (per-image source-plane floors)"}[options["likelihood"]])
     start = time.monotonic()
     try:
         run(config, stage=options["stage"])
