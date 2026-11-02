@@ -101,7 +101,20 @@ class ExactImageSolver:
             dx, dy = dx * scale, dy * scale
         return dx, dy, finite & np.isfinite(dx) & np.isfinite(dy)
 
-    def _refine(self, packed, source_x, source_y, start_x, start_y, *, shoot=None) -> dict[str, np.ndarray]:
+    @staticmethod
+    def _corrected(shoot, correction):
+        """``shoot`` with a deflection correction added to the lens: beta = theta - alpha - delta, A = I - d alpha - d delta.
+        ``correction(x, y)`` returns (delta_x, delta_y, J00, J01, J10, J11) aligned with the points; None leaves ``shoot``."""
+        if correction is None:
+            return shoot
+
+        def shoot_corrected(packed, x, y):
+            bx, by, a00, a01, a10, a11 = shoot(packed, x, y)
+            dx, dy, j00, j01, j10, j11 = correction(x, y)
+            return bx - dx, by - dy, a00 - j00, a01 - j01, a10 - j10, a11 - j11
+        return shoot_corrected
+
+    def _refine(self, packed, source_x, source_y, start_x, start_y, *, shoot=None, correction=None) -> dict[str, np.ndarray]:
         """Batched Levenberg-Marquardt solve of the lens equation beta(theta) = source from the given starts.
 
         ``shoot(packed, x, y)`` returns the source positions and the Jacobian A = I - d alpha / d theta at (x, y); the
@@ -109,9 +122,11 @@ class ExactImageSolver:
         normalization per point.  Every start is iterated until its step and source residual are below the tolerances
         or the iteration budget is spent; starts that produce non-finite values are frozen.  Returns per start: the
         final position, whether it converged, whether it passes the identification tolerance (the Newton step at the
-        final position is small, so it sits on a root), the iteration count and the final step and source residual."""
+        final position is small, so it sits on a root), the iteration count and the final step and source residual.
+        ``correction(x, y)`` adds a deflection field to the lens (the GP conditional mean under the potential kernel, see
+        ``gp_image_plane.MeanDeflection``), aligned with the starts."""
         cfg = self.config
-        shoot = self.ray_shoot_and_jacobian if shoot is None else shoot
+        shoot = self._corrected(self.ray_shoot_and_jacobian if shoot is None else shoot, correction)
         x, y = np.array(start_x, dtype=float), np.array(start_y, dtype=float)
         source_x, source_y = np.broadcast_to(source_x, x.shape).astype(float), np.broadcast_to(source_y, y.shape).astype(float)
         alive = np.isfinite(x) & np.isfinite(y)            # still iterating and finite so far
@@ -262,7 +277,7 @@ class ExactImageSolver:
         return details
 
     # ------------------------------------------------------------------ global image search (batched, JAX)
-    def solve_all_global(self, families: list[FamilyData], physical: np.ndarray, sources: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
+    def solve_all_global(self, families: list[FamilyData], physical: np.ndarray, sources: np.ndarray, correction=None) -> list[tuple[np.ndarray, np.ndarray]]:
         """Every image of every family at one model.
 
         Each family's search window (its images' span plus a margin) is ray-shot on a coarse grid, with families at the
@@ -272,7 +287,8 @@ class ExactImageSolver:
         close to a critical curve (small |det A|) and image pairs can sit closer than the coarse pitch, the points of a
         fine sub-grid that pass the same reach test on their own fields.  All seeds of all families are refined in one
         batched Levenberg-Marquardt solve with per-seed source redshifts; distinct converged roots inside each window are
-        the images.  Returns (x, y) per family, in order."""
+        the images.  Returns (x, y) per family, in order.  ``correction(x, y, family_index)`` adds a deflection field per
+        family (``gp_image_plane.MeanDeflection``), with family_index the position in ``families``."""
         cfg = self.config
         coarse, fine = float(cfg.exact_image_grid_pitch_arcsec), float(cfg.exact_image_fine_pitch_arcsec)
         reach = float(cfg.exact_image_seed_tolerance_pitches)
@@ -286,10 +302,14 @@ class ExactImageSolver:
         sub = np.arange(-0.5 * coarse, 0.5 * coarse + 1e-9, fine)
         sub_x, sub_y = (v.ravel() for v in np.meshgrid(sub, sub))
 
-        def mapped(points: np.ndarray, z: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def mapped(points: np.ndarray, z: float, point_family: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             """Source positions, |det A| and the stretch ||A||_F at image-plane points for one source redshift."""
             alpha, u = self.evaluator.total_fields_at(points, packed_by_z[z], self.all_components)
-            jac = np.eye(2) - u
+            alpha, jac = np.asarray(alpha), np.eye(2) - np.asarray(u)
+            if correction is not None:
+                dx, dy, j00, j01, j10, j11 = correction(points[:, 0], points[:, 1], point_family)
+                alpha = alpha + np.column_stack([dx, dy])
+                jac = jac - np.stack([np.stack([j00, j01], -1), np.stack([j10, j11], -1)], -2)
             det = jac[:, 0, 0] * jac[:, 1, 1] - jac[:, 0, 1] * jac[:, 1, 0]
             return points - alpha, np.abs(det), np.maximum(1.0, np.sqrt(np.sum(np.square(jac), axis=(1, 2))))
 
@@ -303,8 +323,9 @@ class ExactImageSolver:
                 n = int(np.ceil(2.0 * half / coarse)) + 1
                 grids.append(np.meshgrid(cx + np.linspace(-half, half, n), cy + np.linspace(-half, half, n)))
             points = np.concatenate([np.column_stack([xx.ravel(), yy.ravel()]) for xx, yy in grids])
+            point_family = np.concatenate([np.full(xx.size, k) for k, (xx, _) in zip(group, grids)])
             self.grid_points += points.shape[0]
-            beta, det, stretch = mapped(points, z)
+            beta, det, stretch = mapped(points, z, point_family)
             fine_points, fine_family = [], []
             offset = 0
             for k, (xx, yy) in zip(group, grids):
@@ -323,7 +344,7 @@ class ExactImageSolver:
                 # The fine sub-grid is screened on its own fields: one cheap evaluation instead of a solve per point.
                 fine_points, fine_family = np.concatenate(fine_points), np.concatenate(fine_family)
                 self.grid_points += fine_points.shape[0]
-                beta_f, _, stretch_f = mapped(fine_points, z)
+                beta_f, _, stretch_f = mapped(fine_points, z, fine_family)
                 distance_f = np.sqrt(np.sum(np.square(beta_f - sources[fine_family]), axis=1))
                 keep = distance_f <= reach * fine * stretch_f
                 seed_x.append(fine_points[keep, 0]); seed_y.append(fine_points[keep, 1]); seed_family.append(fine_family[keep])
@@ -337,7 +358,8 @@ class ExactImageSolver:
         started = time.perf_counter()
         factors = jnp.asarray([self.evaluator.state.dpie_sigma0_factor_by_z[float(families[k].z_source)] for k in seed_family], dtype=jnp.float64)
         packed_seeds = self.evaluator.packed_state(physical, factor_per_image=factors)[0]
-        result = self._refine(packed_seeds, sources[seed_family, 0], sources[seed_family, 1], seed_x, seed_y, shoot=self.ray_shoot_and_jacobian_per_image)
+        result = self._refine(packed_seeds, sources[seed_family, 0], sources[seed_family, 1], seed_x, seed_y, shoot=self.ray_shoot_and_jacobian_per_image,
+                              correction=None if correction is None else (lambda x, y: correction(x, y, seed_family)))
         self.timing["global_refine"] += time.perf_counter() - started
         # A root must solve the lens equation to the displacement tolerance in both planes: the critical point of a
         # merging fold pair is a near-root that only reaches the looser identification tolerance.  Two roots closer than
@@ -356,11 +378,12 @@ class ExactImageSolver:
             solutions[k] = (px[distinct], py[distinct])
         return solutions
 
-    def predict_all_global(self, images, families: list[FamilyData], physical: np.ndarray, sources: np.ndarray) -> list[dict[str, Any]]:
+    def predict_all_global(self, images, families: list[FamilyData], physical: np.ndarray, sources: np.ndarray, correction=None) -> list[dict[str, Any]]:
         """Family predictions from the global search: matched positions, extra images, magnifications at the observed and
-        the recovered positions.  ``families`` is in the order of ``images.family_ids`` and ``sources`` is (F, 2)."""
+        the recovered positions.  ``families`` is in the order of ``images.family_ids`` and ``sources`` is (F, 2).
+        ``correction`` (see ``solve_all_global``) moves the positions; the magnifications stay those of the lens alone."""
         started = time.perf_counter()
-        solutions = self.solve_all_global(families, physical, sources)
+        solutions = self.solve_all_global(families, physical, sources, correction)
         self.timing["exact_solver"] += time.perf_counter() - started
         packed_images = self.evaluator.packed_state(jnp.asarray(physical, dtype=jnp.float64))[0]
         x_obs, y_obs = np.asarray(images.x_obs, dtype=float), np.asarray(images.y_obs, dtype=float)
@@ -384,15 +407,17 @@ class ExactImageSolver:
         for f, d in enumerate(details):
             d["magnification_at_model"] = mu_model[family_index == f]
 
-    def predict_all_local(self, images, families: list[FamilyData], packed_images: PackedLensState, sources: np.ndarray) -> list[dict[str, Any]]:
+    def predict_all_local(self, images, families: list[FamilyData], packed_images: PackedLensState, sources: np.ndarray, correction=None) -> list[dict[str, Any]]:
         """Every family of one model in a single batched local solve from the observed positions (no fallback search):
         one Levenberg-Marquardt pass over all N images with per-image source redshifts.  ``families`` is in the order of
-        ``images.family_ids`` and ``sources`` is (F, 2)."""
+        ``images.family_ids`` and ``sources`` is (F, 2).  ``correction(x, y, family_index)`` adds a deflection field per
+        family (family_index as in ``images.family_index_per_image``); the magnifications stay those of the lens alone."""
         started = time.perf_counter()
         x0, y0 = np.asarray(images.x_obs, dtype=float), np.asarray(images.y_obs, dtype=float)
         family_index = np.asarray(images.family_index_per_image, dtype=int)
         sources = np.asarray(sources, dtype=float)
-        result = self._refine(packed_images, sources[family_index, 0], sources[family_index, 1], x0, y0, shoot=self.ray_shoot_and_jacobian_per_image)
+        result = self._refine(packed_images, sources[family_index, 0], sources[family_index, 1], x0, y0, shoot=self.ray_shoot_and_jacobian_per_image,
+                              correction=None if correction is None else (lambda x, y: correction(x, y, family_index)))
         _, _, a00, a01, a10, a11 = self.ray_shoot_and_jacobian_per_image(packed_images, x0, y0)
         mu = 1.0 / (a00 * a11 - a01 * a10)
         self.timing["exact_solver"] += time.perf_counter() - started

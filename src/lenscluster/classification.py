@@ -100,7 +100,8 @@ def member_field_terms(state: ModelState, evaluator: Evaluator, physical: np.nda
     # The catalog measurement error, not the sampled extra scatter; under gp_image_plane the diagonal block of the family
     # covariance, whose measurement scale includes sigma_img.
     sigma_meas = np.asarray(scales["sigma_meas"]) if evaluator.gp_mode else np.asarray(state.images.sigma_inst_per_image)
-    covariance = np.asarray(sl.source_covariance(a, sigma_meas, float(scales["sigma_def"]), float(scales["sigma_sel"]), float(scales["lambda_sel"]))["covariance"])
+    # sigma_def is per image under the potential kernel (w_i^2 (sigma_S^2 + sigma_L^2) + sigma_fl^2); source_covariance broadcasts it.
+    covariance = np.asarray(sl.source_covariance(a, sigma_meas, np.asarray(scales["sigma_def"]), float(scales["sigma_sel"]), float(scales["lambda_sel"]))["covariance"])
     precision = np.linalg.inv(covariance)
     error = exact_alpha - circular_alpha
     error = np.where(np.isfinite(error), error, np.inf)

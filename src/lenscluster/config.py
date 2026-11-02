@@ -328,6 +328,60 @@ class LikelihoodConfig:
     # ell, and above the 30" truncation every family's kernel is a block of ones, where ell is unidentified.
     gp_correlation_length_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=7.0, log_sigma=0.5, upper=30.0))
     gp_floor_arcsec: float = 0.0015               # sigma_fl, a smoothness floor only (1.5 mas)
+    # gp_image_plane only.  gp_kernel selects the structure of the GP term: "image_plane" (above: an image-plane displacement
+    # multiplied by the Jacobian, C = B S B^T) or "potential" (a potential error delta_psi; its gradient is the deflection
+    # error, which enters the source plane directly: C = W K_alpha W + B Sigma_meas B^T + sigma_fl^2 I with
+    # Cov(delta_alpha_a, delta_alpha_b) = -d_a d_b k_psi, see gp_image_plane.deflection_kernel).  Under "potential" the sampled
+    # sites are gp_u_small = sigma_S / ell_S (log-normal; sigma_kappa,S / sqrt 2 for the Gaussian family), gp_ell_small
+    # (log-normal), gp_sigma_large (half-normal; None drops the large scale) and sigma_extra (sigma_extra_prior; the image-plane
+    # measurement term); ell_L is fixed.  sigma_shared, sigma_white and gp_ell do not exist under "potential".  Both scales
+    # use the kernel family gp_kernel_family: "gaussian" or "matern52" (Matern-5/2 on the potential, Matern-3/2 deflection).
+    # The redshift weight w = (D_ds/D_s)(z) / (D_ds/D_s)(gp_reference_redshift) scales each family's deflection error.
+    gp_kernel: str = "image_plane"
+    gp_kernel_family: str = "gaussian"
+    gp_u_small_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.015, log_sigma=1.1))
+    gp_u_small_start: float = 0.015
+    gp_ell_small_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=2.0, log_sigma=0.5))
+    gp_ell_small_start_arcsec: float = 2.0
+    gp_sigma_large_prior_scale_arcsec: float | None = 0.02   # HalfNormal scale of sigma_L (source plane, at z_ref)
+    gp_sigma_large_start_arcsec: float = 0.01
+    gp_ell_large_arcsec: float = 25.0
+    gp_reference_redshift: float = 2.0
+    # gp_kernel = "knee" (gp_knee.py, .agents/gp-knee-plan.md): a curl-free mass field on the potential with a knee convergence
+    # spectrum P_kappa = P0 / (1 + (k/k_t)^gamma) between gp_knee_scales, plus the image-plane GP, on blocks given by gp_blocks:
+    # "all" (one covariance over every image), "system" (all knots of a galaxy; run.xsh --fast) or "family" (regression).
+    # Sites: images.gp_sigma_alpha (rms deflection error per component at z_ref; None drops the mass field), images.gp_knee
+    # (lambda_t = 2 pi / k_t), images.gp_knee_gamma (the slope gamma, uniform on gp_knee_gamma_prior; None fixes it at
+    # gp_knee_gamma), images.sigma_shared, images.gp_ell (image-plane GP), images.sigma_white.  sigma_fl fixed.
+    # The uniform bounds 2-6 are the slopes of P_kappa below the truncation of a random population of halos with
+    # rho ~ r^-n for n = 2 (isothermal) to 0 (cored); n = 1 (NFW cusp) gives 4, the start.
+    gp_blocks: str = "all"
+    gp_knee_gamma: float = 4.0                                        # fixed slope, or the start when it is sampled
+    gp_knee_gamma_prior: tuple[float, float] | None = (2.0, 6.0)      # uniform bounds on the sampled slope; None fixes it
+    gp_knee_gamma_step: float = 0.25                                  # spacing of the tabulated slopes (cubic spline between)
+    # Wavelength range of the GRF (arcsec).  The long end is 30" (about 160 kpc at M0416), the scale the halos and the
+    # external shear resolve: with 100" the flat part of the spectrum carried field-wide modes (a uniform deflection
+    # gradient = convergence + shear), and on one covariance over all images the GRF absorbed the external shear
+    # (w500s500_fast_fixed_samplek: gamma2 0.057 -> 0.009, sigma_alpha and the knee at their caps).
+    gp_knee_scales_arcsec: tuple[float, float] = (0.2, 30.0)
+    # Condition the mass field on no uniform translation, convergence or shear over the images (gp_knee.project_low_order):
+    # keeps the long wavelengths but leaves the field-wide modes to the external shear and the halos.  gp_blocks "all" only.
+    gp_knee_project_low_order: bool = False
+    gp_knee_lambda_grid: tuple[float, float, int] = (0.5, 80.0, 64)   # tabulated knee wavelengths: min, max, count (ln lambda clamped to it)
+    gp_knee_r_step_arcsec: float = 0.02
+    # Upper bounds (truncations) keep the error model from replacing the lens: a deflection error above 0.3" is a missing
+    # cluster component, not substructure; a knee above 30" is the scale of the cluster halos and the external shear; an
+    # image-plane displacement above 0.3" or coherent over more than 5" is lensing, not astrometry or feature selection.
+    gp_sigma_alpha_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.08, log_sigma=0.7, upper=0.3))
+    gp_sigma_alpha_start_arcsec: float = 0.08
+    gp_knee_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=6.0, log_sigma=0.5, upper=30.0))
+    gp_knee_start_arcsec: float = 6.0
+    gp_knee_sigma_shared_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.10, log_sigma=0.7, upper=0.3))
+    gp_knee_sigma_shared_start_arcsec: float = 0.10
+    gp_knee_ell_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=2.0, log_sigma=0.5, upper=5.0))
+    gp_knee_ell_start_arcsec: float = 2.0
+    gp_knee_sigma_white_prior_scale_arcsec: float = 0.03
+    gp_knee_sigma_white_start_arcsec: float = 0.012
     # Extra measurement scatter (arcsec, log-normal) added in quadrature to sigma_inst: image registration, feature
     # centring, manual marking.  None fixes the measurement error at the catalog value.
     sigma_extra_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.05, log_sigma=1.0, upper=1.0))
@@ -519,7 +573,52 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     _positive("likelihood.sigma_white_prior_scale_arcsec", config.likelihood.sigma_white_prior_scale_arcsec)
     _positive("likelihood.sigma_shared_start_arcsec", config.likelihood.sigma_shared_start_arcsec)
     _positive("likelihood.sigma_white_start_arcsec", config.likelihood.sigma_white_start_arcsec)
+    if config.likelihood.gp_kernel not in {"image_plane", "potential", "knee"}:
+        raise ValueError("likelihood.gp_kernel must be 'image_plane', 'potential' or 'knee'.")
+    if config.likelihood.gp_blocks not in {"all", "system", "family"}:
+        raise ValueError("likelihood.gp_blocks must be 'all', 'system' or 'family'.")
+    _positive("likelihood.gp_knee_gamma", config.likelihood.gp_knee_gamma)
+    if config.likelihood.gp_knee_gamma_prior is not None:
+        g_lo, g_hi = (float(v) for v in config.likelihood.gp_knee_gamma_prior)
+        step = float(config.likelihood.gp_knee_gamma_step)
+        if not (0.0 < g_lo < g_hi) or not (g_lo <= float(config.likelihood.gp_knee_gamma) <= g_hi):
+            raise ValueError("likelihood.gp_knee_gamma_prior must be (min, max) with 0 < min < max, holding gp_knee_gamma (the start).")
+        if step <= 0.0 or abs((g_hi - g_lo) / step - round((g_hi - g_lo) / step)) > 1e-9 or round((g_hi - g_lo) / step) < 2:
+            raise ValueError("likelihood.gp_knee_gamma_step must divide the gp_knee_gamma_prior range into at least 2 intervals.")
+    if config.likelihood.gp_knee_project_low_order and config.likelihood.gp_blocks != "all":
+        raise ValueError("likelihood.gp_knee_project_low_order needs gp_blocks = 'all' (field-wide modes over one covariance).")
+    lo, hi = config.likelihood.gp_knee_scales_arcsec
+    if not (0.0 < float(lo) < float(hi)):
+        raise ValueError("likelihood.gp_knee_scales_arcsec must be (min, max) with 0 < min < max.")
+    lam_lo, lam_hi, lam_n = config.likelihood.gp_knee_lambda_grid
+    if not (0.0 < float(lam_lo) < float(lam_hi)) or int(lam_n) < 8:
+        raise ValueError("likelihood.gp_knee_lambda_grid must be (min, max, count) with 0 < min < max and count >= 8.")
+    knee_upper = config.likelihood.gp_knee_prior.upper
+    if config.likelihood.gp_kernel == "knee" and knee_upper is not None and float(knee_upper) > float(hi):
+        raise ValueError(f"likelihood.gp_knee_prior.upper ({float(knee_upper):g}\") must not exceed the longest GRF wavelength "
+                         f"gp_knee_scales_arcsec[1] ({float(hi):g}\"): beyond it the spectrum is flat and the knee has no meaning.")
+    if config.likelihood.gp_kernel == "knee" and (knee_upper is None or float(knee_upper) > float(lam_hi)):
+        raise ValueError("likelihood.gp_knee_prior.upper must be set and at most the largest tabulated knee wavelength "
+                         f"({float(lam_hi):g}\"): beyond the tables the knee is clamped and only the prior moves it.")
+    for name in ("gp_knee_r_step_arcsec", "gp_sigma_alpha_start_arcsec", "gp_knee_start_arcsec", "gp_knee_sigma_shared_start_arcsec",
+                 "gp_knee_ell_start_arcsec", "gp_knee_sigma_white_prior_scale_arcsec", "gp_knee_sigma_white_start_arcsec"):
+        _positive(f"likelihood.{name}", getattr(config.likelihood, name))
+    if config.likelihood.gp_kernel_family not in {"gaussian", "matern52"}:
+        raise ValueError("likelihood.gp_kernel_family must be 'gaussian' or 'matern52'.")
+    _positive("likelihood.gp_u_small_start", config.likelihood.gp_u_small_start)
+    _positive("likelihood.gp_ell_small_start_arcsec", config.likelihood.gp_ell_small_start_arcsec)
+    _positive("likelihood.gp_sigma_large_start_arcsec", config.likelihood.gp_sigma_large_start_arcsec)
+    _positive("likelihood.gp_ell_large_arcsec", config.likelihood.gp_ell_large_arcsec)
+    _positive("likelihood.gp_reference_redshift", config.likelihood.gp_reference_redshift)
+    if config.likelihood.gp_sigma_large_prior_scale_arcsec is not None:
+        _positive("likelihood.gp_sigma_large_prior_scale_arcsec", config.likelihood.gp_sigma_large_prior_scale_arcsec)
     for label, prior in (("likelihood.sigma_def_prior", config.likelihood.sigma_def_prior),
+                         ("likelihood.gp_sigma_alpha_prior", config.likelihood.gp_sigma_alpha_prior),
+                         ("likelihood.gp_knee_prior", config.likelihood.gp_knee_prior),
+                         ("likelihood.gp_knee_sigma_shared_prior", config.likelihood.gp_knee_sigma_shared_prior),
+                         ("likelihood.gp_knee_ell_prior", config.likelihood.gp_knee_ell_prior),
+                         ("likelihood.gp_u_small_prior", config.likelihood.gp_u_small_prior),
+                         ("likelihood.gp_ell_small_prior", config.likelihood.gp_ell_small_prior),
                          ("likelihood.sigma_extra_prior", config.likelihood.sigma_extra_prior),
                          ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior),
                          ("likelihood.lambda_sel_prior", config.likelihood.lambda_sel_prior),

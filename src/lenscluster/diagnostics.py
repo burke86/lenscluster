@@ -24,10 +24,16 @@ def predictions_at(solver: ExactImageSolver, state: ModelState, evaluator: Evalu
     images = state.images
     family_by_id = {f.family_id: f for f in state.family_data}
     families = [family_by_id[family_id] for family_id in images.family_ids]
+    # Potential kernel: the draw's source scatters by the deflection error, so the lens gets the GP's mean deflection.
+    correction = evaluator.gp_deflection_correction(theta) if getattr(evaluator, "gp_potential", False) else None
+    extra_kwargs = {} if correction is None else dict(correction=correction)
     if adaptive is False:        # posterior draws: all families in one batched local solve
-        batched = solver.predict_all_local(images, families, evaluator.packed_state(physical)[0], np.asarray(sources))
+        batched = solver.predict_all_local(images, families, evaluator.packed_state(physical)[0], np.asarray(sources), **extra_kwargs)
     elif solver.config.exact_image_finder == "global-jax":   # the best fit: a global search that also reports extra images
-        batched, adaptive = solver.predict_all_global(images, families, np.asarray(physical), np.asarray(sources)), False
+        batched, adaptive = solver.predict_all_global(images, families, np.asarray(physical), np.asarray(sources), **extra_kwargs), False
+    elif correction is not None:
+        raise ValueError("under gp_kernel='potential' only the global-jax and batched local image finders apply the GP mean deflection; "
+                         f"image_diagnostics.exact_image_finder is {solver.config.exact_image_finder!r}")
     rows, extra_rows, count_rows = [], [], []
     for family_index, family in enumerate(families):
         family_id = family.family_id

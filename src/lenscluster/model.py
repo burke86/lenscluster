@@ -242,6 +242,18 @@ class ModelState:
     gp_ell_param_index: int = -1                 # gp_image_plane: the sampled correlation length; -1 when ell is fixed
     gp_correlation_length_arcsec: float = 7.0    # gp_image_plane: ell (fixed value or start) and sigma_fl (LikelihoodConfig)
     gp_floor_arcsec: float = 0.0015
+    gp_kernel: str = "image_plane"               # gp_image_plane: "image_plane" (B S B^T) or "potential" (deflection kernel, see LikelihoodConfig)
+    gp_kernel_family: str = "gaussian"           # potential kernel: "gaussian" or "matern52"
+    gp_u_small_param_index: int = -1             # potential kernel: sigma_S / ell_S
+    gp_ell_small_param_index: int = -1           # potential kernel: ell_S
+    gp_sigma_large_param_index: int = -1         # potential kernel: sigma_L; -1 when the large scale is dropped
+    gp_ell_large_arcsec: float = 25.0            # potential kernel: the fixed ell_L
+    gp_reference_redshift: float = 2.0           # potential and knee kernels: z_ref of the redshift weights
+    gp_blocks: str = "all"                       # knee kernel: "all" | "system" | "family" covariance blocks
+    gp_knee: dict[str, Any] = field(default_factory=dict)   # knee kernel: gamma, scales, lambda grid, r step
+    gp_sigma_alpha_param_index: int = -1         # knee kernel: sigma_alpha; -1 when the mass field is dropped
+    gp_knee_param_index: int = -1                # knee kernel: lambda_t
+    gp_knee_gamma_param_index: int = -1          # knee kernel: the sampled slope gamma; -1 when fixed
     freeze_determinant_gradient: bool = False    # hold grad det A fixed in the backward pass (LikelihoodConfig)
     dropped_member_ids: tuple[str, ...] = ()  # catalog members removed from the lens model (members.min_deflection_arcsec)
     initial_theta: np.ndarray | None = None

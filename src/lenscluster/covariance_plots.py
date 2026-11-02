@@ -33,7 +33,7 @@ def plot_covariance_errors(config, state, evaluator, posterior, paths, *, draws=
         s, u = s[:, ::-1], u[:, :, ::-1]
         measurement = meas[:, None] * s
         selection = sel / jnp.sqrt(1 + (s / lam)**2)
-        deflection = jnp.full_like(s, model)
+        deflection = jnp.broadcast_to(jnp.broadcast_to(model, s.shape[:1])[:, None], s.shape)   # sigma_def is per image under the potential kernel
         total = jnp.sqrt(measurement**2 + selection**2 + deflection**2)
         cov = source_covariance(a, meas, model, sel, lam)['covariance']
         projected = jnp.einsum('nij,nik,nkl->njl', u, cov, u)
@@ -117,9 +117,11 @@ def plot_covariance_errors(config, state, evaluator, posterior, paths, *, draws=
 def plot_covariance_corner(config, state, posterior, paths):
     """Covariance hyperparameters in the common prior-overlaid corner style."""
     from .corner_plots import plot_parameter_corner
-    fields = ['sigma_extra', 'sigma_def', 'sigma_sel', 'lambda_sel', 'sigma_shared', 'sigma_white', 'gp_ell']
+    fields = ['sigma_extra', 'sigma_def', 'sigma_sel', 'lambda_sel', 'sigma_shared', 'sigma_white', 'gp_ell',
+              'gp_u_small', 'gp_ell_small', 'gp_sigma_large', 'gp_sigma_alpha', 'gp_knee', 'gp_knee_gamma']
     symbols = [r'$\sigma_{\rm extra}$', r'$\sigma_{\rm def}$',
-               r'$\sigma_{\rm sel}$', r'$\lambda_{\rm sel}$', r'$\sigma_{\rm shared}$', r'$\sigma_{\rm white}$', r'$\ell$']
+               r'$\sigma_{\rm sel}$', r'$\lambda_{\rm sel}$', r'$\sigma_{\rm shared}$', r'$\sigma_{\rm white}$', r'$\ell$',
+               r'$\sigma_S/\ell_S$', r'$\ell_S$', r'$\sigma_L$', r'$\sigma_\alpha$', r'$\ell_{\rm knee}$', r'$p$']
     selection = [(i, spec, label) for field, label in zip(fields, symbols)
                  for i, spec in enumerate(state.parameter_specs) if spec.name == 'images.'+field]
     grouped = None

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from scipy.optimize import brentq
 
-from conftest import synthetic_cluster_config
+from conftest import synthetic_cluster_config, write_offset_catalog
 from lenscluster import gp_image_plane as gp, smoothed_likelihood as sl
 from lenscluster.evaluator import Evaluator
 from lenscluster.state import build_state
@@ -86,12 +86,12 @@ def fold_config(tmp_path: Path, depth: float = 0.01, extra_offset: float | None 
     evaluator = Evaluator(state, "gp_image_plane")
     fold = fold_geometry(evaluator, evaluator.physical(jnp.asarray(state.initial_theta)), 2.0)
     _, images, _ = fold["images"](depth)
-    rows = [f"1.{label} {x:.12f} {y:.12f} 1 1 0 2 24 1 .05" for label, (x, y) in zip("ab", images)]
+    rows = [(f"1.{label}", x, y, 2) for label, (x, y) in zip("ab", images)]
     if extra_offset is not None:
         x, y = fold["theta_c"] + extra_offset * fold["e_t"]
-        rows.append(f"1.c {x:.12f} {y:.12f} 1 1 0 2 24 1 .05")
-    rows += ["2.a 8 -6 1 1 0 3 24 1 .05", "2.b -7 9 1 1 0 3 24 1 .05"]
-    Path(base.model.image_constraints.catalog_path).write_text("#REFERENCE 3\n" + "\n".join(rows) + "\n")
+        rows.append(("1.c", x, y, 2))
+    rows += [("2.a", 8, -6, 3), ("2.b", -7, 9, 3)]
+    write_offset_catalog(Path(base.model.image_constraints.catalog_path), rows)
     return gp_config(base), fold
 
 
@@ -323,8 +323,8 @@ def big_config(tmp_path: Path, n_families: int = 40, per_family: int = 4):
         z = 2.0 if f % 2 else 3.0
         for label in "abcdef"[:per_family]:
             x, y = rng.uniform(-15, 15, 2)
-            rows.append(f"{f + 1}.{label} {x:.6f} {y:.6f} 1 1 0 {z:g} 24 1 .05")
-    Path(base.model.image_constraints.catalog_path).write_text("#REFERENCE 3\n" + "\n".join(rows) + "\n")
+            rows.append((f"{f + 1}.{label}", round(x, 6), round(y, 6), z))
+    write_offset_catalog(Path(base.model.image_constraints.catalog_path), rows)
     return base
 
 

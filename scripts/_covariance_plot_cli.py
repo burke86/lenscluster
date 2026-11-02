@@ -17,6 +17,10 @@ def load_run(run_directory):
     run = Path(run_directory).resolve()
     init, final = run / 'init/artifacts', run / 'final'
     config = artifacts.load_config(final / 'artifacts')
+    # Older saved GP runs predate the sampled-length option and used a fixed ell.
+    if not hasattr(config.likelihood, 'gp_correlation_length_prior'):
+        from dataclasses import replace
+        config = replace(config, likelihood=replace(config.likelihood, gp_correlation_length_prior=None))
     classes = json.loads((init / artifacts.CLASSIFICATION_FILE).read_text())
     state = build_state(config, drop_member_ids=classes.get('dropped_members', ()))
     centered = set(classes.get('centered_members', []))
