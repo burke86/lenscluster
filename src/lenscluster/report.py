@@ -214,5 +214,5 @@ def audit_report(state: ModelState, audit: dict[str, Any], *, posterior_summary:
             lines.append("    would remove: " + ", ".join(r["would_remove"][:20]) + (" ..." if len(r["would_remove"]) > 20 else ""))
     if posterior_summary:
         lines.append("  sampler: " + ", ".join(f"{k} {v}" for k, v in posterior_summary.items()))
-    lines.append(f"  verdict: {audit.get('approximation_validation')}")
+    lines.append(f"  far-field approximation verdict: {audit.get('approximation_validation')} (sampler and image recovery: see the quality gates)")
     return "\n".join(lines)

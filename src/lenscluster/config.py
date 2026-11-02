@@ -240,6 +240,10 @@ class SearchConfig:
     max_chain_modes: int = 4
     max_median_abs_determinant: float = 10.0  # a mode whose median |det A| at the images exceeds this is degenerate (a lens so
                                             # massive that the images are demagnified) and cannot seed chains; cluster lenses sit near 0.2
+    # Gates checked before NUTS (the final stage stops with QualityGateError): a fragile init (at most one start reaches the
+    # best basin), or an error hyperparameter within this log distance of its prior upper bound at the start.
+    fail_on_fragile_init: bool = True
+    hyperparameter_bound_margin: float = 0.05     # 0 turns the bound check off
 
 
 @dataclass(frozen=True)
@@ -252,6 +256,11 @@ class SamplingConfig:
     thin: int = 1
     mass_matrix: str = "hessian"            # "hessian": dense global block seeded by the Hessian; "dense": dense global block, adapted
                                             # from the identity; "diagonal": NumPyro's default diagonal adaptation
+    # Gates checked after the outputs are written (the run then fails with QualityGateError): the largest split R-hat over
+    # all parameters, the fraction of divergent transitions, and the fraction of observed images recovered at the best fit.
+    max_r_hat: float = 1.1
+    max_divergence_fraction: float = 0.01
+    min_image_recovery_fraction: float = 0.9
 
 
 @dataclass(frozen=True)

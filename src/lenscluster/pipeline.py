@@ -89,6 +89,12 @@ class RunResult:
     resumed: bool
     summary: dict[str, Any] = field(default_factory=dict)      # what write_outputs returned (fit numbers under "fit")
     timing: dict[str, float] = field(default_factory=dict)     # seconds: init, sampling, outputs, final, total
+    gates: dict[str, Any] = field(default_factory=dict)        # quality_gates.json of the final stage
+
+
+class QualityGateError(RuntimeError):
+    """A run that must not be trusted: a fragile init or an error scale at its bound (raised before NUTS), or a posterior
+    that failed R-hat, divergences or image recovery (raised after the outputs are written, so they can be inspected)."""
 
 
 class RunLog:
@@ -333,6 +339,49 @@ def init_verdict(search: dict[str, Any], *, fit: dict[str, Any] | None) -> str:
     return f"verdict: robust{tag} ({in_basin} of {n_starts} starts reach the best basin within the margin){invalid}{rms}"
 
 
+def _gate_banner(stage: str, failures: list[str]) -> str:
+    rule = "!" * 100
+    return "\n".join([rule, f"!!! {stage} QUALITY GATES FAILED: this run must not be used", *[f"!!!   - {f}" for f in failures], rule])
+
+
+def init_gates(config: LensClusterSolverConfig, state: ModelState, evaluator: Evaluator, search: dict[str, Any], theta: np.ndarray) -> dict[str, Any]:
+    """Checks on the init start before NUTS: a fragile search, and error hyperparameters at their prior upper bounds (the
+    error model absorbing the lens, as in w1000s500_prod)."""
+    failures = []
+    if config.search.fail_on_fragile_init and search_is_fragile(search):
+        failures.append(f"fragile init: {int(search.get('starts_in_basin', 0))} start(s) reach the best basin")
+    physical = np.asarray(evaluator.physical(jnp.asarray(theta)), dtype=float)
+    margin = float(config.search.hyperparameter_bound_margin)
+    at_bound = {}
+    for i, spec in enumerate(state.parameter_specs):
+        upper = spec.physical_upper
+        if spec.component_family == "error_scale" and upper is not None and physical[i] > 0 and np.log(float(upper) / physical[i]) < margin:
+            at_bound[spec.name] = (float(physical[i]), float(upper))
+            failures.append(f"{spec.name} = {physical[i]:.4g} at its prior upper bound {float(upper):g}")
+    return {"stage": "init", "passed": not failures, "failures": failures, "fragile": bool(search_is_fragile(search)),
+            "at_upper_bound": at_bound}
+
+
+def final_gates(config: LensClusterSolverConfig, posterior: PosteriorResults, outputs: dict[str, Any]) -> dict[str, Any]:
+    """Checks on the posterior: max split R-hat, divergent fraction, images recovered at the best fit (skipped without plots)."""
+    sampling, failures = config.sampling, []
+    diagnostics = posterior.diagnostics or {}
+    r_hat = float(diagnostics.get("max_r_hat", float("nan")))
+    if np.isfinite(float(sampling.max_r_hat)) and not (r_hat <= float(sampling.max_r_hat)):     # a NaN R-hat fails
+        failures.append(f"max R-hat {r_hat:.3f} above {sampling.max_r_hat:g}")
+    diverging = np.asarray(posterior.diverging)
+    fraction = float(diverging.sum()) / max(int(diverging.size), 1)
+    if fraction > float(sampling.max_divergence_fraction):
+        failures.append(f"{int(diverging.sum())} divergences ({fraction:.1%} of transitions) above {sampling.max_divergence_fraction:.1%}")
+    fit = (outputs or {}).get("fit") or {}
+    recovered, observed = fit.get("recovered_image_count"), fit.get("observed_image_count")
+    recovery = float(recovered) / float(observed) if recovered is not None and observed else None
+    if recovery is not None and recovery < float(sampling.min_image_recovery_fraction):
+        failures.append(f"{int(recovered)}/{int(observed)} images recovered at the best fit ({recovery:.0%}) below {sampling.min_image_recovery_fraction:.0%}")
+    return {"stage": "final", "passed": not failures, "failures": failures, "max_r_hat": r_hat, "divergence_fraction": fraction,
+            "image_recovery_fraction": recovery, "image_recovery_checked": recovery is not None}
+
+
 def run_init(config: LensClusterSolverConfig) -> InitResult:
     """Init stage: provisional classification, multi-start MAP, final classification at the MAP, saved start."""
     started = time.perf_counter()
@@ -461,6 +510,11 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         verdict = init_verdict(search, fit=None)
         log(f"[init] {verdict}")
         summary["verdict"] = verdict
+        gates = init_gates(config, state, evaluator, search, theta)
+        summary["gates"] = gates
+        artifacts.write_json(paths.tables / "quality_gates.json", gates)
+        log(_gate_banner("INIT", gates["failures"]) + "\n[init] the final stage will refuse to start NUTS from this init"
+            if not gates["passed"] else "[init] quality gates passed")
         if not config.runtime.skip_plots:
             summary["fit_at_start"] = write_init_plots(state, evaluator, search, theta, paths.figures, margin=config.search.mode_margin,
                                                        prefix=config.paths.figure_prefix, z_source=float(config.truth.caustic_source_redshift), log=log)
@@ -492,8 +546,13 @@ def run_final(config: LensClusterSolverConfig, init: InitResult) -> RunResult:
             outputs_started = time.perf_counter()
             summary = write_outputs(config, state, evaluator, posterior, audit, stage, log=log) if not runtime.skip_plots else {}
             timing = {"sampling": 0.0, "outputs": time.perf_counter() - outputs_started}
-            return RunResult(paths, init, state, evaluator, posterior, audit, resumed=True, summary=summary, timing=timing)
+            gates = _final_gates_logged(config, posterior, summary, stage, log)
+            return RunResult(paths, init, state, evaluator, posterior, audit, resumed=True, summary=summary, timing=timing, gates=gates)
 
+        gates = init_gates(config, state, evaluator, init.search, init.theta)
+        if not gates["passed"]:
+            log(_gate_banner("INIT", gates["failures"]))
+            raise QualityGateError("NUTS not started; init quality gates failed: " + "; ".join(gates["failures"]))
         artifacts.save_config(stage.artifacts, config)
         starts = chain_starts(init.search, runtime.chains, config.search.max_chain_modes)
         sampling = config.sampling
@@ -534,9 +593,20 @@ def run_final(config: LensClusterSolverConfig, init: InitResult) -> RunResult:
         outputs_started = time.perf_counter()
         outputs = write_outputs(config, state, evaluator, posterior, audit, stage, log=log) if not runtime.skip_plots else {}
         timing = {"sampling": sampling_seconds, "outputs": time.perf_counter() - outputs_started}
-        return RunResult(paths, init, state, evaluator, posterior, audit, resumed=False, summary=outputs, timing=timing)
+        gates = _final_gates_logged(config, posterior, outputs, stage, log)
+        return RunResult(paths, init, state, evaluator, posterior, audit, resumed=False, summary=outputs, timing=timing, gates=gates)
     finally:
         log.close()
+
+
+def _final_gates_logged(config, posterior, outputs, stage, log) -> dict[str, Any]:
+    gates = final_gates(config, posterior, outputs)
+    artifacts.write_json(stage.tables / "quality_gates.json", gates)
+    if gates["passed"]:
+        log("[final] quality gates passed" + ("" if gates["image_recovery_checked"] else " (image recovery not checked: plots skipped)"))
+    else:
+        log(_gate_banner("FINAL", gates["failures"]))
+    return gates
 
 
 def run(config: LensClusterSolverConfig, stage: str = "both") -> RunResult | InitResult:
@@ -562,6 +632,9 @@ def run(config: LensClusterSolverConfig, stage: str = "both") -> RunResult | Ini
     (result.paths.final.tables / "run_summary.txt").write_text(table + "\n")
     if not config.runtime.quiet:
         print(table, flush=True)
+    if result.gates and not result.gates["passed"]:
+        print(_gate_banner("FINAL", result.gates["failures"]), flush=True)
+        raise QualityGateError("final quality gates failed (outputs written): " + "; ".join(result.gates["failures"]))
     return result
 
 

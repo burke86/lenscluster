@@ -14,6 +14,7 @@ from lenscluster.mock_validation import (MockConfig, MockValidationConfig, MockV
 from lenscluster.mock_validation.aperture import APERTURE_RADII_KPC, aperture_profiles, truth_groups
 from lenscluster.mock_validation.images import jacobian, lens_state
 from lenscluster.state import build_state
+from conftest import SMOKE_SAMPLING_GATES, SMOKE_SEARCH_GATES
 
 SMALL = MockConfig(seed=7, n_members=12, n_primary_families=4, n_member_families=1, unmodelled_members=2, sigma_def_arcsec=0.03)
 
@@ -82,8 +83,8 @@ def test_solver_model_from_truth_contains_the_truth(tmp_path, mode):
 def test_campaign_end_to_end_scores_only_parameters_with_a_truth(tmp_path):
     config = MockConfig(seed=11, n_members=4, n_primary_families=2, n_member_families=0, mode="idealized")
     solver = LensClusterSolverConfig(runtime=RuntimeConfig(seed=11, chains=1, resume=True, nuts_chain_method="sequential"),
-                                     search=SearchConfig(n_starts=2, lbfgs_max_iter=20, polish_max_iter=5),
-                                     sampling=SamplingConfig(warmup=8, samples=8, max_tree_depth=3),
+                                     search=SearchConfig(**SMOKE_SEARCH_GATES, n_starts=2, lbfgs_max_iter=20, polish_max_iter=5),
+                                     sampling=SamplingConfig(**SMOKE_SAMPLING_GATES, warmup=8, samples=8, max_tree_depth=3),
                                      image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=2),
                                      truth=TruthRecoveryConfig(posterior_truth_recovery_draws=0))
     campaign = MockValidationConfig(mock=config, paths=MockValidationPathsConfig(output_dir=tmp_path, campaign_name="c", run_name="r"),
