@@ -146,3 +146,94 @@ def test_fold_draw_cap_is_reproducible_and_includes_best(count,best):
     assert len(set(indices))==len(indices)
     assert best in indices and indices.min()>=0 and indices.max()<count
     np.testing.assert_array_equal(indices,fd.fold_draw_indices(count,best))
+
+
+def test_system_knots_include_nonfold_knot_without_cross_system_or_recovery_filter(synthetic_config, tmp_path, monkeypatch):
+    """One verified knot must bring its other system knots into the shared frame, even with a missing image root."""
+    import jax.numpy as jnp
+    catalog = tmp_path / 'images.yaml'
+    catalog.write_text('''format: lenscluster-images/1
+systems:
+  S1:
+    z: 2
+    knots: [A, B]
+    images:
+      a:
+        knots:
+          A: [0, 0]
+          B: [0.0001, 0]
+      b:
+        knots:
+          A: [0, 0.0001]
+          B: [0.0001, 0.0001]
+  S2:
+    z: 2
+    images:
+      a: {ra: 0.001, dec: 0}
+      b: {ra: 0.001, dec: 0.0001}
+''')
+    config = replace(synthetic_config, model=replace(synthetic_config.model,
+        image_constraints=replace(synthetic_config.model.image_constraints, catalog_path=catalog)))
+    labels = ['S1A.a', 'S1A.b', 'S1B.a', 'S1B.b', 'S2.a', 'S2.b']
+    state = SimpleNamespace(images=SimpleNamespace(image_labels=labels, family_ids=['S1A', 'S1B', 'S2'],
+        family_index_per_image=np.repeat(np.arange(3), 2), x_obs=np.array([0.,0.,.1,.1,1.,1.]), y_obs=np.tile([-.5,.5],3)))
+    class Evaluator:
+        def physical(self, theta): return theta
+        def source_positions(self, theta): return jnp.array([[theta[0], .01], [theta[0]+.2, -.01], [9.,9.]])
+        def packed_state_for_z(self, physical, z): return physical
+    def kernels(evaluator):
+        def fields(packed, points): return np.zeros_like(points), np.broadcast_to(np.eye(2), (len(points),2,2))
+        def relative(packed, sources, seeds, *args):
+            return np.tile(seeds,(len(sources),1,1)), sources, np.zeros(len(sources)), np.zeros(len(sources),dtype=int)
+        return fields, None, relative
+    monkeypatch.setattr(fd, '_kernels', kernels)
+    calls=[]
+    def missing_family(config, state, evaluator, posterior, *, family_ids, log):
+        calls.append(family_ids)
+        roots=np.zeros((len(posterior.samples),len(labels),2));roots[:,3]=np.nan
+        return roots
+    monkeypatch.setattr(fd, 'posterior_image_positions', missing_family)
+    curve=np.column_stack((np.linspace(-2,2,97),np.zeros(97)))
+    pair=dict(labels=labels[:2], family_id='S1A', z_source=2., separation=1., fov=4.,
+              observed=np.array([[0.,-.5],[0.,.5]]), positions=np.zeros((2,2,2)), relative=np.zeros((2,2)),
+              normal=np.array([0.,1.]), origin=np.zeros(2), seeds=curve, critical=np.tile(curve,(2,1,1)), failures=[])
+    data=dict(pairs=[pair], best_draw=1, draw_indices=[1,3])
+    result=fd.add_system_knots(config,state,Evaluator(),SimpleNamespace(samples=np.arange(4.)[:,None],log_prob=np.arange(4.)),data,log=lambda _:None)
+    assert calls == [['S1B']]
+    assert len(result['systems'])==1
+    system=result['systems'][0]
+    assert system['system_id']=='S1' and system['knot_ids']==['A','B']
+    assert system['labels']==labels[:4]
+    np.testing.assert_allclose(system['relative'][:,:,0],[[1.,1.2],[3.,3.2]])
+    assert np.isnan(system['positions'][:,3]).all()
+    assert np.isfinite(system['relative']).all()
+    fd.save_fold_data(result,tmp_path)
+    loaded=fd.load_fold_data(tmp_path)
+    np.testing.assert_allclose(loaded['systems'][0]['relative'],system['relative'])
+    assert loaded['systems'][0]['source_draws_valid_by_knot']==[2,2]
+    assert loaded['systems'][0]['image_draws_valid']==[2,2,2,0]
+
+
+def test_smoothed_contours_preserve_probability_mass_and_resolve_thin_cloud():
+    rng=np.random.default_rng(23)
+    points=rng.normal(size=(128,2)) @ np.array([[.2, .18],[0.,.002]])
+    grid=fd._credible_density_grid(points,grid_size=256)
+    assert grid is not None
+    assert abs(grid['integrated_mass']-1)<.002
+    assert 1 <= grid['bandwidth_factor'] <= 2
+    assert grid['points_used']==len(points)
+    for level,probability in zip(grid['levels'],[.954499736,.682689492]):
+        enclosed=grid['density'][grid['density']>=level].sum()*grid['cell_area']
+        assert abs(enclosed-probability)<.002
+    assert fd._credible_density_grid(np.zeros((20,2))) is None
+    assert fd._credible_density_grid(points[:8]) is None
+
+
+def test_smoothed_contours_retain_a_resolved_second_mode():
+    import contourpy
+    rng=np.random.default_rng(13)
+    points=np.vstack((rng.normal([-4.,0.],[.25,.3],(64,2)),rng.normal([4.,0.],[.25,.3],(64,2))))
+    grid=fd._credible_density_grid(points,grid_size=256)
+    # Curvilinear grid contours, not an imposed covariance ellipse or a largest-island-only filter.
+    segments=contourpy.contour_generator(x=grid['x'],y=grid['y'],z=grid['density']).lines(grid['levels'][1])
+    assert len(segments)==2

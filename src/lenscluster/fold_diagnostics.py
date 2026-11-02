@@ -207,7 +207,11 @@ def posterior_image_positions(config, state, evaluator, posterior, *, family_ids
     physical_source = jax.jit(lambda t: (evaluator.physical(t), evaluator.source_positions(t)[selected_index]))
     for draw, theta in enumerate(posterior.samples):
         physical, sources = physical_source(theta)
-        details = solver.predict_all_local(images, families, evaluator.packed_state(physical, factor_per_image=factors)[0], np.asarray(sources))
+        mean = evaluator.gp_deflection_correction(theta) if getattr(evaluator, 'gp_potential', False) else None
+        correction = None if mean is None else (lambda x, y, k: mean(x, y, selected_index[np.asarray(k)]))
+        extra_kwargs = {} if correction is None else dict(correction=correction)
+        details = solver.predict_all_local(images, families, evaluator.packed_state(physical, factor_per_image=factors)[0], np.asarray(sources),
+                                           **extra_kwargs)
         for family, detail in zip(families, details):
             rows = [label_index[str(label)] for label in family.image_labels]
             xy = np.column_stack([detail['matched_model_x_arcsec'], detail['matched_model_y_arcsec']])
@@ -220,6 +224,7 @@ def posterior_image_positions(config, state, evaluator, posterior, *, family_ids
 def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
     """Compute at most 128 joint draws once; reuse for HST and JWST renderings."""
     started = time.monotonic()
+    full_posterior = posterior
     result = dict(pairs=[], skipped=[], selection='Mutual nearest same-family images; opposite best-fit exact parity; '
                   'critical curve between images; regular fold. Model-identified candidates.',
                   source_frame='x: tangent projection from fixed image-plane cross-section caustic anchor; '
@@ -228,7 +233,7 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
                   draw_indices=list(range(len(posterior.samples))),
                   max_separation_arcsec=config.image_diagnostics.fold_pair_max_separation_arcsec,
                   image_finder='ExactImageSolver.predict_all_local, configured tolerances, no fallback',
-                  kernel='exact', angular_units='arcsec', contour_definition='Scott Gaussian KDE highest-density regions enclosing 68.2689492% and 95.4499736%')
+                  kernel='exact', angular_units='arcsec', contour_definition='Whitened Gaussian KDE; leave-one-out bandwidth with one-standard-error smoothing, Scott to 2*Scott; highest-density regions enclosing 68.2689492% and 95.4499736%')
     if not len(posterior.samples) or not np.isfinite(posterior.log_prob).any():
         result['skipped'].append(dict(reason='No finite best posterior draw'))
         return result
@@ -327,33 +332,78 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
     for pair in verified:
         pair.pop('tangent'); pair.pop('reference_tangent'); pair.pop('family_index')
         result['pairs'].append(pair)
+    if getattr(state.images, 'system_ids', ()):
+        result = add_system_knots(config, state, evaluator, full_posterior, result, log=log)
     result['elapsed_seconds'] = time.monotonic()-started
     log(f"[outputs] fold diagnostics: {len(result['pairs'])} candidate pairs, {result['elapsed_seconds']:.1f}s")
     return result
 
 
-def _contours(ax, points, color, transform=None):
-    points = np.asarray(points); points = points[np.isfinite(points).all(1)]
-    if len(points)<10 or np.linalg.matrix_rank(np.cov(points.T))<2:
-        return False
-    kde = gaussian_kde(points.T)
-    lo, hi = points.min(0)-2*points.std(0), points.max(0)+2*points.std(0)
-    x, y = np.linspace(lo[0], hi[0], 320), np.linspace(lo[1], hi[1], 320)
-    xx, yy = np.meshgrid(x, y); density = kde(np.array([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+def _credible_density_grid(points, *, grid_size=384):
+    """Smooth 68.3/95.4% KDE regions without discarding tails or disconnected modes.
+
+    Work in covariance-whitened coordinates so thin/tilted contours are resolved.
+    Select bandwidth by leave-one-out log density; use the smoothest candidate
+    within one standard error of the best score, with a Scott-to-2*Scott bound.
+    """
+    from scipy.special import logsumexp
+    points = np.asarray(points, dtype=float)
+    points = points[np.isfinite(points).all(axis=1)]
+    if len(points) < 10:
+        return None
+    covariance = np.cov(points.T)
+    if np.linalg.matrix_rank(covariance) < 2:
+        return None
+    center = points.mean(axis=0)
+    chol = np.linalg.cholesky(covariance)
+    white = np.linalg.solve(chol, (points-center).T).T
+    delta = white[:, None, :]-white[None, :, :]
+    distances2 = np.sum(delta**2, axis=-1)
+    np.fill_diagonal(distances2, np.inf)
+    scott = len(points)**(-1/6)
+    factors = np.array([1., 1.15, 1.3, 1.5, 1.75, 2.])
+    bandwidths = scott*factors
+    scores = np.array([logsumexp(-distances2/(2*h*h), axis=1)-2*np.log(h) for h in bandwidths])
+    means = scores.mean(axis=1)
+    best = int(np.argmax(means))
+    se = scores[best].std(ddof=1)/np.sqrt(len(points))
+    choice = np.flatnonzero(means >= means[best]-se)[-1]
+    bandwidth = bandwidths[choice]
+    kde = gaussian_kde(white.T, bw_method=bandwidth)
+    lo, hi = white.min(axis=0)-4*bandwidth, white.max(axis=0)+4*bandwidth
+    x, y = np.linspace(lo[0], hi[0], grid_size), np.linspace(lo[1], hi[1], grid_size)
+    xx, yy = np.meshgrid(x, y)
+    density = kde(np.array([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+    area = (x[1]-x[0])*(y[1]-y[0])
     ranked = np.sort(density.ravel())[::-1]
-    mass = np.cumsum(ranked)*(x[1]-x[0])*(y[1]-y[0])
-    if abs(mass[-1]-1)>.002:
-        return False
+    mass = np.cumsum(ranked)*area
+    if abs(mass[-1]-1) > .002:
+        return None
     levels = [ranked[min(np.searchsorted(mass, q), len(ranked)-1)] for q in (.954499736, .682689492)]
+    physical = np.stack((xx, yy), axis=-1) @ chol.T + center
+    return dict(x=physical[..., 0], y=physical[..., 1], density=density, levels=levels,
+                cell_area=area, integrated_mass=float(mass[-1]), bandwidth_factor=float(factors[choice]),
+                points_used=len(points))
+
+
+def _contours(ax, points, color, transform=None, bounds=None):
+    grid = _credible_density_grid(points)
+    if grid is None:
+        return False
+    xx, yy = grid['x'], grid['y']
     if transform is not None:
         xx, yy = transform(xx, yy)
-    ax.contour(xx, yy, density, levels=levels, colors=[color], linestyles=['--', '-'], linewidths=[.85, 1.1])
+    contours = ax.contour(xx, yy, grid['density'], levels=grid['levels'], colors=[color],
+                          linestyles=[(0, (2., 1.5)), '-'] if transform is not None else ['--', '-'],
+                          linewidths=[.35, .5] if transform is not None else [1., 1.4], antialiased=True)
+    if bounds is not None:
+        bounds.extend(path.vertices[np.isfinite(path.vertices).all(axis=1)] for path in contours.get_paths() if len(path.vertices))
     return True
 
 
 def save_fold_data(data, tables):
     tables = Path(tables); tables.mkdir(parents=True, exist_ok=True)
-    metadata = {k: v for k, v in data.items() if k != 'pairs'}
+    metadata = {k: v for k, v in data.items() if k not in {'pairs', 'systems'}}
     metadata['pairs'] = []; arrays = {}
     for i, pair in enumerate(data['pairs']):
         meta = {}
@@ -367,11 +417,247 @@ def save_fold_data(data, tables):
                     no_fold_pair_draws=int(np.sum(pair['relative'][:, 1]<0)),
                     image_draws_valid=np.isfinite(pair['positions']).all(2).sum(0).tolist())
         metadata['pairs'].append(meta)
+    if 'systems' in data:
+        metadata['systems'] = []
+        for i, system in enumerate(data['systems']):
+            meta = {}
+            for key, value in system.items():
+                if isinstance(value, np.ndarray):
+                    arrays[f'system_{i}_{key}'] = value
+                else:
+                    meta[key] = value
+            meta['source_draws_valid_by_knot'] = np.isfinite(system['relative']).all(2).sum(0).tolist()
+            meta['image_draws_valid'] = np.isfinite(system['positions']).all(2).sum(0).tolist()
+            metadata['systems'].append(meta)
     np.savez_compressed(tables/'fold_pairs_source_caustics.npz', **arrays)
     (tables/'fold_pairs_source_caustics.json').write_text(json.dumps(metadata, indent=2))
 
 
+def load_fold_data(tables):
+    """Read the numerical fold products, including optional system-level panels."""
+    tables = Path(tables)
+    data = json.loads((tables / 'fold_pairs_source_caustics.json').read_text())
+    with np.load(tables / 'fold_pairs_source_caustics.npz') as arrays:
+        for kind, prefix in (('pairs', 'pair'), ('systems', 'system')):
+            for i, record in enumerate(data.get(kind, [])):
+                start = f'{prefix}_{i}_'
+                record.update({key[len(start):]: arrays[key].copy() for key in arrays.files if key.startswith(start)})
+    return data
+
+
+def add_system_knots(config, state, evaluator, posterior, data, *, log=print):
+    """All knots in a fold's system, using a shared anchor and catalog image identities.
+
+    Different fold-image pairs of one system stay separate. Source contours are
+    never filtered by image recovery; every failure is retained as a missing draw.
+    """
+    from .image_catalog import load_image_catalog
+    if not data['pairs']:
+        data['systems'] = []
+        return data
+    catalog = load_image_catalog(config.model.image_constraints.catalog_path,
+        sigma_inst_arcsec=config.model.image_constraints.sigma_inst_arcsec,
+        sigma_floor_arcsec=config.model.image_constraints.sigma_floor_arcsec).set_index('image_label')
+    labels = list(map(str, state.images.image_labels))
+    if not set(labels).issubset(catalog.index):
+        raise ValueError('Saved fold labels do not match the system/knot catalog')
+    family_ids = list(map(str, state.images.family_ids))
+    family_index = np.asarray(state.images.family_index_per_image)
+    index = {label: i for i, label in enumerate(labels)}
+    groups = {}
+    for pair in data['pairs']:
+        rows = catalog.loc[pair['labels']]
+        if rows.system_id.nunique() != 1:
+            raise ValueError('A fold pair must belong to one source system')
+        key = (str(rows.system_id.iloc[0]), tuple(sorted(rows.image_id.astype(str))))
+        groups.setdefault(key, []).append(pair)
+    indices = np.asarray(data['draw_indices'], int)
+    selected = SimpleNamespace(samples=np.asarray(posterior.samples)[indices], log_prob=np.asarray(posterior.log_prob)[indices])
+    if len(selected.samples) > 128:
+        raise ValueError('System fold plots must retain the 128-draw diagnostic cap')
+    # Reuse recovered roots already stored for pair members; solve only missing knot families.
+    positions = np.full((len(indices), len(labels), 2), np.nan)
+    cached_labels = set()
+    for pair in data['pairs']:
+        for j, label in enumerate(pair['labels']):
+            positions[:, index[str(label)]] = pair['positions'][:, j]
+            cached_labels.add(str(label))
+    needed = set()
+    for (system, image_ids), _ in groups.items():
+        rows = catalog.loc[labels]
+        target = rows[(rows.system_id.astype(str) == system) & rows.image_id.astype(str).isin(image_ids)]
+        needed.update(str(row.family_id) for label, row in target.iterrows() if str(label) not in cached_labels)
+    if needed:
+        computed = posterior_image_positions(config, state, evaluator, selected, family_ids=sorted(needed), log=log)
+        for i, label in enumerate(labels):
+            if str(catalog.loc[label, 'family_id']) in needed and label not in cached_labels:
+                positions[:, i] = computed[:, i]
+    physical_all, sources = jax.jit(jax.vmap(lambda theta: (evaluator.physical(theta), evaluator.source_positions(theta))))(jnp.asarray(selected.samples))
+    fields, _, relative_batch = _kernels(evaluator)
+    packed_by_z = {}
+    systems = []
+    for (system, image_ids), pairs in groups.items():
+        anchor = min(pairs, key=lambda pair: (pair['separation'], pair['family_id']))
+        rows = catalog.loc[labels]
+        system_rows = rows[rows.system_id.astype(str) == system]
+        fids = [fid for fid in family_ids if fid in set(system_rows.family_id.astype(str))]
+        knot_ids = [str(system_rows[system_rows.family_id.astype(str) == fid].knot_id.iloc[0]) for fid in fids]
+        z = float(anchor['z_source'])
+        if not np.allclose(system_rows.catalog_z.to_numpy(float), z):
+            raise ValueError('Knots in a source system must share its redshift')
+        target = system_rows[system_rows.image_id.astype(str).isin(image_ids)]
+        image_labels = target.index.astype(str).tolist()
+        ids = [index[label] for label in image_labels]
+        observed = np.column_stack((np.asarray(state.images.x_obs)[ids], np.asarray(state.images.y_obs)[ids]))
+        # Include every observed knot in the selected two images, rather than a crop per knot.
+        mid = (observed.min(0) + observed.max(0)) / 2
+        fov = max(anchor['fov'], 1.6 * float(np.ptp(observed, axis=0).max()) + 1.)
+        normal, origin = np.asarray(anchor['normal']), np.asarray(anchor['origin'])
+        tangent = np.array([normal[1], -normal[0]])
+        if z not in packed_by_z:
+            packed_by_z[z] = jax.jit(jax.vmap(lambda p: evaluator.packed_state_for_z(p, z)))(physical_all)
+        _, a = fields(evaluator.packed_state_for_z(physical_all[data['best_draw']], z), jnp.asarray(origin[None]))
+        reference_tangent = np.linalg.svd(np.asarray(a)[0])[0][:, 0]
+        relative = np.full((len(indices), len(fids), 2), np.nan)
+        failures = []
+        for k, fid in enumerate(fids):
+            _, rel, errors, codes = relative_batch(packed_by_z[z], sources[:, family_ids.index(fid)], anchor['seeds'], normal,
+                                                  origin, tangent, reference_tangent)
+            rel, codes = np.asarray(rel), np.asarray(codes)
+            codes = np.where((codes == 0) & (np.linalg.norm(rel, axis=1) > 10*fov), 5, codes)
+            relative[:, k] = np.where((codes == 0)[:, None], rel, np.nan)
+            failures.extend(dict(family_id=fid, draw=int(i), reason=FAILURE_REASONS[int(codes[i])]) for i in np.flatnonzero(codes))
+        systems.append(dict(system_id=system, image_ids=list(image_ids), family_ids=fids, knot_ids=knot_ids,
+            labels=image_labels, image_family_index=np.array([fids.index(str(catalog.loc[label, 'family_id'])) for label in image_labels]),
+            observed=observed, positions=positions[:, ids], relative=relative, center=mid, fov=fov, z_source=z,
+            anchor_family_id=anchor['family_id'], anchor_labels=anchor['labels'], critical=anchor['critical'],
+            normal=normal, origin=origin, seeds=anchor['seeds'], failures=failures))
+        log(f'[outputs] fold system {system}, images {image_ids}: {len(fids)} knots, {len(image_labels)} matched catalog positions')
+    data['systems'] = systems
+    data['system_source_frame'] = 'Common caustic anchor/tangent per system and image pair; vertical coordinate is each knot\'s signed nearest distance to its own caustic. Not Cartesian source coordinates.'
+    return data
+
+
+def render_system_fold_diagnostics(config, state, data, paths, imaging, *, log=print):
+    """One column per system/fold-image pair; stable knot colors in both planes."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Polygon, Patch
+    from .cutouts import arcsec_to_skycoord, arcsec_to_radec, cutout_window, rgb_cutout, rgb_reference_band
+    if not data['systems']:
+        return None
+    data['contour_definition'] = 'Whitened Gaussian KDE; leave-one-out bandwidth with one-standard-error smoothing, Scott to 2*Scott; highest-density regions enclosing 68.2689492% and 95.4499736%'
+    images, bands, display, _ = imaging
+    reference = images[rgb_reference_band(bands)]
+    prefix = f'{config.paths.figure_prefix}_' if config.paths.figure_prefix else ''
+    paths.figures.mkdir(parents=True, exist_ok=True)
+    output = paths.figures / f'{prefix}fold_pairs_source_caustics{config.image_catalog.figure_suffix}.pdf'
+    palette = ['#0072B2', '#E69F00', '#009E73', '#CC79A7', '#D55E00', '#56B4E9', '#F0E442', '#FFFFFF']
+    best = data['best_draw']
+    with plt.rc_context(fname=STYLE, rc={'savefig.bbox': None}):
+        with PdfPages(output) as pdf:
+            for start in range(0, len(data['systems']), 3):
+                group = data['systems'][start:start+3]
+                fig, axes = plt.subplots(2, len(group), figsize=(4.5*len(group), 8.5), squeeze=False)
+                fig.subplots_adjust(left=.07, right=.985, bottom=.085, top=.98, wspace=.16, hspace=.07)
+                for col, system in enumerate(group):
+                    ax, panel = axes[:, col]
+                    count = len(system['family_ids'])
+                    colors = palette[:count] if count <= 8 else [plt.get_cmap('tab20')(i/count) for i in range(count)]
+                    # White is useful on imaging but not on the source panel.
+                    colors = ['#7B61A8' if color == '#FFFFFF' else color for color in colors]
+                    coord = arcsec_to_skycoord(*system['center'], state.reference)
+                    window = cutout_window(reference, coord, system['fov'])
+                    if window is not None:
+                        def pixels(x, y):
+                            ra, dec = arcsec_to_radec(x, y, state.reference)
+                            px, py = reference.wcs.world_to_pixel_values(ra, dec)
+                            return px-window.x0, py-window.y0
+                        rgb = rgb_cutout(images, bands, display, coord, system['fov'])
+                        ax.imshow(rgb, origin='lower', interpolation='nearest')
+                        ax.plot(*pixels(*system['critical'][best].T), color=MAGENTA, lw=.7)
+                        curve, normal, origin = system['critical'], system['normal'], system['origin']
+                        offsets = np.einsum('dni,i->dn', curve-origin, normal); usable = np.isfinite(offsets).any(0)
+                        if usable.any():
+                            low, high = np.nanpercentile(offsets[:, usable], [16, 84], axis=0)
+                            seeds = system['seeds'][usable]
+                            tangent = seeds-origin-((seeds-origin) @ normal)[:, None]*normal
+                            polygon = np.vstack([origin+tangent+low[:, None]*normal, (origin+tangent+high[:, None]*normal)[::-1]])
+                            ax.add_patch(Polygon(np.column_stack(pixels(*polygon.T)), facecolor=MAGENTA, edgecolor='none', alpha=.2))
+                        for j, label in enumerate(system['labels']):
+                            k = system['image_family_index'][j]; color = colors[k]
+                            _contours(ax, system['positions'][:, j], color, pixels)
+                            ax.plot(*pixels(*system['observed'][j]), 'x', color=color, ms=9, mew=.75, zorder=8)
+                            if np.isfinite(system['positions'][best, j]).all():
+                                ax.plot(*pixels(*system['positions'][best, j]), 'o', mfc='none', mec=color, ms=8, mew=.6, zorder=7)
+                        size = rgb.shape[0]; bar = .5/reference.pixel_scale_arcsec
+                        ax.plot([.07*size, .07*size+bar], [.08*size]*2, color='white', lw=1.2)
+                        ax.text(.07*size+bar/2, .11*size, '0.5″', color='white', ha='center', fontsize=8)
+                        ax.set_xlim(-.5, rgb.shape[1]-.5); ax.set_ylim(-.5, size-.5)
+                    else:
+                        ax.text(.5, .5, 'Outside imaging coverage', ha='center', transform=ax.transAxes)
+                    ax.text(.03, .97, f"System {system['system_id']} • images {' / '.join(system['image_ids'])}\n{count} {'knot' if count == 1 else 'knots'} • z = {system['z_source']:g}",
+                            transform=ax.transAxes, va='top', color='white', fontsize=9, bbox=dict(facecolor='black', alpha=.65, edgecolor='none'))
+                    knot_handles = [Line2D([], [], color=color, label=f'Knot {knot or "single"}') for color, knot in zip(colors, system['knot_ids'])]
+                    image_key = [
+                        Line2D([], [], color='white', marker='x', ls='none', ms=6, mew=.75, label='Catalog knot'),
+                        Line2D([], [], color='white', marker='o', mfc='none', ls='none', ms=5, mew=.6, label='Best-model image'),
+                        Line2D([], [], color='white', lw=.5, label='68.3% image region'),
+                        Line2D([], [], color='white', lw=.35, ls='--', label='95.4% image region'),
+                        Line2D([], [], color=MAGENTA, lw=.7, label='Best critical curve'),
+                        Patch(facecolor=MAGENTA, alpha=.2, edgecolor='none', label='Critical-curve 68% band')]
+                    ax.legend(handles=knot_handles+image_key, loc='lower right', ncol=2, fontsize=6,
+                              handlelength=1.5, columnspacing=.8, labelspacing=.35,
+                              frameon=True, facecolor='black', edgecolor='none', framealpha=.75, labelcolor='white')
+                    points = system['relative']; finite = np.isfinite(points).all(2)
+                    all_points = points[finite]
+                    center = np.median(all_points[:, 0]) if len(all_points) else 0.
+                    radius = max(.02, 1.3*np.max(abs(all_points[:, 0]-center))) if len(all_points) else .1
+                    height = max(.002, 1.3*np.max(abs(all_points[:, 1]))) if len(all_points) else .1
+                    panel.set(xlim=(center-radius, center+radius), ylim=(-2.0*height, 1.3*height))
+                    panel.axhline(0, color=MAGENTA, lw=1.2)
+                    counts = []; contour_bounds = []
+                    for k, color in enumerate(colors):
+                        _contours(panel, points[:, k], color, bounds=contour_bounds)
+                        if finite[best, k]:
+                            panel.plot(*points[best, k], 'o', color=color, ms=4)
+                        counts.append(f"{system['knot_ids'][k] or 'single'}: {int((points[:, k, 1]<0).sum())}/{int(finite[:, k].sum())}")
+                    if contour_bounds:
+                        extent = np.vstack(contour_bounds)
+                        radius = max(radius, 1.08*np.max(abs(extent[:, 0]-center)))
+                        height = max(height, 1.08*np.max(abs(extent[:, 1])))
+                        panel.set(xlim=(center-radius, center+radius), ylim=(-2.0*height, 1.3*height))
+                    panel.axhspan(-2.0*height, 0, color='#F4DCDC', alpha=.65, zorder=0)
+                    panel.text(.03, .97, 'Source positions, common caustic anchor', transform=panel.transAxes, va='top', fontsize=7)
+                    source_key = [
+                        Line2D([], [], color='.2', lw=1.4, label='68.3% source region'),
+                        Line2D([], [], color='.2', lw=1., ls='--', label='95.4% source region'),
+                        Line2D([], [], color='.2', marker='o', ls='none', ms=3, label='Best-model source'),
+                        Line2D([], [], color=MAGENTA, lw=1.2, label='Local caustic'),
+                        Patch(facecolor='#F4DCDC', edgecolor='none', label='No local fold pair')]
+                    panel.legend(handles=knot_handles+source_key, loc='lower left', bbox_to_anchor=(.015, .14),
+                                 ncol=3 if count>2 else 2, fontsize=5.8, handlelength=1.5,
+                                 columnspacing=.7, labelspacing=.35, frameon=True,
+                                 facecolor='white', edgecolor='none', framealpha=.9)
+                    panel.text(.03, .04, 'No local fold pair / evaluated draws\n'+'; '.join(counts)+'\nSource draws retained when image recovery fails', transform=panel.transAxes, fontsize=6.5, va='bottom', wrap=True)
+                    panel.set_xlabel('Along-caustic coordinate (arcsec)', fontsize=8)
+                    if col == 0:
+                        panel.set_ylabel('Signed nearest-caustic distance (arcsec)', fontsize=8)
+                    panel.tick_params(labelsize=7)
+                    panel.set_aspect('auto')
+                    ax.set_xticks([]); ax.set_yticks([])
+                    for target in (ax, panel):
+                        target.grid(False)
+                pdf.savefig(fig, bbox_inches=None, pad_inches=0); plt.close(fig)
+    log(f'[outputs] system-matched fold cutouts -> {output}')
+    return output
+
+
 def render_fold_diagnostics(config, state, data, paths, imaging, *, log=print):
+    if 'systems' in data:
+        return render_system_fold_diagnostics(config, state, data, paths, imaging, log=log)
+
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
     from matplotlib.lines import Line2D
@@ -419,7 +705,7 @@ def render_fold_diagnostics(config, state, data, paths, imaging, *, log=print):
                             handles.append(Line2D([], [], color=color, label=pair['labels'][k]+' positions'))
                         handles += [Line2D([], [], color='white', marker='x', ls='none', label='Catalog'),
                                     Line2D([], [], mec='#7FFF70', mfc='none', marker='o', ls='none', label='Best model')]
-                        legend = ax.legend(handles=handles, title=r'Solid: $1\sigma$; dashed: $2\sigma$', title_fontsize=7,
+                        legend = ax.legend(handles=handles, title='Solid: 68.3%; dashed: 95.4%', title_fontsize=7,
                                            loc='lower right', fontsize=7, facecolor='black', edgecolor='none', framealpha=.65, labelcolor='white')
                         legend.get_title().set_color('white')
                         size = rgb.shape[0]; bar = .5/reference.pixel_scale_arcsec
