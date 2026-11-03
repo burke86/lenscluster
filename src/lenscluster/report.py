@@ -216,3 +216,160 @@ def audit_report(state: ModelState, audit: dict[str, Any], *, posterior_summary:
         lines.append("  sampler: " + ", ".join(f"{k} {v}" for k, v in posterior_summary.items()))
     lines.append(f"  far-field approximation verdict: {audit.get('approximation_validation')} (sampler and image recovery: see the quality gates)")
     return "\n".join(lines)
+
+
+# Start-parameter report: the global parameters at a model, grouped by what they describe, with their priors.
+_START_GROUPS = (("cluster", "Cluster-scale halos"), ("shear", "External shear"), ("independent", "Independent member halos"),
+                 ("scaling", "Member scaling relation"), ("error", "Error model (GRF + GP)"))
+_BOUND_MARGIN = 0.02            # flag a value within this fraction of its prior range (in sampling coordinates) of a bound
+# Status of a value in its prior: red within 2% of a bound or |z| >= 3, yellow within 10% of a bound or |z| >= 2, else green.
+_RED_EDGE, _YELLOW_EDGE, _RED_Z, _YELLOW_Z = 0.02, 0.10, 3.0, 2.0
+_STATUS_STYLE = {"green": "green", "yellow": "yellow", "red": "bold red"}
+
+
+def _num(value: float) -> str:
+    if value is None or not np.isfinite(value):
+        return ""
+    value = float(value)
+    if abs(value) < 1e-12:
+        return "0"
+    if abs(value) >= 1e4 or abs(value) < 1e-3:
+        return f"{value:.3g}"
+    return f"{value:.4g}"
+
+
+def _prior_text(spec) -> str:
+    """The prior in physical units, as the sampler applies it."""
+    log = spec.transform_kind == "log_positive"
+    lo, hi = float(spec.lower), float(spec.upper)
+    bounds = ""
+    if np.isfinite(lo) or np.isfinite(hi):
+        plo = spec.physical_lower if spec.physical_lower is not None else (np.exp(lo) if log and np.isfinite(lo) else lo)
+        phi = spec.physical_upper if spec.physical_upper is not None else (np.exp(hi) if log and np.isfinite(hi) else hi)
+        bounds = f" on [{_num(plo) or '-inf'}, {_num(phi) or 'inf'}]"
+    if spec.prior_kind == "uniform":
+        return f"{'log-uniform' if log else 'uniform'}{bounds}"
+    if spec.prior_kind == "student_t":
+        return f"student-t(dof {_num(spec.dof)}, {_num(spec.mean)}, {_num(spec.std)})"
+    if spec.prior_kind in ("normal", "truncated_normal"):
+        mean, std = float(spec.mean), float(spec.std)
+        core = f"log-normal(median {_num(np.exp(mean))}, ln-width {_num(std)})" if log else f"normal({_num(mean)}, {_num(std)})"
+        return core + (bounds if spec.prior_kind == "truncated_normal" else "")
+    return spec.prior_kind
+
+
+def _prior_position(spec, latent: float) -> str:
+    """Where the value sits in its prior: z for normal priors, the fraction of the range for uniform ones, and a flag
+    within 2% of a bound."""
+    lo, hi = float(spec.lower), float(spec.upper)
+    parts = []
+    if spec.prior_kind in ("normal", "truncated_normal") and spec.std:
+        parts.append(f"z {((latent - float(spec.mean)) / float(spec.std)):+.1f}")
+    elif np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+        parts.append(f"{100.0 * (latent - lo) / (hi - lo):.0f}% of range")
+    if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+        if latent - lo <= _BOUND_MARGIN * (hi - lo):
+            parts.append("AT LOWER BOUND")
+        elif hi - latent <= _BOUND_MARGIN * (hi - lo):
+            parts.append("AT UPPER BOUND")
+    return ", ".join(parts)
+
+
+def _prior_status(spec, latent: float) -> str:
+    """green, yellow or red: how close the value sits to a prior bound (fraction of the range in sampling coordinates)
+    or how far from a normal prior's centre (z)."""
+    lo, hi = float(spec.lower), float(spec.upper)
+    edge = np.inf
+    if np.isfinite(lo) and np.isfinite(hi) and hi > lo:               # a one-sided bound (a half-normal) is judged by z alone
+        edge = min(latent - lo, hi - latent) / (hi - lo)
+    z = abs((latent - float(spec.mean)) / float(spec.std)) if spec.prior_kind in ("normal", "truncated_normal") and spec.std else 0.0
+    if edge <= _RED_EDGE or z >= _RED_Z:
+        return "red"
+    if edge <= _YELLOW_EDGE or z >= _YELLOW_Z:
+        return "yellow"
+    return "green"
+
+
+def _start_group(spec, independent_ids: set[str]) -> str | None:
+    family = spec.component_family
+    if family == "error_scale":
+        return "error"
+    if family in ("scaling", "member_velocity_scatter", "softening_length"):
+        return "scaling"
+    if family == "large":
+        if spec.potential_id == "shear" or spec.field in ("gamma1", "gamma2"):
+            return "shear"
+        return "independent" if spec.potential_id in independent_ids else "cluster"
+    return None                                     # member offsets and sources: summarized, not listed
+
+
+def start_parameter_report(state: ModelState, latent: np.ndarray, physical: np.ndarray, *, independent_ids=(),
+                           title: str = "at the start", color: bool = False) -> str:
+    """The global parameters at one model (``latent`` sampling coordinates and their ``physical`` values), one table
+    per group: cluster-scale halos, external shear, independent member halos, the member scaling relation (with its
+    scatters) and the error model, each with its prior and where the value sits in it.  The member offsets and the
+    source positions are summarized below the tables.  Each row has a status, green, yellow or red (see _prior_status);
+    with ``color`` the status and the position in the prior are coloured for a terminal, otherwise the text is plain for
+    a log file.  Rendered with rich."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich.text import Text
+    latent, physical = np.asarray(latent, dtype=float), np.asarray(physical, dtype=float)
+    independent_ids = {str(i) for i in independent_ids}
+    rows: dict[str, list] = {key: [] for key, _ in _START_GROUPS}
+    offsets: dict[str, list[tuple[str, float]]] = {}
+    n_sources = 0
+    for index, spec in enumerate(state.parameter_specs):
+        group = _start_group(spec, independent_ids)
+        if group is not None:
+            rows[group].append((spec, latent[index], physical[index]))
+        elif spec.component_family == "member_scatter_offset":
+            offsets.setdefault(spec.field, []).append((spec.name.split(".")[1] if spec.name.count(".") >= 2 else spec.name, float(latent[index])))
+        elif spec.component_family == "source_position":
+            n_sources += 1
+    console = (Console(width=160, color_system="standard", force_terminal=True) if color
+               else Console(width=160, color_system=None, force_terminal=False))
+    counts = {"green": 0, "yellow": 0, "red": 0}
+    with console.capture() as capture:
+        for key, label in _START_GROUPS:
+            if not rows[key]:
+                continue
+            table = Table(title=f"{label} {title}", title_justify="left")
+            for name, justify in (("component", "left"), ("parameter", "left"), ("value", "right"), ("prior", "left"), ("in prior", "left"),
+                                  ("status", "left")):
+                table.add_column(name, justify=justify, no_wrap=True)
+            previous = None
+            for spec, z, value in rows[key]:
+                component = spec.potential_id if spec.potential_id != previous else ""
+                if previous is not None and spec.potential_id != previous:
+                    table.add_section()
+                previous = spec.potential_id
+                status = _prior_status(spec, z)
+                counts[status] += 1
+                style = _STATUS_STYLE[status]
+                table.add_row(component, spec.field, _num(value), _prior_text(spec), Text(_prior_position(spec, z), style=style),
+                              Text(status, style=style))
+            console.print(table)
+    lines = [capture.get().rstrip(),
+             f"status: {counts['green']} green, {counts['yellow']} yellow, {counts['red']} red (red: within 2% of a prior bound or "
+             f"3 prior widths from its centre; the run continues)"]
+    names = {"velocity_offset": "velocity", "radius_offset": "radius"}
+    offset_prior = {s.field: s for s in state.parameter_specs if s.component_family == "member_scatter_offset"}
+    for field, values in offsets.items():
+        array = np.asarray([v for _, v in values])
+        worst = int(np.argmax(np.abs(array)))
+        prior = _prior_text(offset_prior[field]) if field in offset_prior else "N(0, 1)"
+        lines.append(f"member {names.get(field, field)} offsets (unit, prior {prior}): {len(array)} members, rms {np.sqrt(np.mean(array ** 2)):.2f}, "
+                     f"max |offset| {abs(array[worst]):.2f} (member {values[worst][0]})")
+    cap = np.asarray(getattr(state.packed_lens_spec, "ellipticity_soft_cap", []), dtype=float)
+    width = np.asarray(getattr(state.packed_lens_spec, "ellipticity_soft_width", []), dtype=float)
+    spec_names = [s.name for s in state.parameter_specs]
+    for c in np.flatnonzero(np.isfinite(cap)) if cap.size else []:
+        halo = str(state.base_components[int(c)]["id"])
+        e = [physical[spec_names.index(f"{halo}.{k}")] if f"{halo}.{k}" in spec_names else np.nan for k in ("e1", "e2")]
+        modulus = float(np.hypot(*e))
+        lines.append(f"halo {halo}: smooth ellipticity cap from |e| = {cap[c]:.3f} (width {width[c]:g}); |e| = {modulus:.3f} here, "
+                     f"log prior {-np.logaddexp(0.0, (modulus - cap[c]) / width[c]):.2f}")
+    if n_sources:
+        lines.append(f"source positions: {n_sources // 2} sources (not listed)")
+    return "\n".join(lines)

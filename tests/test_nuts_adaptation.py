@@ -8,7 +8,6 @@ import numpy as np
 from lenscluster import artifacts, pipeline
 from lenscluster.config import ImageDiagnosticsConfig, RuntimeConfig, SamplingConfig, SearchConfig
 from lenscluster.sampling import adaptation_diagnostics, e_bfmi
-from conftest import SMOKE_SAMPLING_GATES, SMOKE_SEARCH_GATES
 
 
 def test_e_bfmi_separates_independent_and_random_walk_energies():
@@ -24,8 +23,8 @@ def test_e_bfmi_separates_independent_and_random_walk_energies():
 
 def test_step_sizes_and_energies_are_saved_and_reloaded(synthetic_config):
     config = replace(synthetic_config, runtime=RuntimeConfig(seed=2, chains=2, nuts_chain_method="sequential", resume=True),
-                     search=SearchConfig(**SMOKE_SEARCH_GATES, n_starts=4, lbfgs_max_iter=30, polish_max_iter=10),
-                     sampling=SamplingConfig(**SMOKE_SAMPLING_GATES, warmup=20, samples=15, max_tree_depth=4),
+                     search=SearchConfig(n_starts=4, lbfgs_max_iter=30, polish_max_iter=10),
+                     sampling=SamplingConfig(warmup=20, samples=15, max_tree_depth=4),
                      image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=2))
     result = pipeline.run(config)
     posterior = result.posterior

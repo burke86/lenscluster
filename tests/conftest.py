@@ -11,10 +11,6 @@ from lenscluster.config import (CosmologyConfig, DPIEHaloConfig, ImageConstraint
                                 MemberPopulationConfig, PriorConfig, RunPathsConfig, SamplingConfig, SearchConfig)
 
 
-# Pipeline smoke tests sample a handful of draws from a toy lens: the quality gates would always fail them, so they are
-# opened here; the gates themselves are tested in test_quality_gates.py.
-SMOKE_SAMPLING_GATES = dict(max_r_hat=float("inf"), max_divergence_fraction=1.0, min_image_recovery_fraction=0.0)
-SMOKE_SEARCH_GATES = dict(fail_on_fragile_init=False, hyperparameter_bound_margin=0.0)
 
 
 def write_offset_catalog(path: Path, rows, reference=(0.0, 0.0)) -> Path:
@@ -43,7 +39,7 @@ def synthetic_cluster_config(root: Path) -> LensClusterSolverConfig:
                                                        sigma_prior=PriorConfig("truncated_normal", mean=100.0, std=20.0, lower=50.0, upper=200.0),
                                                        cutkpc_prior=PriorConfig("truncated_normal", mean=10.0, std=3.0, lower=1.0, upper=50.0)),),
             image_constraints=ImageConstraintsConfig(catalog_path=str(images), sigma_inst_arcsec=0.1)),
-        search=SearchConfig(**SMOKE_SEARCH_GATES), sampling=SamplingConfig(**SMOKE_SAMPLING_GATES),
+        search=SearchConfig(), sampling=SamplingConfig(),
         paths=RunPathsConfig(output_dir=str(root / "output"), run_name="toy"))
 
 

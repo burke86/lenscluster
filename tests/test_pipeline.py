@@ -13,12 +13,11 @@ from lenscluster import artifacts, pipeline
 from lenscluster.config import ImageDiagnosticsConfig, RuntimeConfig, SamplingConfig, SearchConfig
 from lenscluster.evaluator import Evaluator
 from lenscluster.state import build_state
-from conftest import SMOKE_SAMPLING_GATES, SMOKE_SEARCH_GATES
 
 
 def _fast(config):
     return replace(config, runtime=RuntimeConfig(seed=3, chains=1, nuts_chain_method="sequential", resume=True),
-                   search=SearchConfig(**SMOKE_SEARCH_GATES, n_starts=4, lbfgs_max_iter=30), sampling=SamplingConfig(**SMOKE_SAMPLING_GATES, warmup=10, samples=20, max_tree_depth=4),
+                   search=SearchConfig(n_starts=4, lbfgs_max_iter=30), sampling=SamplingConfig(warmup=10, samples=20, max_tree_depth=4),
                    image_diagnostics=ImageDiagnosticsConfig(posterior_image_diagnostic_draws=2))
 
 
@@ -63,7 +62,7 @@ def test_single_stage_end_to_end(synthetic_config):
     assert pipeline.run(config, stage="init").resumed
     table = (result.paths.final.tables / "run_summary.txt").read_text()
     assert "Run summary" in table and "recovered / observed" in table and "total" in table
-    changed = replace(config, sampling=SamplingConfig(**SMOKE_SAMPLING_GATES, warmup=10, samples=12, max_tree_depth=4))
+    changed = replace(config, sampling=SamplingConfig(warmup=10, samples=12, max_tree_depth=4))
     with pytest.raises(ValueError, match="different configuration"):
         pipeline.run(changed)
 

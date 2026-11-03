@@ -1,19 +1,16 @@
 """Guards against the w1000s500_prod failure (the error model absorbing the lens): stage A of the init search holds the
 error scales, the search runs on system blocks under grf_gp, the grf_gp hyperparameters have upper bounds that fit the
-knee tables, and the quality gates stop a run before NUTS (fragile init, error scale at its bound) or fail it after the
-outputs (R-hat, divergences, image recovery)."""
+knee tables.  The init no longer stops a run: the start-parameter table colours a value near its prior bound red."""
 from __future__ import annotations
 
 from dataclasses import replace
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from lenscluster import search_split
-from lenscluster.config import LikelihoodConfig, LogNormalPriorConfig, SamplingConfig, SearchConfig
+from lenscluster.config import LikelihoodConfig, LogNormalPriorConfig, SearchConfig
 from lenscluster.evaluator import Evaluator
-from lenscluster.pipeline import final_gates, init_gates
 from lenscluster.state import build_state
 from test_gp_knee import knee_config
 
@@ -60,44 +57,3 @@ def test_knee_prior_upper_must_lie_inside_the_tables(synthetic_config):
     for prior in (LogNormalPriorConfig(median=6.0, log_sigma=0.5), LogNormalPriorConfig(median=6.0, log_sigma=0.5, upper=100.0)):
         with pytest.raises(ValueError, match="gp_knee_prior.upper"):
             knee_config(synthetic_config, "all", gp_knee_prior=prior)
-
-
-def _set_physical(state, theta, name, value):
-    i = [s.name for s in state.parameter_specs].index(name)
-    out = np.array(theta, dtype=float)
-    out[i] = np.log(value)
-    return out
-
-
-def test_init_gates_stop_a_fragile_init_and_an_error_scale_at_its_bound(synthetic_config):
-    config = replace(knee_config(synthetic_config, "all"), search=SearchConfig())
-    state = build_state(config)
-    evaluator = Evaluator(state, "gp_image_plane")
-    theta = np.asarray(state.initial_theta, dtype=float)
-    robust = {"starts_in_basin": 5, "modes": []}
-    assert init_gates(config, state, evaluator, robust, theta)["passed"]
-    fragile = init_gates(config, state, evaluator, {"starts_in_basin": 1, "modes": []}, theta)
-    assert not fragile["passed"] and fragile["fragile"] and "fragile init" in fragile["failures"][0]
-    allowed = replace(config, search=replace(config.search, fail_on_fragile_init=False))
-    assert init_gates(allowed, state, evaluator, {"starts_in_basin": 1, "modes": []}, theta)["passed"]
-    pinned = _set_physical(state, theta, "images.sigma_shared", 0.299)
-    gate = init_gates(config, state, evaluator, robust, pinned)
-    assert not gate["passed"] and list(gate["at_upper_bound"]) == ["images.sigma_shared"]
-    assert init_gates(config, state, evaluator, robust, _set_physical(state, theta, "images.sigma_shared", 0.2))["passed"]
-
-
-def test_final_gates_fail_on_r_hat_divergences_and_image_recovery(synthetic_config):
-    config = replace(synthetic_config, sampling=SamplingConfig())          # the default gates, not the smoke ones
-    good = SimpleNamespace(diagnostics={"max_r_hat": 1.02}, diverging=np.zeros((4, 500), dtype=bool))
-    fit = {"fit": {"recovered_image_count": 300, "observed_image_count": 303}}
-    assert final_gates(config, good, fit)["passed"]
-    diverging = np.zeros((4, 500), dtype=bool)
-    diverging[0, :634 // 4] = True
-    bad = SimpleNamespace(diagnostics={"max_r_hat": 1.405}, diverging=diverging)
-    gate = final_gates(config, bad, {"fit": {"recovered_image_count": 2, "observed_image_count": 303}})
-    assert not gate["passed"] and len(gate["failures"]) == 3
-    assert any("R-hat" in f for f in gate["failures"]) and any("divergences" in f for f in gate["failures"])
-    assert any("2/303" in f for f in gate["failures"])
-    # a missing R-hat is a failure, not a pass; without plots the recovery is not checked
-    unknown = final_gates(config, SimpleNamespace(diagnostics={}, diverging=np.zeros((1, 10), bool)), {})
-    assert not unknown["passed"] and not unknown["image_recovery_checked"]
