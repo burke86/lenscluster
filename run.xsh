@@ -48,7 +48,7 @@ HFF_RGB_DISPLAY = {}      # library defaults: f_nu-scaled Lupton display with th
 # F150W+F200W, red F444W, the STScI/UNCOVER hue assignment with the four bands we hold.
 JWST_RGB_BANDS = ["F115W", "F150W", "F200W", "F444W"]
 
-VALID_CLUSTERS = "ARES, HERA, AS1063, M0416_BERGAMINI2023, M0416_CANUCS2025"
+VALID_CLUSTERS = "ARES, HERA, AS1063, AS1063_JWST, M0416_BERGAMINI2023, M0416_CANUCS2025"
 FF_RGB_BANDS = ("F435W", "F606W", "F814W")
 FF_RGB_DISPLAY = RGBDisplayConfig(q=6.8, stretch=0.0158, minimum=0.00105, red_gain=0.62, green_gain=0.78, blue_gain=3.65)
 
@@ -88,7 +88,7 @@ def _parse_args(argv: list[str]) -> dict:
         print(_usage())
         raise SystemExit(2)
     cluster = str(argv[1]).strip().upper()
-    values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "dry_run": False, "fast": False, "stage": "both", "imaging": "hst",
+    values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "dry_run": False, "fast": False, "stage": "both", "imaging": None,
               "halo_search": "lbfgs", "member_search": "lbfgs", "likelihood": "grf_gp", "gp_kernel_family": None, "gp_blocks": None,
               "warm_start": None}
     flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--stage": "stage", "--imaging": "imaging",
@@ -120,7 +120,7 @@ def _parse_args(argv: list[str]) -> dict:
     if values["halo_search"] not in {"lbfgs", "optax-lbfgs", "adam", "svi"} or values["member_search"] not in {"lbfgs", "optax-lbfgs", "adam", "svi"}:
         print("--halo-search and --member-search must be lbfgs, optax-lbfgs, adam or svi.")
         raise SystemExit(2)
-    if values["imaging"] not in {"hst", "jwst"}:
+    if values["imaging"] not in {None, "hst", "jwst"}:
         print("--imaging must be hst or jwst.")
         raise SystemExit(2)
     if values["likelihood"] not in LIKELIHOODS:
@@ -196,7 +196,7 @@ def _hff_clusters():
     AS1063_KPC_PER_ARCSEC = kpc_per_arcsec_from_config(0.348, {"H0": 70.0, "Om0": 0.3})
     AS1063_CATALOG_DIR = "data/Bergamini/RXJ2248_Bergamini19"
     AS1063_MSTAR_F160W = 18.33
-    return {
+    clusters = {
         "AS1063": {
             "cluster_key": "as1063",
             "reference": ReferenceFrameConfig(reference=3, ra0_deg=342.18321, dec0_deg=-44.530878),
@@ -275,6 +275,39 @@ def _hff_clusters():
         },
         **_m0416_bergamini2023_cluster(),
     }
+
+    # JWST constraints from Diego 2601.11704v2 and the Beauchesne member release.
+    # Retain the existing AS1063 cluster/gas model; this is not a transcription
+    # of either paper's complete mass model. The new member file omits BCG+ICL.
+    # Carry over Bergamini member 1809 as a separate round dPIE at its light
+    # position. Its initial mass and prior scales follow the existing neutral
+    # relation evaluated at m_F160W=16.176, with alpha=0.25 and beta=0.5.
+    from lenscluster.sky import radec_to_offsets_arcsec
+    old = clusters["AS1063"]
+    pop = old["member_population"]
+    bcg_x, bcg_y = radec_to_offsets_arcsec(342.183237, -44.530870,
+                                         old["reference"].ra0_deg, old["reference"].dec0_deg)
+    luminosity = 10.0 ** (0.4 * (AS1063_MSTAR_F160W - 16.176))
+    fs, fr = luminosity ** 0.25, luminosity ** 0.5
+    bcg = DPIEHaloConfig(
+        id="bcg_1809", x_centre=float(bcg_x), y_centre=float(bcg_y),
+        ellipticite=0.0, angle_pos=0.0, core_radius_kpc=pop.corekpc,
+        cut_radius_kpc=pop.cutkpc * fr, v_disp=pop.sigma * fs, z_lens=pop.z_lens,
+        priors={
+            "v_disp": PriorConfig("truncated_normal", mean=200.0 * fs, std=100.0 * fs,
+                                   lower=50.0 * fs, upper=500.0 * fs),
+            "cut_radius_kpc": PriorConfig("uniform", lower=2.0 * fr, upper=100.0 * fr),
+        },
+    )
+    jwst_dir = "data/JWST/AS1063_Diego2026_Beauchesne2025"
+    clusters["AS1063_JWST"] = {
+        **old, "cluster_key": "as1063_jwst", "imaging": "jwst",
+        "image_catalog": f"{jwst_dir}/images.yaml",
+        "member_population": replace(pop, catalog_path=f"{jwst_dir}/members.yaml", band="F160W",
+                                     kinematics_sources=()),
+        "halos": (*old["halos"], bcg),
+    }
+    return clusters
 
 
 # MACS J0416, two image catalogs over the same mass model: the HST + MUSE catalog of Bergamini et al. 2023 (237 spectroscopic
@@ -445,7 +478,7 @@ def build_config(
     gp_blocks: str | None = None,
     runtime: RuntimeConfig | None = None,
     fast: bool = False,
-    imaging: str = "hst",
+    imaging: str | None = None,
     halo_search: str = "lbfgs",
     member_search: str = "lbfgs",
     warm_start: str | None = None,
@@ -456,6 +489,7 @@ def build_config(
         raise ValueError(f"cluster must be one of {', '.join(sorted(CLUSTERS))}; got {cluster!r}.")
     is_hff = cluster not in FF_SIMS_CLUSTERS
     cluster_config = _hff_clusters()[cluster] if is_hff else FF_SIMS_CLUSTERS[cluster]
+    imaging = imaging or cluster_config.get("imaging", "hst")
     config = LensClusterSolverConfig(
         model=LensModelConfig(
             reference=cluster_config.get("reference", ReferenceFrameConfig(reference=3, ra0_deg=0.0, dec0_deg=0.0)),
