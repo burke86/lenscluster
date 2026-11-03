@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-cores = 8  # NUTS chains; one JAX CPU device per chain.
+cores = 4  # NUTS chains; one JAX CPU device per chain.
 seed = 12345
 
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster"
@@ -22,7 +22,9 @@ from lenscluster.config import (
     ImageConstraintsConfig,
     LensClusterSolverConfig,
     LikelihoodConfig,
+    IndependentMemberHaloConfig,
     LensModelConfig,
+    LogNormalPriorConfig,
     MemberConfig,
     MemberPopulationConfig,
     PriorConfig,
@@ -64,12 +66,21 @@ def _usage() -> str:
         "          smoothed (the per-image source-plane floors sigma_def, sigma_extra)\n"
         "  --warm-start RUN_DIR: start the init search from a previous run's saved start (parameters matched by name; the\n"
         "          256-start search is skipped; NUTS still requires that run's init to have been robust)\n"
-        "  --gp-blocks: grf_gp only: all (default; one covariance over every image), system (all knots of a galaxy; what --fast uses)\n"
-        "          or family\n"
+        "  --gp-blocks: grf_gp only: system (default, also with --fast; grouped by size), family, or all (one covariance\n"
+        "          over every image, about 5x slower per gradient; only it removes the field-wide translation, convergence\n"
+        "          and shear from the mass field)\n"
         "  --gp-kernel-family: potential only: matern52 (default) or gaussian\n"
+        "  --gp-band-max ARCSEC: grf_gp only: the longest wavelength of the mass field (default 30); above 30 the knee prior\n"
+        "          becomes log-normal with median min(20, ARCSEC / 2), log-width 1, up to min(ARCSEC, 80), started at its median\n"
+        "  --gp-knee-gamma G: grf_gp only: the fixed high-k slope of the mass field's spectrum, P ~ 1 / (1 + (k/k_t)^G) (default 4;\n"
+        "          2 truncated isothermal lumps, 4 NFW-like cusps, 6 cored)\n"
+        "  --start-max-iter N, --start-tolerance TOL: the init's last optimization (the best mode on the NUTS target, every chain\n"
+        "          starts there; on by default): it stops when the log posterior gains less than TOL over 50 iterations (default\n"
+        "          0.1), or after N iterations (default 2000)\n"
         "  --fast: exploratory settings: members deflecting every image by < 0.03\" are dropped, far-field members allowed down to\n"
         "          2 cut radii from an image, classification at the current model, 16 search starts, 300+150 draws at tree depth 7\n"
         "          (check the audit's far-field error before trusting a fast run)\n"
+        "  AS1063_JWST: Diego images + Beauchesne members, existing AS1063 halos and separate BCG; JWST figures by default\n"
         f"Valid clusters: {VALID_CLUSTERS}"
     )
 
@@ -90,10 +101,12 @@ def _parse_args(argv: list[str]) -> dict:
     cluster = str(argv[1]).strip().upper()
     values = {"campaign": OUTPUT_DIR_LABEL, "run_label": None, "dry_run": False, "fast": False, "stage": "both", "imaging": None,
               "halo_search": "lbfgs", "member_search": "lbfgs", "likelihood": "grf_gp", "gp_kernel_family": None, "gp_blocks": None,
-              "warm_start": None}
+              "warm_start": None, "gp_band_max": None, "start_tolerance": None, "start_max_iter": None, "gp_knee_gamma": None}
     flag_to_key = {"--campaign": "campaign", "--run-label": "run_label", "--stage": "stage", "--imaging": "imaging",
                    "--halo-search": "halo_search", "--member-search": "member_search", "--likelihood": "likelihood",
-                   "--gp-kernel-family": "gp_kernel_family", "--gp-blocks": "gp_blocks", "--warm-start": "warm_start"}
+                   "--gp-kernel-family": "gp_kernel_family", "--gp-blocks": "gp_blocks", "--warm-start": "warm_start",
+                   "--gp-band-max": "gp_band_max", "--start-tolerance": "start_tolerance", "--start-max-iter": "start_max_iter",
+                   "--gp-knee-gamma": "gp_knee_gamma"}
     index = 2
     while index < len(argv):
         flag = argv[index]
@@ -138,10 +151,27 @@ def _parse_args(argv: list[str]) -> dict:
     if values["gp_kernel_family"] is not None and values["likelihood"] != "potential":
         print("--gp-kernel-family applies to the potential likelihood only.")
         raise SystemExit(2)
+    try:
+        for key, kind in (("gp_band_max", float), ("start_tolerance", float), ("start_max_iter", int), ("gp_knee_gamma", float)):
+            if values[key] is not None:
+                values[key] = kind(values[key])
+                if values[key] <= 0:
+                    raise ValueError
+    except ValueError:
+        print("--gp-band-max, --start-tolerance, --start-max-iter and --gp-knee-gamma take positive numbers.")
+        raise SystemExit(2)
+    if values["gp_band_max"] is not None and values["likelihood"] != "grf_gp":
+        print("--gp-band-max applies to the grf_gp likelihood only.")
+        raise SystemExit(2)
+    if values["gp_knee_gamma"] is not None and values["likelihood"] != "grf_gp":
+        print("--gp-knee-gamma applies to the grf_gp likelihood only.")
+        raise SystemExit(2)
     return dict(cluster=cluster, campaign_name=str(values["campaign"]).strip(), run_label=values["run_label"],
                 dry_run=values["dry_run"], fast=values["fast"], stage=values["stage"], imaging=values["imaging"],
                 halo_search=values["halo_search"], member_search=values["member_search"], likelihood=values["likelihood"],
-                gp_kernel_family=values["gp_kernel_family"], gp_blocks=values["gp_blocks"], warm_start=values["warm_start"])
+                gp_kernel_family=values["gp_kernel_family"], gp_blocks=values["gp_blocks"], warm_start=values["warm_start"],
+                gp_band_max=values["gp_band_max"], start_tolerance=values["start_tolerance"], start_max_iter=values["start_max_iter"],
+                gp_knee_gamma=values["gp_knee_gamma"])
 
 
 # The solver's tuned defaults live in lenscluster.config; a cluster entry carries only what is specific to it: the
@@ -367,42 +397,56 @@ def _m0416_bergamini2023_cluster():
         fixed("gas4", -20.12861892537998, 14.74104004035109, 0.4013796817764777, -49.32427500520669, 51.67495680000315, 52.337385600003195, 281.8472712670227),
     )
 
-    # The CANUCS independent halos (Rihtarsic et al. 2025), from data/CANUCS/M0416_Rihtarsic2025/
-    # hlsp_canucs_jwst-hst_multi_macs0416-lenstool-param_multi_v1_model.txt: starts and uniform limits as published, in
-    # offsets from the CANUCS reference.  Starts outside their own limits are moved inside: halo 1 and 2 angles by 180 deg (the
-    # same ellipse), halo 3 x to the box edge.  Galaxy 8971 (their potential 6) is on the member scaling relation instead.
-    def canucs_halo(id, x, y, e, angle, core_arcsec, v_disp, *, v_box, x_box, y_box, core_box_arcsec, e_box=None, angle_box=None,
-                    position_sigma=None):
-        # position_sigma (arcsec): a normal prior on the centre around the CANUCS position, truncated to the box; else uniform.
-        if position_sigma is None:
-            position = {"x_centre": PriorConfig("uniform", lower=x_box[0], upper=x_box[1], step=0.1),
-                        "y_centre": PriorConfig("uniform", lower=y_box[0], upper=y_box[1], step=0.1)}
-        else:
-            position = {"x_centre": PriorConfig("truncated_normal", mean=x, std=position_sigma, lower=x_box[0], upper=x_box[1]),
-                        "y_centre": PriorConfig("truncated_normal", mean=y, std=position_sigma, lower=y_box[0], upper=y_box[1])}
-        priors = {**position,
-                  "core_radius_kpc": PriorConfig("uniform", lower=max(0.5, core_box_arcsec[0] * kpc), upper=core_box_arcsec[1] * kpc, step=0.1 * kpc),
-                  "v_disp": PriorConfig("uniform", lower=v_box[0], upper=v_box[1], step=0.1)}
+    # The CANUCS independent halos (Rihtarsic et al. 2025): the four dPIE components and the shape limits of
+    # hlsp_canucs_jwst-hst_multi_macs0416-lenstool-param_multi_v1_model.txt, with physical priors in place of the published
+    # starts and uniform boxes.  Offsets from the CANUCS reference.  Halos 1 and 2 sit on the NE and SW BCGs (galaxies 2526
+    # and 3158), halo 3 on the NW member group; halo 4 has no light counterpart and is centred where earlier strong-lensing
+    # models put it.  Centres: normal, truncated to a box; halos 2 and 4 (14" apart in y) get disjoint boxes so they cannot
+    # swap.  Cores: log-uniform.  v_disp: normal, truncated.  Cut radii fixed at the CANUCS value, 2000" (10.7 Mpc) for all
+    # four, as in the published models: the images reach ~270 kpc, so a free cut slides along its degeneracy with v_disp
+    # (w250s100_fast_gpblocksall: halo 3 and 4 cuts at their 800 kpc cap).  Cuts of 1500 kpc (main) and 300 kpc (groups)
+    # left a correlated residual that the image-plane GP took at its 3" cap (nov2d_diag, 2026-11-02; .agents/gp-knee-plan.md).
+    # Galaxy 8971 (their potential 6) is on the member scaling relation instead.
+    def canucs_halo(id, centre, *, centre_sigma, half_width, core_kpc, v_disp, cut_kpc, e_box=None, angle_box=None,
+                    x_box=None, y_box=None, e_soft_cap=None):
+        # centre (arcsec): normal of width centre_sigma, truncated to +-half_width (or to x_box, y_box when given).
+        # core_kpc (lo, hi): log-uniform.  v_disp (mean, std, lo, hi): normal, truncated.  cut_kpc: fixed.
+        # Every site starts at its prior centre, so a run started here (or warm-started from one) is inside the priors.
+        x, y = centre
+        x_box = x_box or (x - half_width, x + half_width)
+        y_box = y_box or (y - half_width, y + half_width)
+        core_start = (core_kpc[0] * core_kpc[1]) ** 0.5                  # the log-uniform middle, where the core starts
+        priors = {"x_centre": PriorConfig("truncated_normal", mean=x, std=centre_sigma, lower=x_box[0], upper=x_box[1]),
+                  "y_centre": PriorConfig("truncated_normal", mean=y, std=centre_sigma, lower=y_box[0], upper=y_box[1]),
+                  "core_radius_kpc": PriorConfig("uniform", lower=core_kpc[0], upper=core_kpc[1], step=1.0),
+                  "v_disp": PriorConfig("truncated_normal", mean=v_disp[0], std=v_disp[1], lower=v_disp[2], upper=v_disp[3])}
+        e, angle = 0.0, 0.0
         if e_box is not None:
             priors["ellipticite"] = PriorConfig("uniform", lower=e_box[0], upper=e_box[1], step=0.05)
+            e = 0.5 * (e_box[0] + e_box[1])
         if angle_box is not None:
             priors["angle_pos"] = PriorConfig("uniform", lower=angle_box[0], upper=angle_box[1], step=0.1)
-        return DPIEHaloConfig(id=id, x_centre=x, y_centre=y, ellipticite=e, angle_pos=angle, core_radius_kpc=core_arcsec * kpc,
-                              cut_radius_kpc=2000.0 * kpc, v_disp=v_disp, z_lens=z, priors=priors)
+            angle = 0.5 * (angle_box[0] + angle_box[1])
+        if e_soft_cap is not None:
+            e = min(e, 0.5 * (e_box[0] + e_soft_cap))                     # start below the smooth cap
+        return DPIEHaloConfig(id=id, x_centre=x, y_centre=y, ellipticite=e, angle_pos=angle, core_radius_kpc=core_start,
+                              cut_radius_kpc=cut_kpc, v_disp=v_disp[0], z_lens=z, priors=priors, ellipticity_soft_cap=e_soft_cap)
 
+    main_halo = dict(core_kpc=(10.0, 100.0), v_disp=(650.0, 150.0, 400.0, 1000.0), cut_kpc=2000.0 * kpc)
+    group_halo = dict(core_kpc=(5.0, 100.0), v_disp=(400.0, 150.0, 150.0, 800.0), cut_kpc=2000.0 * kpc)
     canucs_halos = (
-        canucs_halo("1", 0.13392, -0.04501, 0.8, -35.7557 + 180.0, 13.5871, 650.0, v_box=(350.0, 1000.0), x_box=(-15.0, 15.0),
-                    y_box=(-15.0, 15.0), core_box_arcsec=(0.0, 20.0), e_box=(0.2, 0.9), angle_box=(100.0, 180.0)),       # NE
-        # Halos 2 and 4 are 9" apart: with overlapping position boxes they swapped identities between chains
-        # (w500s500_fast_fixed_samplek, R-hat 2.8).  Normal priors around the CANUCS centres (3"), in boxes split at x = 24.5"
-        # (the centres differ mostly in x), make them identifiable.
-        canucs_halo("2", 20.29565, -35.83494, 0.6417, -55.3798 + 180.0, 14.416, 805.1496, v_box=(350.0, 1200.0), x_box=(15.0, 24.5),
-                    y_box=(-45.0, -30.0), core_box_arcsec=(0.0, 25.0), e_box=(0.2, 0.9), angle_box=(90.0, 170.0),
-                    position_sigma=3.0),                                                                                # SW
-        canucs_halo("3", -39.0, 15.0, 0.0, 0.0, 13.5871, 650.0, v_box=(50.0, 750.0), x_box=(-39.0, -25.0), y_box=(2.0, 16.0),
-                    core_box_arcsec=(0.0, 35.0)),                                                                       # third, circular
-        canucs_halo("4", 28.772, -39.454, 0.9, 134.202, 10.671, 476.784, v_box=(100.0, 1000.0), x_box=(24.5, 40.0), y_box=(-50.0, -30.0),
-                    core_box_arcsec=(0.0, 20.0), e_box=(0.2, 0.9), angle_box=(0.0, 180.0), position_sigma=3.0),          # fourth
+        # Halo 1 pressed against the hard ellipticite bound 0.9 (|e| 0.61 against 0.627), which set the NUTS step size: the
+        # box now reaches 0.94 (|e| 0.70; its corners stay below |e| = 1) and a smooth cap takes over at 0.9 (2026-11-03).
+        canucs_halo("1", (0.2, 0.0), centre_sigma=2.0, half_width=6.0, e_box=(0.2, 0.94), angle_box=(100.0, 180.0), e_soft_cap=0.9,
+                    **main_halo),                                                                                       # NE BCG
+        canucs_halo("2", (20.3, -35.8), centre_sigma=2.0, half_width=5.0, e_box=(0.2, 0.9), angle_box=(90.0, 170.0),
+                    **main_halo),                                                                                       # SW BCG
+        canucs_halo("3", (-33.0, 9.0), centre_sigma=3.0, half_width=6.0, **group_halo),                                 # NW group, circular
+        # Halo 4's box reaches further south and east: in w250s100_fast_gpblocksall it sat in the (28, -54) corner of a +-6"
+        # box, and in nov3h one chain in four put it at y = -50 to -56.  The 5" width and the box to y = -62 let it move south;
+        # it stays clear of halo 2 (y < -42) and of the foreground galaxy (halo 5, at (32, -65.6)).
+        canucs_halo("4", (22.0, -48.0), centre_sigma=5.0, half_width=6.0, x_box=(16.0, 34.0), y_box=(-62.0, -42.0),
+                    e_box=(0.2, 0.9), angle_box=(0.0, 180.0), **group_halo),                                            # south, dark
         DPIEHaloConfig(id="5", x_centre=31.96420, y_centre=-65.55168, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.0001 * kpc,
                        cut_radius_kpc=33.6321 * kpc, v_disp=235.2454, z_lens=z,                                         # foreground galaxy
                        priors={"v_disp": PriorConfig("uniform", lower=50.0, upper=350.0, step=0.1),
@@ -414,7 +458,8 @@ def _m0416_bergamini2023_cluster():
     )
     assert [h.id for h in halos[-4:]] == ["gas1", "gas2", "gas3", "gas4"]
 
-    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec, halos=halos):
+    def entry(key, *, reference, image_catalog, member_catalog, sigma_inst_arcsec, halos=halos, kinematics_sources=(), fit_member_core=True,
+              independent_member_halos=(), scaling=None):
         return {
             "cluster_key": key,
             "reference": ReferenceFrameConfig(reference=3, ra0_deg=reference[0], dec0_deg=reference[1]),
@@ -423,9 +468,10 @@ def _m0416_bergamini2023_cluster():
             "halos": halos,
             # Neutral member priors at L* (see AS1063); Bergamini et al. 2023 found sigma 248 +- 28 km/s and r_cut 56 +- 30 kpc at
             # the BCG magnitude 17.02 with a fixed slope of 0.3, i.e. 158 km/s and 29 kpc at m*, inside these priors.
-            "member_population": MemberPopulationConfig.neutral("potfile_1", member_catalog, z, prior_mag0=mstar_f160w),
-            "scaling": ScalingModelConfig.neutral(),
-            "independent_member_halos": (),
+            "member_population": replace(MemberPopulationConfig.neutral("potfile_1", member_catalog, z, prior_mag0=mstar_f160w),
+                                         kinematics_sources=tuple(kinematics_sources)),
+            "scaling": scaling if scaling is not None else ScalingModelConfig.neutral(fit_corekpc=fit_member_core),
+            "independent_member_halos": tuple(independent_member_halos),
             "softening_length_kpc": 0.0,
             "softening_length_prior_log_sigma": 0.15,
             "sigma_inst_arcsec": sigma_inst_arcsec,
@@ -445,14 +491,37 @@ def _m0416_bergamini2023_cluster():
                                      member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=0.01),
         # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 83 systems, 15 with knots, 111 knot-families
         # (Rihtarsic et al. 2025; scripts/convert_canucs_catalog.py), NIRCam positions in the frame of their lens model; their
-        # member catalog (+ galaxy 8971, on the relation), their independent halos and reference centre.  The members are fitted
-        # exactly as for Bergamini: same relation, priors, free slopes, scatter and deviations.
+        # member catalog (+ galaxy 8971, on the relation), their independent halos and reference centre.  The members follow the
+        # same relation, priors, free slopes, scatter, deviations and free core as for Bergamini.  The MUSE stellar dispersions
+        # of 52 members (Granata et al. 2026; members.yaml source G26) are off: with them on, or with the member core fixed,
+        # the mass field shut off and the image-plane GP took the residual at its 3" cap (nov2d_diag, 2026-11-02).
+        # To use them: kinematics_sources=("G26",).
+        # The two BCGs (2526 on halo 1, 3158 on halo 2) are independent dPIEs, off the relation: on it, their velocity offsets
+        # traded against the relation's slope and normalization, and the chains sat 67-135 km/s apart in sigma* (R-hat 4.6;
+        # nov2e w250s100_fast_canucscuts_corefree_nokin_band100).  Centre, round shape and the 0.15 kpc core fixed at the light
+        # (each sits on a cluster halo that carries the ellipticity); v_disp and r_cut free around Bergamini et al. (2023),
+        # 248 km/s and 56 kpc at the BCG magnitude, with round numbers and wide truncations.
+        # The slope alpha gets a Faber-Jackson prior (L ~ sigma^4): 0.25 +- 0.05 on 0.1-0.4; with 0.25 +- 0.10 on 0-0.5 two of
+        # four chains sat at 0.45-0.49 in that run.
         "M0416_CANUCS2025": entry("m0416_canucs2025", reference=(64.03821668520617, -24.06750122335985), image_catalog=f"{canucs_dir}/images.yaml",
-                                  member_catalog=f"{canucs_dir}/members.cat", sigma_inst_arcsec=0.01, halos=canucs_halos),
+                                  member_catalog=f"{canucs_dir}/members.yaml", sigma_inst_arcsec=0.01, halos=canucs_halos,
+                                  kinematics_sources=(), fit_member_core=True,
+                                  independent_member_halos=tuple(
+                                      IndependentMemberHaloConfig(population_id="potfile_1", catalog_id=bcg, id=f"bcg_{bcg}", priors={
+                                          "x_centre": PriorConfig(), "y_centre": PriorConfig(), "ellipticite": PriorConfig(),
+                                          "angle_pos": PriorConfig(), "core_radius_kpc": PriorConfig(),
+                                          "v_disp": PriorConfig("truncated_normal", mean=250.0, std=50.0, lower=100.0, upper=400.0),
+                                          "cut_radius_kpc": PriorConfig("uniform", lower=10.0, upper=200.0, step=1.0)})
+                                      for bcg in ("2526", "3158")),
+                                  # Student-t member deviations (dof 4): five members needed cut radii ~10x off the relation and
+                                  # pushed the normal radius scatter to 1.6-1.8 against its 0.3 prior (2026-11-03).
+                                  scaling=replace(ScalingModelConfig.neutral(fit_corekpc=True), alpha_sigma_prior_std=0.05,
+                                                  alpha_sigma_prior_lower=0.1, alpha_sigma_prior_upper=0.4,
+                                                  member_deviation_tail="student_t", member_deviation_dof=4.0)),
     }
 
 
-CLUSTERS = set(FF_SIMS_CLUSTERS) | {"AS1063", "M0416_BERGAMINI2023", "M0416_CANUCS2025"}
+CLUSTERS = set(FF_SIMS_CLUSTERS) | {"AS1063", "AS1063_JWST", "M0416_BERGAMINI2023", "M0416_CANUCS2025"}
 
 
 def build_runtime(cores: int) -> RuntimeConfig:
@@ -462,7 +531,8 @@ def build_runtime(cores: int) -> RuntimeConfig:
         resume=True,
         numpyro_print_summary=True,
         nuts_chain_method="parallel",
-        # Shared CPU budget = concurrent chains * this value (Linux pinning); None, the macOS fallback, disables tuning.
+        # Shared CPU budget = concurrent chains * this value (Linux pinning).
+        # macOS skips pinning; parallel chains still use one BLAS thread each.
         cpu_threads_per_chain=threads_per_chain_if_supported(2),
     )
 
@@ -482,6 +552,10 @@ def build_config(
     halo_search: str = "lbfgs",
     member_search: str = "lbfgs",
     warm_start: str | None = None,
+    gp_band_max: float | None = None,
+    start_tolerance: float | None = None,
+    start_max_iter: int | None = None,
+    gp_knee_gamma: float | None = None,
 ) -> LensClusterSolverConfig:
     """The solver configuration for one cluster: library defaults plus the cluster entry, the command-line choices and,
     with ``fast``, the exploratory overrides."""
@@ -501,17 +575,43 @@ def build_config(
                                                      sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
         # No selection term: in the oct28a M0416 run sigma_sel and sigma_def fit equally well and lambda_sel stayed at its prior.
-        # gp_blocks: "all" unless given; --fast switches to "system" (8x cheaper covariance, the last nats do not matter there).
+        # Covariance blocks: system by default (full and --fast), grouped by size in the evaluator: 4.4 ms per gradient on
+        # CANUCS against 20.9 ms for one covariance over all images, and the init search uses the same blocks, so its
+        # optimum is the NUTS target's.  Removing the field-wide translation, convergence and shear from the mass field
+        # needs one covariance over all images, so the projection is on only with --gp-blocks all.
         likelihood=LikelihoodConfig(likelihood_mode=LIKELIHOODS[likelihood][0], sigma_sel_prior=None, gp_kernel=LIKELIHOODS[likelihood][1],
                                     gp_kernel_family=gp_kernel_family or "matern52",
-                                    gp_blocks=gp_blocks or ("system" if fast else "all"),
+                                    gp_blocks=gp_blocks or "system",
+                                    gp_knee_project_modes=(("translation", "convergence", "shear") if likelihood == "grf_gp" and gp_blocks == "all"
+                                                           else ()),
+                                    # The GRF slope fixed at 4 (a population of NFW-cusped lumps): sampled, it drifted to 5.3 in
+                                    # w250s100_fast_gpblocksall without the data pinning it.
+                                    gp_knee_gamma_prior=None, gp_knee_gamma=float(gp_knee_gamma or 4.0),
+                                    # The field's wavelengths from 0.2" to 100", as in the good fast run of 2026-11-02
+                                    # (nov1a w250s100_fast: knee 6.6", GP ell 1.4"); the knee prior keeps it near the galaxy scale.
+                                    gp_knee_scales_arcsec=(0.2, 100.0),
+                                    # The knee near the galaxy scale: 6" is the knee of truncated isothermal halos with r_t = 5 kpc
+                                    # (lambda_t = 6.4 r_t), 2.5-15" spans r_t = 2-12 kpc.  Left free it goes to 14-25" and carries
+                                    # the halo-scale misfit (compare_grf_spectra, 2026-11-02).  Relaxed to ln-width 0.6 and 40" on
+                                    # 2026-11-03: with one shared field (gp_blocks all) the knee sat at 14.2", 97% of the way to 15.
+                                    gp_knee_prior=LogNormalPriorConfig(median=6.0, log_sigma=0.6, lower=2.5, upper=40.0),
+                                    gp_knee_start_arcsec=6.0,
+                                    # The rms deflection error of that substructure at z_ref: 0.08" median, 0.05-0.13" at 1 sigma,
+                                    # truncated at 0.2" (galaxy-scale fits on 2026-11-02: 0.07-0.11"; at 0.2-0.3" it was carrying
+                                    # the halo-scale misfit).
+                                    gp_sigma_alpha_prior=LogNormalPriorConfig(median=0.08, log_sigma=0.5, upper=0.5),
+                                    gp_sigma_alpha_start_arcsec=0.08,
+                                    # The image-plane GP's correlation length near the measurement scale (1", between 0.4"
+                                    # and 3"): fitted free it went to 4.4" and did the mass field's work.
+                                    gp_knee_ell_prior=LogNormalPriorConfig(median=1.0, log_sigma=0.4, lower=0.4, upper=3.0),
+                                    gp_knee_ell_start_arcsec=1.0,
                                     gp_floor_arcsec=float(cluster_config.get("gp_floor_arcsec", LikelihoodConfig.gp_floor_arcsec))),
         paths=RunPathsConfig(output_dir=f"results/{campaign_name}/{cluster_config['cluster_key']}",
                              run_name=run_label if run_label is not None else "smoothed-local-image-plane",
                              figure_prefix=cluster_config["cluster_key"]),
         runtime=runtime if runtime is not None else build_runtime(cores),
         search=SearchConfig(n_starts=256, halo_method=halo_search, member_method=member_search, warm_start=warm_start),
-        sampling=SamplingConfig(warmup=500, samples=250, max_tree_depth=8, target_accept=0.85),
+        sampling=SamplingConfig(warmup=1000, samples=1000, max_tree_depth=8, target_accept=0.85),
         scaling=replace(cluster_config.get("scaling", ScalingModelConfig()), softening_length_kpc=float(cluster_config.get("softening_length_kpc", 0.0))),
         members=MemberConfig(far_field_cut_radii=float(cluster_config.get("far_field_cut_radii", MemberConfig.far_field_cut_radii)),
                              cut_radius_inflation=float(cluster_config.get("cut_radius_inflation", MemberConfig.cut_radius_inflation)),
@@ -535,6 +635,19 @@ def build_config(
             sampling=SamplingConfig(warmup=250, samples=100, max_tree_depth=8, target_accept=0.8),
             members=replace(config.members, far_field_cut_radii=2.0, classification_prior_quantile=None, min_deflection_arcsec=0.03),
         )
+    if gp_band_max is not None and float(gp_band_max) > 30.0:
+        # A longer band for the mass field: the knee left free up to min(band, 80") (the tables end at 80"), centred at 20"
+        # (compare_grf_spectra.py: the knee settles at 14-17" with a 100" band).
+        median = min(20.0, 0.5 * float(gp_band_max))
+        config = replace(config, likelihood=replace(config.likelihood, gp_knee_scales_arcsec=(0.2, float(gp_band_max)),
+                                                    gp_knee_prior=LogNormalPriorConfig(median=median, log_sigma=1.0, upper=min(float(gp_band_max), 80.0)),
+                                                    gp_knee_start_arcsec=median))
+    elif gp_band_max is not None:
+        config = replace(config, likelihood=replace(config.likelihood, gp_knee_scales_arcsec=(0.2, float(gp_band_max))))
+    if start_tolerance is not None or start_max_iter is not None:
+        config = replace(config, search=replace(config.search,
+                                                nuts_start_tolerance=float(start_tolerance or config.search.nuts_start_tolerance),
+                                                nuts_start_max_iter=int(start_max_iter or config.search.nuts_start_max_iter)))
     return config
 
 def _fast_mode_warning(config) -> None:
@@ -547,8 +660,8 @@ def _fast_mode_warning(config) -> None:
             f"  - far-field members are allowed down to {members.far_field_cut_radii:g} cut radii from an image (default 3)\n"
             f"  - {config.search.n_starts} search starts, {config.sampling.warmup} warmup + {config.sampling.samples} draws per chain "
             f"at tree depth {config.sampling.max_tree_depth}, target accept {config.sampling.target_accept:g}\n"
-            f"  - GP covariance blocks: {config.likelihood.gp_blocks} (a full run uses one covariance over all images; the two\n"
-            f"    are not comparable in log-likelihood or hyperparameters)")
+            f"  - GP covariance blocks: {config.likelihood.gp_blocks} (the default for full runs too; --gp-blocks all is not\n"
+            f"    comparable in log-likelihood or hyperparameters)")
     Console(stderr=False).print(Panel(text, title="[bold]WARNING: --fast[/bold]", border_style="yellow", style="yellow", expand=False))
 
 
@@ -566,7 +679,9 @@ def main(argv=None):
                           runtime=runtime, fast=options["fast"], imaging=options["imaging"],
                           halo_search=options["halo_search"], member_search=options["member_search"], likelihood=options["likelihood"],
                           gp_kernel_family=options["gp_kernel_family"], gp_blocks=options["gp_blocks"],
-                          warm_start=options["warm_start"]).validate()
+                          warm_start=options["warm_start"], gp_band_max=options["gp_band_max"],
+                          start_tolerance=options["start_tolerance"], start_max_iter=options["start_max_iter"],
+                          gp_knee_gamma=options["gp_knee_gamma"]).validate()
     if options["dry_run"]:
         from lenscluster.pipeline import dry_run
         print(json.dumps({"dry_run": True, "cpu_plan": cpu_plan.to_dict(), **dry_run(config)}, indent=2, default=str))
