@@ -479,7 +479,12 @@ def build_packed_lens_spec(base_components, component_assignments, scaling_assig
         velocity_offset_param_index=ints(), velocity_scatter_param_index=ints(),
         scale_radius_kpc_base=floats(), log10_m200_base=floats(), scale_radius_param_index=ints(), log10_m200_param_index=ints(),
         kappa_base=floats(), kappa_param_index=ints())
+    spec.ellipticity_soft_cap, spec.ellipticity_soft_width = floats(np.inf), floats(1.0)
     for idx, (component, assignments) in enumerate(zip(base_components, component_assignments)):
+        if component.get("ellipticity_soft_cap") is not None:
+            q = float(lenstool_ellipticite_to_axis_ratio(float(component["ellipticity_soft_cap"])))
+            spec.ellipticity_soft_cap[idx] = (1.0 - q) / (1.0 + q)                       # Lenstool ellipticite -> modulus |e|
+            spec.ellipticity_soft_width[idx] = float(component.get("ellipticity_soft_width", 0.02))
         spec.profile_type[idx] = int(component["profil"])
         spec.component_family[idx] = int(component.get("component_family_code", COMPONENT_FAMILY_LARGE))
         spec.x_center_base[idx] = float(component.get("x_centre", 0.0))
@@ -673,6 +678,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
     offset_specs = [("velocity_offset", MEMBER_OFFSET_SITE_NAME, offset_index, scatter_index)]
     if deviation_mode in ("sigma_rcut", "mass_rcut"):
         offset_specs.append(("radius_offset", MEMBER_RADIUS_OFFSET_SITE_NAME, radius_offset_index, radius_scatter_index))
+    heavy_tail = str(getattr(scaling, "member_deviation_tail", "normal")) == "student_t"
     for field_name, site_name, index_array, scale_index in offset_specs:
         for site_index, record in enumerate(records):
             component = int(record["component_index"])
@@ -681,10 +687,11 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 name=f"{record['potfile_id']}.{record['catalog_id']}.{field_name}",
                 sample_name=f"{record['potfile_id']}_{record['catalog_id']}_{field_name}",
                 potential_id=str(record["potfile_id"]), profile_type=DP_IE_PROFILE, field=field_name,
-                prior_kind="normal", lower=-math.inf, upper=math.inf, step=0.1, mean=0.0, std=1.0,
+                prior_kind="student_t" if heavy_tail else "normal", lower=-math.inf, upper=math.inf, step=0.1, mean=0.0, std=1.0,
                 component_family="member_scatter_offset", transform_kind="identity",
                 physical_mean=0.0, physical_std=1.0, sample_site_name=site_name, sample_site_index=site_index,
-                centered=False, scale_site_name=specs[int(scale_index[component])].sample_name))
+                centered=False, scale_site_name=specs[int(scale_index[component])].sample_name,
+                dof=float(getattr(scaling, "member_deviation_dof", 4.0)) if heavy_tail else None))
     sigma_def_index = sigma_extra_index = sigma_sel_index = lambda_sel_index = sigma_shared_index = sigma_white_index = gp_ell_index = -1
     gp_u_small_index = gp_ell_small_index = gp_sigma_large_index = gp_sigma_alpha_index = gp_knee_index = gp_knee_gamma_index = -1
     gp_sigma_alpha2_index = gp_knee2_index = gp_knee_beta_low_index = -1

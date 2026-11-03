@@ -53,6 +53,7 @@ class ParameterSpec:
     sample_site_index: int | None = None
     centered: bool = False                   # deviation sampled directly with prior N(0, scatter) instead of a unit offset
     scale_site_name: str | None = None       # sample site whose exp(value) is that scatter
+    dof: float | None = None                 # degrees of freedom of a "student_t" prior (member deviations with heavy tails)
 
 
 @dataclass
@@ -101,6 +102,10 @@ class PackedLensSpec:
     # radius_deviation_members is "exact" (their offsets are then prior-only).
     radius_deviation_active: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=bool))
     radius_deviation_members: str = "exact"
+    # Smooth ellipticity cap per component: the modulus |e| above which a smooth penalty -softplus((|e| - cap) / width)
+    # takes over from the flat prior (inf: none; DPIEHaloConfig.ellipticity_soft_cap).
+    ellipticity_soft_cap: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=float))
+    ellipticity_soft_width: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=float))
     # Elliptical NFW halos: M200 and scale radius.
     scale_radius_kpc_base: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=float))
     log10_m200_base: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=float))

@@ -65,6 +65,13 @@ class DPIEHaloConfig:
     z_lens: float
     profile_type: int = 81
     priors: dict[str, PriorConfig] = field(default_factory=dict)
+    # Smooth ellipticity cap (Lenstool ellipticite, (a^2 - b^2) / (a^2 + b^2)): below it the ellipticity prior is the flat
+    # box of priors["ellipticite"]; above it the log prior falls as -softplus((|e| - cap) / width) in the modulus |e| of
+    # (e1, e2), so a halo that presses against the cap meets a smooth wall instead of a hard bound (a hard bound is stiff for
+    # NUTS: halo 1 of M0416 at |e| 0.61 against 0.627 set the step size, 2026-11-03).  The box's upper ellipticite must lie
+    # above the cap.  None: the hard box only.
+    ellipticity_soft_cap: float | None = None
+    ellipticity_soft_width: float = 0.02        # in the modulus |e|
 
     @classmethod
     def cluster_scale(cls, id: str, x_centre: float, y_centre: float, z_lens: float, *, v_disp: float = 800.0,
@@ -318,6 +325,12 @@ class ScalingModelConfig:
                                             # together along the relation, one scatter), "sigma_rcut" (independent dispersion and radius
                                             # deviations), "mass_rcut" (mass deviation along the relation plus an independent radius deviation)
     member_radius_scatter_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.3, log_sigma=0.5))
+    # Distribution of the member deviations (unit offsets times the scatter): "normal", or "student_t" with
+    # member_deviation_dof degrees of freedom, so a few members can sit far from the relation without widening the scatter
+    # for all (the radius scatter grew to 1.6-1.8 against a 0.3 prior for five members on M0416, 2026-11-03).  With the
+    # Student-t the scatter is the scale; the standard deviation is scatter * sqrt(dof / (dof - 2)).
+    member_deviation_tail: str = "normal"
+    member_deviation_dof: float = 4.0
     radius_deviation_members: str = "exact"  # which members' radius deviations act on the model: "exact" (far-field members keep
                                             # the relation radius, so they cannot cross the far-field guard) or "all"
     fit_corekpc: bool = True                # sample the member core radius at the pivot; False fixes it at the population's corekpc
@@ -752,6 +765,19 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("scaling.member_deviation must be 'sigma', 'mass', 'sigma_rcut' or 'mass_rcut'.")
     if scaling.radius_deviation_members not in {"exact", "all"}:
         raise ValueError("scaling.radius_deviation_members must be 'exact' or 'all'.")
+    if scaling.member_deviation_tail not in {"normal", "student_t"}:
+        raise ValueError("scaling.member_deviation_tail must be 'normal' or 'student_t'.")
+    if not float(scaling.member_deviation_dof) > 2.0:
+        raise ValueError("scaling.member_deviation_dof must exceed 2 (a finite variance).")
+    for halo in config.model.large_halos:
+        cap = getattr(halo, "ellipticity_soft_cap", None)
+        if cap is None:
+            continue
+        box = (halo.priors or {}).get("ellipticite")
+        if not (0.0 < float(cap) < 1.0) or not float(halo.ellipticity_soft_width) > 0.0:
+            raise ValueError(f"halo {halo.id}: ellipticity_soft_cap must lie in (0, 1) and ellipticity_soft_width be positive.")
+        if box is None or box.kind != "uniform" or box.upper is None or float(box.upper) <= float(cap):
+            raise ValueError(f"halo {halo.id}: ellipticity_soft_cap needs a uniform ellipticite prior whose upper bound lies above it.")
     for name, prior in (("member_velocity_scatter_prior", scaling.member_velocity_scatter_prior),
                         ("member_radius_scatter_prior", scaling.member_radius_scatter_prior),
                         ("sigma_def_prior", config.likelihood.sigma_def_prior)):

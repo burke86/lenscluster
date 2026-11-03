@@ -69,11 +69,16 @@ def distribution_for_site(site: SampleSite, specs: list[ParameterSpec], sampled:
         scale = jnp.stack([jnp.exp(sampled[spec.scale_site_name]) if spec.centered else jnp.asarray(float(spec.std), dtype=jnp.float64)
                            for spec in members])
         loc = jnp.asarray([float(spec.mean) for spec in members], dtype=jnp.float64)
+        if kind == "student_t":
+            df = jnp.asarray([float(spec.dof) for spec in members], dtype=jnp.float64)
+            return dist.Independent(dist.StudentT(df, loc, scale), 1) if site.vector else dist.StudentT(df[0], loc[0], scale[0])
         return dist.Independent(dist.Normal(loc, scale), 1) if site.vector else dist.Normal(loc[0], scale[0])
     if not site.vector:
         spec = members[0]
         if kind == "normal":
             return dist.Normal(float(spec.mean), float(spec.std))
+        if kind == "student_t":
+            return dist.StudentT(float(spec.dof), float(spec.mean), float(spec.std))
         if kind == "truncated_normal":
             high = None if not np.isfinite(float(spec.upper)) else float(spec.upper)
             if spec.field == "beta_radius" and high is None:
@@ -83,6 +88,8 @@ def distribution_for_site(site: SampleSite, specs: list[ParameterSpec], sampled:
     as_array = lambda attr: jnp.asarray([float(getattr(spec, attr)) for spec in members], dtype=jnp.float64)
     if kind == "normal":
         return dist.Independent(dist.Normal(as_array("mean"), as_array("std")), 1)
+    if kind == "student_t":
+        return dist.Independent(dist.StudentT(as_array("dof"), as_array("mean"), as_array("std")), 1)
     if kind == "truncated_normal":
         high = jnp.asarray([np.inf if not np.isfinite(float(spec.upper)) else float(spec.upper) for spec in members], dtype=jnp.float64)
         return dist.Independent(dist.TruncatedNormal(as_array("mean"), as_array("std"), low=as_array("lower"), high=high, validate_args=True), 1)

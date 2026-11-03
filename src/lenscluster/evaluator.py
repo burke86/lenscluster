@@ -437,6 +437,19 @@ class Evaluator:
             return jnp.asarray(True)
         return jnp.all(self.far_min_separation >= self.guard_cut_radii * far_cut_radii)
 
+    def ellipticity_log_prior(self, packed) -> jnp.ndarray:
+        """The smooth ellipticity caps (DPIEHaloConfig.ellipticity_soft_cap): -sum softplus((|e| - cap) / width) over the
+        components that have one; zero when none does.  About -exp((|e| - cap) / width) below the cap, -(|e| - cap) / width
+        above it."""
+        cap = np.asarray(self.state.packed_lens_spec.ellipticity_soft_cap, dtype=float)
+        if cap.size == 0 or not np.isfinite(cap).any():
+            return jnp.asarray(0.0, dtype=jnp.float64)
+        active = np.isfinite(cap)
+        index = jnp.asarray(np.flatnonzero(active))
+        width = jnp.asarray(np.asarray(self.state.packed_lens_spec.ellipticity_soft_width, dtype=float)[active])
+        modulus = jnp.sqrt(jnp.square(packed.e1[index]) + jnp.square(packed.e2[index]) + 1.0e-30)
+        return -jnp.sum(jax.nn.softplus((modulus - jnp.asarray(cap[active])) / width))
+
     def far_field_log_barrier(self, far_cut_radii) -> jnp.ndarray:
         """The far-field guard as a smooth log-likelihood penalty: for each far-field member, with x = ln(R / (guard r_cut)),
         -strength * softplus(-x / width).  Zero far outside the guard, about -0.7 strength at it, and linear in -x
@@ -771,18 +784,17 @@ class Evaluator:
         """
         reference = jnp.asarray(self.state.initial_theta, dtype=jnp.float64)
         physical = self.physical(params)
-        _, validity = self.packed_state(physical)
+        packed, validity = self.packed_state(physical)
         ok_model = validity.is_valid & jnp.all(jnp.isfinite(params))
         scales = physical[self.scale_indices]
         ok_scales = jnp.all(jnp.isfinite(scales ** 2) & (scales > 0.0))
         ok = ok_model & ok_scales
         safe_params = jnp.where(ok, params, reference)
         stats = self.statistics(safe_params)
-        value = jnp.sum(stats["loglike"]) + stats["source_correction"]
         value = jnp.sum(stats["loglike"]) + stats["source_correction"] + self.kinematics_log_likelihood(self.physical(safe_params))
         if not source_jacobian:
             value = value - stats["source_jacobian"]
-        value = value + self.far_field_log_barrier(stats["fields"]["far_cut_radii"])
+        value = value + self.far_field_log_barrier(stats["fields"]["far_cut_radii"]) + self.ellipticity_log_prior(packed)
         valid = jnp.all(stats["valid"]) & jnp.all(stats["transport_valid"]) & ~jnp.isnan(value)
         value = jnp.where(valid, value, -jnp.inf)
         return jnp.where(ok_model, jnp.where(ok_scales, value, -jnp.inf), jnp.asarray(BAD_LOG_LIKE, dtype=jnp.float64))

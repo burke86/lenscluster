@@ -201,6 +201,9 @@ def declared_model_inputs(model_config: LensModelConfig, scaling: Any = None) ->
                   for name, prior in (halo.priors or {}).items()}
         normalized = check_potential_fields(potential)
         normalized["priors"] = priors
+        if getattr(halo, "ellipticity_soft_cap", None) is not None:
+            normalized["ellipticity_soft_cap"] = float(halo.ellipticity_soft_cap)
+            normalized["ellipticity_soft_width"] = float(halo.ellipticity_soft_width)
         potentials.append(normalized)
 
     independent_by_population: dict[str, list[IndependentMemberHaloConfig]] = {}

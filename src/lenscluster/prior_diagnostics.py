@@ -7,6 +7,8 @@ def saved_prior(spec):
     kind = spec.prior_kind
     if kind == "normal":
         return stats.norm(loc=spec.mean, scale=spec.std)
+    if kind == "student_t":
+        return stats.t(df=spec.dof, loc=spec.mean, scale=spec.std)
     if kind == "truncated_normal":
         mean, std = spec.mean, spec.std
         return stats.truncnorm((spec.lower-mean)/std, (spec.upper-mean)/std,
