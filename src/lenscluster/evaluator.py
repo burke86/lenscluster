@@ -77,13 +77,18 @@ class Evaluator:
         self.gp_sigma_alpha_index = int(getattr(state, "gp_sigma_alpha_param_index", -1))
         self.gp_knee_index = int(getattr(state, "gp_knee_param_index", -1))
         self.gp_knee_gamma_index = int(getattr(state, "gp_knee_gamma_param_index", -1))
+        self.gp_sigma_alpha2_index = int(getattr(state, "gp_sigma_alpha2_param_index", -1))
+        self.gp_knee2_index = int(getattr(state, "gp_knee2_param_index", -1))
+        self.gp_knee_beta_low_index = int(getattr(state, "gp_knee_beta_low_param_index", -1))
+        self.gp_knee_spectrum = str(dict(getattr(state, "gp_knee", {}) or {}).get("spectrum", "knee"))
         self.freeze_determinant_gradient = bool(state.freeze_determinant_gradient)
         self.scale_indices = jnp.asarray(sorted({int(i) for i in np.asarray(members.scatter_param_index) if i >= 0}
                                                 | {int(i) for i in np.asarray(members.radius_scatter_param_index) if i >= 0}
                                                 | {i for i in (self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index, self.lambda_sel_index,
                                                                self.sigma_shared_index, self.sigma_white_index, self.gp_ell_index,
                                                                self.gp_u_small_index, self.gp_ell_small_index, self.gp_sigma_large_index,
-                                                               self.gp_sigma_alpha_index, self.gp_knee_index) if i >= 0}), dtype=jnp.int32)
+                                                               self.gp_sigma_alpha_index, self.gp_knee_index, self.gp_sigma_alpha2_index,
+                                                               self.gp_knee2_index) if i >= 0}), dtype=jnp.int32)
         if self.gp_mode:
             # Data-only quantities of the family covariance: slots, separations, instrumental variances, redshift weights and
             # the kernel at the fixed ell (recomputed from the separations at every evaluation when ell is sampled).
@@ -110,9 +115,17 @@ class Evaluator:
                 # Older states stored a bool for the (since replaced) conditioning; only named residual-projection modes count.
                 modes = tuple(project) if isinstance(project, (tuple, list)) else ()
                 self.gp_project_modes = modes if str(getattr(state, "gp_blocks", "all")) == "all" else ()
+                # The spectrum's shape (config.LikelihoodConfig.gp_knee_spectrum): the broken power law tabulates its low-k slope
+                # on the second axis at the fixed high-k slope; the power law ignores the knee axis (gp_knee_power_law_lam).
+                shape = {"broken_power_law": "broken_power_law", "power_law": "power_law"}.get(self.gp_knee_spectrum, "knee")
+                # The knee when it is not sampled: the fixed value, or (power law, where it is ignored) the table's end.
+                self.gp_knee_power_law_lam = float(knee["knee_fixed"]) if knee.get("knee_fixed") is not None else float(lam_hi)
+                self.gp_knee_ell_fixed = None if knee.get("ell_fixed") is None else float(knee["ell_fixed"])
                 self.gp_tables = gp_knee.knee_tables(r_max=r_max, r_step=float(knee.get("r_step", 0.02)), lam_min=float(lam_lo), lam_max=float(lam_hi),
                                                      n_lam=int(lam_n), scale_min=float(scale_lo), scale_max=float(scale_hi),
-                                                     gamma=None if gamma_grid is not None else self.gp_knee_gamma_fixed, gamma_grid=gamma_grid)
+                                                     gamma=None if (gamma_grid is not None and shape != "broken_power_law") else self.gp_knee_gamma_fixed,
+                                                     gamma_grid=None if shape == "broken_power_law" else gamma_grid, shape=shape,
+                                                     beta_low_grid=knee.get("beta_low_grid") if shape == "broken_power_law" else None)
                 self.gp_blocks = str(getattr(state, "gp_blocks", "all"))
                 self.gp = gp_knee.block_layout(images, self.gp_blocks, weights, self.gp_tables)
                 # The init search groups the blocks by size (search_split.search_blocks sets gp_group_blocks); the same
@@ -438,18 +451,26 @@ class Evaluator:
         zero, one = jnp.asarray(0.0, dtype=jnp.float64), jnp.asarray(1.0, dtype=jnp.float64)
         if self.gp_knee:
             # Knee kernel: C_ii = (w_i^2 sigma_alpha^2 + sigma_fl^2) I + (sigma_inst^2 + sigma_white^2 + sigma_shared^2) A A^T.
+            nan = jnp.asarray(float("nan"), dtype=jnp.float64)
             sigma_alpha = physical[self.gp_sigma_alpha_index] if self.gp_sigma_alpha_index >= 0 else zero
-            knee = physical[self.gp_knee_index] if self.gp_knee_index >= 0 else jnp.asarray(float("nan"), dtype=jnp.float64)
+            knee = (physical[self.gp_knee_index] if self.gp_knee_index >= 0
+                    else jnp.asarray(getattr(self, "gp_knee_power_law_lam", float("nan")), dtype=jnp.float64))
             knee_gamma = (physical[self.gp_knee_gamma_index] if self.gp_knee_gamma_index >= 0
                           else jnp.asarray(getattr(self, "gp_knee_gamma_fixed", float("nan")), dtype=jnp.float64))
-            sigma_shared, sigma_white, gp_ell = physical[self.sigma_shared_index], physical[self.sigma_white_index], physical[self.gp_ell_index]
+            sigma_alpha2 = physical[self.gp_sigma_alpha2_index] if self.gp_sigma_alpha2_index >= 0 else zero
+            knee2 = physical[self.gp_knee2_index] if self.gp_knee2_index >= 0 else nan
+            beta_low = physical[self.gp_knee_beta_low_index] if self.gp_knee_beta_low_index >= 0 else nan
+            sigma_shared, sigma_white = physical[self.sigma_shared_index], physical[self.sigma_white_index]
+            gp_ell = (physical[self.gp_ell_index] if self.gp_ell_index >= 0
+                      else jnp.asarray(getattr(self, "gp_knee_ell_fixed", None) or float("nan"), dtype=jnp.float64))
             sigma_img = jnp.sqrt(jnp.square(sigma_shared) + jnp.square(sigma_white))
             w = self.gp_weights_per_image
-            sigma_def = jnp.sqrt(jnp.square(w) * jnp.square(sigma_alpha) + jnp.square(self.gp_floor))
+            w2 = jnp.ones_like(w) if self.gp_knee_spectrum == "knee_foreground" else w
+            sigma_def = jnp.sqrt(jnp.square(w) * jnp.square(sigma_alpha) + jnp.square(w2) * jnp.square(sigma_alpha2) + jnp.square(self.gp_floor))
             return dict(sigma_def=sigma_def, sigma_extra=sigma_img, sigma_sel=zero, lambda_sel=one,
                         sigma_meas=jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_img)), sigma_img=sigma_img,
                         sigma_shared=sigma_shared, sigma_white=sigma_white, gp_ell=gp_ell, gp_sigma_alpha=sigma_alpha, gp_knee=knee,
-                        gp_knee_gamma=knee_gamma)
+                        gp_knee_gamma=knee_gamma, gp_sigma_alpha2=sigma_alpha2, gp_knee2=knee2, gp_knee_beta_low=beta_low)
         if self.gp_potential:
             # Potential kernel: C_ii = w_i^2 (sigma_S^2 + sigma_L^2) I + sigma_fl^2 I + sigma_meas^2 A A^T, a per-image sigma_def.
             u_small, ell_small = physical[self.gp_u_small_index], physical[self.gp_ell_small_index]
@@ -527,10 +548,19 @@ class Evaluator:
             mask, w = layout["mask"], layout["weights"]
             pair_mask = layout["pair_mask"]
             if self.gp_sigma_alpha_index >= 0:
-                c_l, c_t = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee"],
-                                                     scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
+                # The second table axis: the sampled slope (knee, power law) or the low-k slope (broken power law).
+                axis = (scales["gp_knee_beta_low"] if self.gp_knee_beta_low_index >= 0
+                        else scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
+                c_l, c_t = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee"], axis)
                 k_alpha = gp_knee.deflection_blocks(c_l, c_t, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha"]))
                 k_alpha = k_alpha * (w[:, :, None] * w[:, None, :])[..., None, None]
+                if self.gp_sigma_alpha2_index >= 0:
+                    # A second, independent knee field (two_knee: the same redshift weights; knee_foreground: weight 1).
+                    c_l2, c_t2 = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee2"],
+                                                           scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
+                    w2 = jnp.ones_like(w) if self.gp_knee_spectrum == "knee_foreground" else w
+                    k_alpha = k_alpha + (gp_knee.deflection_blocks(c_l2, c_t2, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha2"]))
+                                         * (w2[:, :, None] * w2[:, None, :])[..., None, None])
                 if getattr(self, "gp_project_modes", ()):
                     k_alpha = gp_knee.project_low_order(k_alpha, layout["xy"], mask, w, self.gp_project_modes)
             else:
@@ -646,8 +676,8 @@ class Evaluator:
         if not self.gp_potential:
             return None
         if self.gp_knee:
-            if self.gp_sigma_alpha_index < 0:
-                return None                                            # no mass field: the image-plane GP moves images, not sources
+            if self.gp_sigma_alpha_index < 0 or self.gp_knee_spectrum != "knee":
+                return None                                            # no mass field, or a spectrum the mean field does not cover
             if not hasattr(self, "_knee_mean_inputs_jit"):
                 self._knee_mean_inputs_jit = jax.jit(self._knee_mean_inputs)
             v, s = self._knee_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))

@@ -259,7 +259,9 @@ def test_fold_pair_in_a_two_knot_system_survives_a_displaced_source(tmp_path):
     from lenscluster.diagnostics import predictions_at
     from lenscluster.exact_images import ExactImageSolver
     config, _ = two_knot_config(tmp_path, depth=0.004)
-    config = knee_config(config, "system")
+    # A marginal toy: with the spectrum's long end at 30" (the default) the (4, 4) offset loses one image.  The test is
+    # about the mean-deflection mechanism, so it keeps the 100" range it was written for.
+    config = knee_config(config, "system", gp_knee_scales_arcsec=(0.2, 100.0))
     state = build_state(config)
     evaluator = Evaluator(state, "gp_image_plane")
     solver = ExactImageSolver(evaluator, config.image_diagnostics)

@@ -57,7 +57,8 @@ def _natural_second_derivative_operator(x) -> np.ndarray:
 
 
 def knee_tables(*, r_max: float, r_step: float, lam_min: float, lam_max: float, n_lam: int, scale_min: float, scale_max: float,
-                gamma: float | None = None, gamma_grid: tuple[float, float, int] | None = None, n_nodes: int = 3000) -> dict:
+                gamma: float | None = None, gamma_grid: tuple[float, float, int] | None = None, n_nodes: int = 3000,
+                shape: str = "knee", beta_low_grid: tuple[float, float, int] | None = None) -> dict:
     """c_L(r; lambda_t, gamma) and c_T(r; lambda_t, gamma) on a grid of separations r (step ``r_step`` to ``r_max``), G =
     ``n_lam`` knee wavelengths log-spaced on [lam_min, lam_max] and H slopes: the single fixed ``gamma`` (H = 1) or
     ``gamma_grid`` = (min, max, count) evenly spaced when the slope is sampled.  Stored as (R, H, G) with the second
@@ -66,15 +67,33 @@ def knee_tables(*, r_max: float, r_step: float, lam_min: float, lam_max: float, 
 
         c_L,T(r) = sum_k P_kappa(k) dlnk [J_0(k r) -/+ J_2(k r)] / sum_k P_kappa(k) dlnk,   P_kappa = 1 / (1 + (k / k_t)^gamma).
 
-    (k^3 P_psi dk = 4 P_kappa dk / k with P_psi = 4 P_kappa / k^4, so the weights are P_kappa dlnk.)"""
-    if (gamma is None) == (gamma_grid is None):
+    (k^3 P_psi dk = 4 P_kappa dk / k with P_psi = 4 P_kappa / k^4, so the weights are P_kappa dlnk.)
+
+    ``shape`` changes P_kappa and what the second axis holds (config.LikelihoodConfig.gp_knee_spectrum): "knee" as above;
+    "broken_power_law", P = x^-beta_low (1 + x^gamma)^-((gamma - beta_low) / gamma) with x = k / k_b, the fixed ``gamma`` the
+    high-k slope and the second axis the low-k slopes ``beta_low_grid`` (beta_low = 0 is the knee); "power_law", P = k^-gamma, the same on every lambda."""
+    if shape not in ("knee", "broken_power_law", "power_law"):
+        raise ValueError(f"knee_tables: unknown shape {shape!r}")
+    if shape == "broken_power_law":
+        if gamma is None or beta_low_grid is None:
+            raise ValueError("a broken power law needs the fixed high-k slope gamma and beta_low_grid")
+        gam = np.linspace(float(beta_low_grid[0]), float(beta_low_grid[1]), int(beta_low_grid[2]))
+    elif (gamma is None) == (gamma_grid is None):
         raise ValueError("knee_tables needs exactly one of gamma (fixed slope) or gamma_grid (sampled slope)")
-    gam = np.array([float(gamma)]) if gamma_grid is None else np.linspace(float(gamma_grid[0]), float(gamma_grid[1]), int(gamma_grid[2]))
+    else:
+        gam = np.array([float(gamma)]) if gamma_grid is None else np.linspace(float(gamma_grid[0]), float(gamma_grid[1]), int(gamma_grid[2]))
     k = np.geomspace(2.0 * np.pi / scale_max, 2.0 * np.pi / scale_min, int(n_nodes))
     dlnk = np.log(k[1] / k[0])
     r = np.arange(0.0, float(r_max) + float(r_step), float(r_step))
     lam = np.geomspace(float(lam_min), float(lam_max), int(n_lam))
-    weight = dlnk / (1.0 + (k[:, None, None] / (2.0 * np.pi / lam[None, None, :])) ** gam[None, :, None])   # (N, H, G)
+    x_k = k[:, None, None] / (2.0 * np.pi / lam[None, None, :])                                       # k / k_t, (N, 1, G)
+    if shape == "knee":
+        weight = dlnk / (1.0 + x_k ** gam[None, :, None])                                              # (N, H, G)
+    elif shape == "broken_power_law":
+        b = gam[None, :, None]
+        weight = dlnk * x_k ** (-b) * (1.0 + x_k ** float(gamma)) ** (-(float(gamma) - b) / float(gamma))
+    else:
+        weight = dlnk * np.broadcast_to(k[:, None, None] ** (-gam[None, :, None]), (k.size, gam.size, lam.size)).copy()
     weight /= weight.sum(axis=0, keepdims=True)
     weight = weight.reshape(k.size, gam.size * lam.size)
     j0, j2 = jv(0, np.outer(r, k)), jv(2, np.outer(r, k))
@@ -87,7 +106,7 @@ def knee_tables(*, r_max: float, r_step: float, lam_min: float, lam_max: float, 
     return dict(r_grid=jnp.asarray(r), r_step=float(r_step), ln_lam=jnp.asarray(x),
                 c_l=jnp.asarray(c_l), c_t=jnp.asarray(c_t), d2_l=jnp.asarray(d2_l), d2_t=jnp.asarray(d2_t),
                 gamma_grid=jnp.asarray(gam), gamma_operator=jnp.asarray(_natural_second_derivative_operator(gam)),
-                gamma=None if gamma_grid is not None else float(gamma),
+                gamma=None if (gamma_grid is not None or shape == "broken_power_law") else float(gamma), shape=shape,
                 scales=(float(scale_min), float(scale_max)), lam_range=(float(lam_min), float(lam_max)))
 
 

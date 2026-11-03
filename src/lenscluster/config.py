@@ -28,10 +28,12 @@ class PriorConfig:
 @dataclass(frozen=True)
 class LogNormalPriorConfig:
     """Positive prior, parameterized by median and log-space width; ``upper`` (same units as the median) truncates it,
-    which keeps a sampled error scale from inflating until the likelihood goes flat."""
+    which keeps a sampled error scale from inflating until the likelihood goes flat; ``lower`` truncates it below (it needs
+    ``upper``), which keeps two components of one spectrum apart."""
     median: float
     log_sigma: float
     upper: float | None = None
+    lower: float | None = None
 
 
 @dataclass(frozen=True)
@@ -392,10 +394,11 @@ class LikelihoodConfig:
     gp_knee_gamma: float = 4.0                                        # fixed slope, or the start when it is sampled
     gp_knee_gamma_prior: tuple[float, float] | None = (2.0, 6.0)      # uniform bounds on the sampled slope; None fixes it
     gp_knee_gamma_step: float = 0.25                                  # spacing of the tabulated slopes (cubic spline between)
-    # Wavelength range of the GRF (arcsec).  A 30" long end was tried (2026-11-02) when the shear seemed absorbed by the GRF;
-    # at a fixed lens it cost 12.6 in log L and pushed the image-plane GP to its 5" cap, and the shear was in fact taken
-    # by swapped halos, not by the GRF (its own shear over the images is ~0.002), so the long end is back at 100".
-    gp_knee_scales_arcsec: tuple[float, float] = (0.2, 100.0)
+    # Wavelength range of the GRF (arcsec): from the smallest image separation resolved to the scale of the cluster halos.
+    # With the long end at 100" and the halos free (all-image blocks), the field took the halo-scale misfit: sigma_alpha
+    # and the knee at their caps (0.28", 25"), the external shear down to 0.02 (lens-free test, 2026-11-02).  Truncated at
+    # 30" the halos and the shear carry those scales and the field is left with the structure below them.
+    gp_knee_scales_arcsec: tuple[float, float] = (0.2, 30.0)
     # Low-order modes removed from the mass field over the images ("translation", "convergence", "shear"; empty = none):
     # the residual projection of gp_knee.project_low_order.  Under the flat shear prior it leaves the likelihood unchanged
     # and makes the external shear the total shear over the images.  gp_blocks "all" only.
@@ -413,6 +416,28 @@ class LikelihoodConfig:
     gp_knee_sigma_shared_start_arcsec: float = 0.10
     gp_knee_ell_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=2.0, log_sigma=0.5, upper=5.0))
     gp_knee_ell_start_arcsec: float = 2.0
+    # Shape of the mass-field spectrum (scripts/compare_grf_spectra.py compares them):
+    #   "knee": P = 1 / (1 + (k / k_t)^gamma), the one-halo term of one population of truncated halos;
+    #   "two_knee": a second, independent knee field (images.gp_sigma_alpha2, images.gp_knee2) with the same slope, for a
+    #     second population; gp_knee2_prior.upper must not exceed gp_knee_prior.lower so the two cannot swap;
+    #   "broken_power_law": P = x^-beta_low (1 + x^gamma)^-((gamma - beta_low) / gamma), x = k / k_b, beta_low sampled
+    #     (images.gp_knee_beta_low, uniform on gp_knee_beta_low_prior), gamma the fixed high-k slope; beta_low = 0 is the knee;
+    #   "power_law": P = k^-gamma between the cutoffs, no knee site (gamma sampled on gp_knee_gamma_prior);
+    #   "knee_foreground": a second knee field with redshift weight 1 for every source (mass well in front of the cluster,
+    #     whose D_ps / D_s is close to 1), images.gp_sigma_alpha2 and images.gp_knee2.
+    # The image solver's mean-deflection correction is implemented for "knee" only.
+    gp_knee_spectrum: str = "knee"
+    gp_knee2_sigma_alpha_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.05, log_sigma=0.7, upper=0.3))
+    gp_knee2_sigma_alpha_start_arcsec: float = 0.05
+    gp_knee2_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=3.0, log_sigma=0.5, upper=10.0))
+    gp_knee2_start_arcsec: float = 3.0
+    gp_knee_beta_low_prior: tuple[float, float] = (-1.0, 3.5)
+    gp_knee_beta_low_step: float = 0.25
+    gp_knee_beta_low_start: float = 0.0
+    # Fixed scales (arcsec) instead of sampled ones: the mass field's knee (no images.gp_knee site) and the image-plane GP's
+    # correlation length (no images.gp_ell site).  None samples them.
+    gp_knee_fixed_arcsec: float | None = None
+    gp_knee_ell_fixed_arcsec: float | None = None
     gp_knee_sigma_white_prior_scale_arcsec: float = 0.03
     gp_knee_sigma_white_start_arcsec: float = 0.012
     # Extra measurement scatter (arcsec, log-normal) added in quadrature to sigma_inst: image registration, feature
@@ -629,6 +654,44 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     lam_lo, lam_hi, lam_n = config.likelihood.gp_knee_lambda_grid
     if not (0.0 < float(lam_lo) < float(lam_hi)) or int(lam_n) < 8:
         raise ValueError("likelihood.gp_knee_lambda_grid must be (min, max, count) with 0 < min < max and count >= 8.")
+    spectrum = config.likelihood.gp_knee_spectrum
+    if spectrum not in {"knee", "two_knee", "broken_power_law", "power_law", "knee_foreground"}:
+        raise ValueError("likelihood.gp_knee_spectrum must be 'knee', 'two_knee', 'broken_power_law', 'power_law' or 'knee_foreground'.")
+    if config.likelihood.gp_kernel == "knee" and spectrum != "knee":
+        if config.likelihood.gp_sigma_alpha_prior is None:
+            raise ValueError(f"likelihood.gp_knee_spectrum {spectrum!r} needs the mass field (gp_sigma_alpha_prior).")
+        if spectrum == "power_law" and config.likelihood.gp_knee_gamma_prior is None:
+            raise ValueError("likelihood.gp_knee_spectrum 'power_law' samples the slope: set gp_knee_gamma_prior.")
+        if spectrum == "broken_power_law":
+            b_lo, b_hi = (float(v) for v in config.likelihood.gp_knee_beta_low_prior)
+            b_step = float(config.likelihood.gp_knee_beta_low_step)
+            if not (b_lo < b_hi < float(config.likelihood.gp_knee_gamma)) or not (b_lo <= float(config.likelihood.gp_knee_beta_low_start) <= b_hi):
+                raise ValueError("likelihood.gp_knee_beta_low_prior must be (min, max) below gp_knee_gamma and hold gp_knee_beta_low_start.")
+            if b_step <= 0.0 or abs((b_hi - b_lo) / b_step - round((b_hi - b_lo) / b_step)) > 1e-9 or round((b_hi - b_lo) / b_step) < 2:
+                raise ValueError("likelihood.gp_knee_beta_low_step must divide gp_knee_beta_low_prior into at least 2 intervals.")
+            if config.likelihood.gp_knee_gamma_prior is not None:
+                raise ValueError("likelihood.gp_knee_spectrum 'broken_power_law' fixes the high-k slope: set gp_knee_gamma_prior to None.")
+        if spectrum in {"two_knee", "knee_foreground"}:
+            upper2 = config.likelihood.gp_knee2_prior.upper
+            if upper2 is None or float(upper2) > float(config.likelihood.gp_knee_lambda_grid[1]):
+                raise ValueError("likelihood.gp_knee2_prior.upper must be set and at most the largest tabulated knee wavelength.")
+            if spectrum == "two_knee" and (config.likelihood.gp_knee_prior.lower is None or float(upper2) > float(config.likelihood.gp_knee_prior.lower)):
+                raise ValueError("likelihood.gp_knee_spectrum 'two_knee': gp_knee2_prior.upper must not exceed gp_knee_prior.lower, "
+                                 "so the small and the large knee cannot swap.")
+            if spectrum == "knee_foreground" and config.likelihood.gp_knee_project_modes:
+                raise ValueError("likelihood.gp_knee_project_modes assume one redshift weighting; not with 'knee_foreground'.")
+            for name in ("gp_knee2_sigma_alpha_start_arcsec", "gp_knee2_start_arcsec"):
+                _positive(f"likelihood.{name}", getattr(config.likelihood, name))
+    for start, prior, label in ((config.likelihood.gp_knee_start_arcsec, config.likelihood.gp_knee_prior, "gp_knee"),
+                                (config.likelihood.gp_knee2_start_arcsec, config.likelihood.gp_knee2_prior, "gp_knee2")):
+        if (prior.lower is not None and float(start) <= float(prior.lower)) or (prior.upper is not None and float(start) >= float(prior.upper)):
+            raise ValueError(f"likelihood.{label}_start_arcsec ({float(start):g}\") must lie inside the bounds of {label}_prior.")
+    if config.likelihood.gp_knee_fixed_arcsec is not None:
+        fixed = float(config.likelihood.gp_knee_fixed_arcsec)
+        if spectrum == "power_law" or not (float(lam_lo) <= fixed <= min(float(lam_hi), float(hi))):
+            raise ValueError("likelihood.gp_knee_fixed_arcsec must lie inside the knee tables and the band, and a power law has no knee.")
+    if config.likelihood.gp_knee_ell_fixed_arcsec is not None:
+        _positive("likelihood.gp_knee_ell_fixed_arcsec", config.likelihood.gp_knee_ell_fixed_arcsec)
     knee_upper = config.likelihood.gp_knee_prior.upper
     if config.likelihood.gp_kernel == "knee" and knee_upper is not None and float(knee_upper) > float(hi):
         raise ValueError(f"likelihood.gp_knee_prior.upper ({float(knee_upper):g}\") must not exceed the longest GRF wavelength "
@@ -651,6 +714,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     for label, prior in (("likelihood.sigma_def_prior", config.likelihood.sigma_def_prior),
                          ("likelihood.gp_sigma_alpha_prior", config.likelihood.gp_sigma_alpha_prior),
                          ("likelihood.gp_knee_prior", config.likelihood.gp_knee_prior),
+                         ("likelihood.gp_knee2_sigma_alpha_prior", config.likelihood.gp_knee2_sigma_alpha_prior),
+                         ("likelihood.gp_knee2_prior", config.likelihood.gp_knee2_prior),
                          ("likelihood.gp_knee_sigma_shared_prior", config.likelihood.gp_knee_sigma_shared_prior),
                          ("likelihood.gp_knee_ell_prior", config.likelihood.gp_knee_ell_prior),
                          ("likelihood.gp_u_small_prior", config.likelihood.gp_u_small_prior),
@@ -668,6 +733,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
             raise ValueError(f"{label} must have a positive median and log_sigma.")
         if prior.upper is not None and float(prior.upper) <= float(prior.median):
             raise ValueError(f"{label}.upper must exceed the median.")
+        if prior.lower is not None and (prior.upper is None or not (0.0 < float(prior.lower) < float(prior.median))):
+            raise ValueError(f"{label}.lower must be positive, below the median, and come with an upper bound.")
     if scaling.member_deviation not in {"sigma", "mass", "sigma_rcut", "mass_rcut"}:
         raise ValueError("scaling.member_deviation must be 'sigma', 'mass', 'sigma_rcut' or 'mass_rcut'.")
     if scaling.radius_deviation_members not in {"exact", "all"}:
