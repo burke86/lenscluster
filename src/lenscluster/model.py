@@ -256,6 +256,8 @@ class ModelState:
     gp_knee_gamma_param_index: int = -1          # knee kernel: the sampled slope gamma; -1 when fixed
     freeze_determinant_gradient: bool = False    # hold grad det A fixed in the backward pass (LikelihoodConfig)
     dropped_member_ids: tuple[str, ...] = ()  # catalog members removed from the lens model (members.min_deflection_arcsec)
+    # Measured member dispersions in the likelihood (state.build_member_kinematics); empty when no source is on.
+    member_kinematics: dict[str, Any] = field(default_factory=dict)
     initial_theta: np.ndarray | None = None
 
     @property

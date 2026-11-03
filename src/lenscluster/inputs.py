@@ -208,8 +208,16 @@ def declared_model_inputs(model_config: LensModelConfig, scaling: Any = None) ->
         independent_by_population.setdefault(str(item.population_id), []).append(item)
     potfiles: list[dict[str, Any]] = []
     for population in model_config.member_populations:
-        catalog_df = load_member_catalog(population.catalog_path, reference)
-        independent_items = independent_by_population.get(str(population.id), [])
+        catalog_df = load_member_catalog(population.catalog_path, reference, band=population.band)
+        treatment = catalog_df["catalog_treatment"].astype(str)
+        # Catalog treatments: "exclude" leaves the model; "independent" becomes an independent member halo with default
+        # priors unless the config declares that member (the config's priors then apply).
+        catalog_df = catalog_df.loc[treatment != "exclude"].copy().reset_index(drop=True)
+        independent_items = list(independent_by_population.get(str(population.id), []))
+        declared = {str(item.catalog_id) for item in independent_items}
+        independent_items += [IndependentMemberHaloConfig(population_id=str(population.id), catalog_id=str(cid))
+                              for cid in catalog_df.loc[catalog_df["catalog_treatment"] == "independent", "id"].astype(str)
+                              if cid not in declared]
         if independent_items:
             catalog_ids = catalog_df["id"].astype(str)
             for independent in independent_items:

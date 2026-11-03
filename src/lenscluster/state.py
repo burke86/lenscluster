@@ -442,6 +442,8 @@ def build_member_components(potfiles, reference, scaling_param_indices, *, start
             records.append({
                 "potfile_id": str(potfile["id"]), "potfile_order": int(potfile_order), "catalog_row_index": int(row_index),
                 "component_index": int(component_index), "catalog_id": str(row.id), "catalog_mag": float(row.catalog_mag),
+                "keep": bool(getattr(row, "catalog_keep", False)), "role": str(getattr(row, "catalog_role", "member")),
+                "kinematics": list(getattr(row, "catalog_kinematics", None) or []),
                 "luminosity_ratio": float(luminosity_ratio[row_index]),
                 "x_centre": float(x_offsets[row_index]), "y_centre": float(y_offsets[row_index]),
                 "ellipticite": float(ellipticite), "angle_pos": float(angle_pos),
@@ -575,6 +577,37 @@ def build_image_data(families: list[FamilyData], images_df: pd.DataFrame, z_valu
 def source_sample_name(family_id: str, axis: str) -> str:
     safe = str(family_id).replace(".", "_").replace("-", "_")
     return f"source_{safe}_beta_{axis}"
+
+
+def build_member_kinematics(records: list[dict[str, Any]], populations) -> dict[str, Any]:
+    """The measured dispersions of the members on the scaling relations, from the sources each population turns on:
+    component index, ln sigma_meas, the total log error e_i = sqrt((err_i / sigma_meas)^2 + systematic^2) and the
+    aperture factor per measurement.  A member may have one measurement among the sources turned on (two would count the
+    same galaxy twice); a source turned on but found on no member is an error.  Empty when no source is on."""
+    by_id = {str(p.id): p for p in populations}
+    rows, found = [], {pid: set() for pid in by_id}
+    for record in records:
+        population = by_id[record["potfile_id"]]
+        used = [m for m in record.get("kinematics", []) if m["source"] in population.kinematics_sources]
+        if len(used) > 1:
+            raise ValueError(f"member {record['potfile_id']}:{record['catalog_id']} has {len(used)} measurements among "
+                             f"kinematics_sources {list(population.kinematics_sources)}; turn on one source per galaxy.")
+        for m in used:
+            found[record["potfile_id"]].add(m["source"])
+            rows.append((record, m, population))
+    for pid, population in by_id.items():
+        missing = sorted(set(population.kinematics_sources) - found[pid])
+        if missing:
+            raise ValueError(f"member population {pid!r}: kinematics_sources {missing} are on no member on the scaling relation.")
+    if not rows:
+        return {}
+    return dict(member_ids=tuple(f"{r['potfile_id']}:{r['catalog_id']}" for r, _, _ in rows),
+                sources=tuple(m["source"] for _, m, _ in rows),
+                component_index=np.asarray([int(r["component_index"]) for r, _, _ in rows], dtype=np.int32),
+                sigma=np.asarray([float(m["sigma"]) for _, m, _ in rows]),
+                err=np.asarray([float(m["err"]) for _, m, _ in rows]),
+                log_err=np.asarray([math.hypot(float(m["err"]) / float(m["sigma"]), float(p.kinematics_systematic)) for _, m, p in rows]),
+                aperture_factor=np.asarray([float(p.kinematics_aperture_factor) for _, _, p in rows]))
 
 
 # ----------------------------------------------------------------------------- state assembly
@@ -799,6 +832,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         gp_knee_gamma_param_index=int(gp_knee_gamma_index),
         freeze_determinant_gradient=bool(config.likelihood.freeze_determinant_gradient),
         dropped_member_ids=dropped,
+        member_kinematics=build_member_kinematics(records, model_config.member_populations),
         scaling_priors={k: float(getattr(scaling, k)) for k in ("alpha_sigma_prior_mean", "alpha_sigma_prior_std",
                                                                  "beta_radius_prior_mean", "beta_radius_prior_std")})
     state.initial_theta = default_theta(specs)

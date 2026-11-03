@@ -63,6 +63,15 @@ def member_max_deflection_arcsec(state: ModelState, evaluator: Evaluator, theta:
     return np.asarray(jnp.max(jnp.linalg.norm(alpha, axis=-1), axis=1))
 
 
+def impact_cut(state: ModelState, evaluator: Evaluator, theta: np.ndarray, floor: float) -> tuple[tuple[str, ...], np.ndarray]:
+    """Members whose deflection at every image is below ``floor`` (arcsec) at ``theta``, and every member's largest
+    deflection.  Members flagged keep in the catalog (those with kinematics among them) are never dropped."""
+    deflection = member_max_deflection_arcsec(state, evaluator, theta)
+    keep = [bool(r.get("keep", False)) for r in state.scaling_component_records]
+    dropped = tuple(mid for mid, value, kept in zip(state.members.member_ids, deflection, keep) if value < float(floor) and not kept)
+    return dropped, deflection
+
+
 def member_cut_radii_arcsec(state: ModelState, reference_cut_kpc: float, beta_radius: float) -> np.ndarray:
     """Cut radius of every population member for a reference cut radius and radius exponent."""
     spec = state.packed_lens_spec

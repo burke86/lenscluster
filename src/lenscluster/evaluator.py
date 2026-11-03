@@ -176,7 +176,6 @@ class Evaluator:
         e2 = self._apply(spec["e2_base"], spec["e2_param_index"], physical)
         core_radius_kpc = self._apply(spec["core_radius_kpc_base"], spec["core_radius_param_index"], physical)
         cut_radius_kpc = self._apply(spec["cut_radius_kpc_base"], spec["cut_radius_param_index"], physical)
-        v_disp = self._apply(spec["v_disp_base"], spec["v_disp_param_index"], physical)
         gamma1 = self._apply(spec["gamma1_base"], spec["gamma1_param_index"], physical)
         gamma2 = self._apply(spec["gamma2_base"], spec["gamma2_param_index"], physical)
         scale_radius_kpc = self._apply(spec["scale_radius_kpc_base"], spec["scale_radius_param_index"], physical)
@@ -189,17 +188,14 @@ class Evaluator:
         is_sheet = profile_type == MASS_SHEET_PROFILE
         is_scaling = spec["component_family"] == COMPONENT_FAMILY_SCALING
         luminosity_ratio = spec["luminosity_ratio"]
-        sigma_ref = self._apply(spec["sigma_ref_base"], spec["sigma_ref_param_index"], physical)
         cut_ref = self._apply(spec["cut_ref_base"], spec["cut_ref_param_index"], physical)
         core_ref = self._apply(spec["core_ref_base"], spec["core_ref_param_index"], physical)
         alpha_sigma = self._apply(spec["alpha_sigma_base"], spec["alpha_sigma_param_index"], physical)
         beta_radius = self._apply(spec["beta_radius_base"], spec["beta_radius_param_index"], physical)
-        scaled_vdisp = sigma_ref * jnp.power(luminosity_ratio, alpha_sigma)
         size_scale = jnp.power(luminosity_ratio, beta_radius)
-        v_disp = jnp.where(is_scaling, scaled_vdisp, v_disp)
-        # Sampled member deviations: dispersion and (in the mass and sigma_rcut modes) the radii.
-        delta_v, delta_r = member_log_deviations(self.state.packed_lens_spec, physical)
-        v_disp = v_disp * jnp.exp(delta_v)
+        # Sampled member deviations: dispersion (in component_dispersions) and, in the mass and sigma_rcut modes, the radii.
+        _, delta_r = member_log_deviations(self.state.packed_lens_spec, physical)
+        v_disp = self.component_dispersions(physical)
         size_scale = size_scale * jnp.exp(delta_r)
         core_radius_kpc = jnp.where(is_scaling, core_ref * size_scale, core_radius_kpc)
         cut_radius_kpc = jnp.where(is_scaling, cut_ref * size_scale, cut_radius_kpc)
@@ -257,6 +253,28 @@ class Evaluator:
             jnp.any(is_sheet & ~jnp.isfinite(kappa_inf)),
         ])
         return packed, PackedLensValidity(is_valid=~jnp.any(flags), reason_flags=flags)
+
+    def component_dispersions(self, physical: jnp.ndarray) -> jnp.ndarray:
+        """Velocity dispersion of every component in km/s (Lenstool's sigma_LT): the sampled or fixed value, or for a
+        member its scaling-relation value times its sampled deviation."""
+        spec = self.spec
+        v_disp = self._apply(spec["v_disp_base"], spec["v_disp_param_index"], physical)
+        sigma_ref = self._apply(spec["sigma_ref_base"], spec["sigma_ref_param_index"], physical)
+        alpha_sigma = self._apply(spec["alpha_sigma_base"], spec["alpha_sigma_param_index"], physical)
+        v_disp = jnp.where(spec["component_family"] == COMPONENT_FAMILY_SCALING, sigma_ref * jnp.power(spec["luminosity_ratio"], alpha_sigma), v_disp)
+        delta_v, _ = member_log_deviations(self.state.packed_lens_spec, physical)
+        return v_disp * jnp.exp(delta_v)
+
+    def kinematics_log_likelihood(self, physical: jnp.ndarray) -> jnp.ndarray:
+        """The measured member dispersions (state.member_kinematics): sum over members of
+        log N(ln sigma_meas | ln(c sigma_i), e_i); zero when no kinematics source is on."""
+        kinematics = self.state.member_kinematics
+        if not kinematics:
+            return jnp.asarray(0.0, dtype=jnp.float64)
+        model = jnp.log(jnp.asarray(kinematics["aperture_factor"]) * self.component_dispersions(physical)[jnp.asarray(kinematics["component_index"])])
+        log_err = jnp.asarray(kinematics["log_err"])
+        z = (jnp.log(jnp.asarray(kinematics["sigma"])) - model) / log_err
+        return -0.5 * jnp.sum(z * z) - jnp.sum(jnp.log(log_err)) - 0.5 * z.size * jnp.log(2.0 * jnp.pi)
 
     def packed_state_for_z(self, physical: jnp.ndarray, z_source: float) -> PackedLensState:
         factor = self.state.dpie_sigma0_factor_by_z.get(float(z_source))
@@ -712,6 +730,7 @@ class Evaluator:
         safe_params = jnp.where(ok, params, reference)
         stats = self.statistics(safe_params)
         value = jnp.sum(stats["loglike"]) + stats["source_correction"]
+        value = jnp.sum(stats["loglike"]) + stats["source_correction"] + self.kinematics_log_likelihood(self.physical(safe_params))
         if not source_jacobian:
             value = value - stats["source_jacobian"]
         value = value + self.far_field_log_barrier(stats["fields"]["far_cut_radii"])

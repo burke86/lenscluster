@@ -10,10 +10,11 @@ from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 
 from . import artifacts
 from .audit import audit_posterior
-from .classification import (classify_members, far_field_threshold_rows, conservative_cut_radii_arcsec, member_cut_radii_arcsec, member_max_deflection_arcsec,
+from .classification import (classify_members, far_field_threshold_rows, conservative_cut_radii_arcsec, impact_cut, member_cut_radii_arcsec,
                              prior_quantile_beta, prior_quantile_cut_kpc)
 from .config import LensClusterSolverConfig
 from .evaluator import Evaluator
@@ -267,49 +268,81 @@ def search_is_fragile(search: dict[str, Any]) -> bool:
     return sum(int(m.get("count", 1)) for m in modes if m["within_margin"]) <= 1
 
 
+def kinematics_table(state: ModelState, evaluator: Evaluator, theta: np.ndarray) -> pd.DataFrame:
+    """Measured against model aperture dispersions of the members in the kinematics term at ``theta``: one row per
+    member with sigma_meas, err, c sigma_model, ln(measured / model) and z = ln ratio / e (e the total log error)."""
+    k = state.member_kinematics
+    sigma = np.asarray(evaluator.component_dispersions(evaluator.physical(jnp.asarray(theta))))[k["component_index"]]
+    model = k["aperture_factor"] * sigma
+    ln_ratio = np.log(k["sigma"]) - np.log(model)
+    return pd.DataFrame({"member": list(k["member_ids"]), "source": list(k["sources"]), "sigma_meas": k["sigma"], "err": k["err"],
+                         "sigma_model_ap": model, "sigma_model_lt": sigma, "ln_ratio": ln_ratio, "z": ln_ratio / k["log_err"]})
+
+
 def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[str, Any], config: LensClusterSolverConfig, *, log) -> dict[str, Any]:
-    """Move the chain-start modes to modes of the posterior NUTS samples, then keep only those within the mode margin of
-    the best.  The search optimizes the density without the source-transport volume, with the provisional member classes
-    and the member scatter pinned, so its modes are not modes of the final target.  All chain starts are optimized together
-    by the batched optax L-BFGS (its zoom line search backs off from invalid models; scipy's stopped after one iteration
-    at a far-field guard on CANUCS), every parameter free.  A start is replaced only by a finite, better, non-degenerate
-    point.  Starts that still trail the best by more than ``mode_margin`` are dropped (within_margin False), so no chain
-    starts there; the best start comes first.  Logs the global-block Hessian negative eigenvalues of the best start."""
+    """Move the best chain-start mode to a mode of the posterior NUTS samples; every chain starts there.  The search
+    optimizes the density without the source-transport volume, with the provisional member classes and the member scatter
+    pinned in its search stages, so its modes are not modes of the final target.  The kept modes are ranked by their log
+    posterior on the NUTS target (one evaluation each) and only the best is optimized, by scipy L-BFGS-B, every parameter
+    free except the member scatters, which stay pinned at the search's value (search.nuts_start_pin_scatter; free, an
+    optimizer drives them to zero).  It is replaced only by a finite, better, non-degenerate point.  The other modes are dropped
+    (within_margin False, dropped_for_nuts).  Logs the global-block Hessian negative eigenvalues of the start."""
     from .sampling import block_mass_seed, posterior_model
-    from .search import Objective, run_optax_lbfgs
+    from . import search as search_module
+    from .search import Objective
     max_iter = int(config.search.nuts_start_max_iter)
     if max_iter <= 0:
         return search
     limit, margin = float(config.search.max_median_abs_determinant), float(config.search.mode_margin)
     reference = np.asarray(search["theta"], dtype=float)
-    objective = Objective(state, evaluator, reference, include_latent=True, log_likelihood=evaluator.log_likelihood)
+    pinned = {}
+    if getattr(config.search, "nuts_start_pin_scatter", True):
+        scatter = config.search.polish_scatter or config.scaling.member_velocity_scatter_prior.median
+        radius = config.search.polish_radius_scatter
+        pinned = search_module.pinned_scatter_values(state, scatter, radius)
+        if pinned:
+            log(f"[init] chain start: member scatters pinned at {scatter:g} (velocity) and {scatter if radius is None else radius:g} "
+                f"(radius); NUTS frees them")
+    objective = Objective(state, evaluator, reference, include_latent=True, log_likelihood=evaluator.log_likelihood, pinned=pinned)
     index = np.asarray(objective.global_index)
     out = dict(search, modes=[dict(m) for m in search["modes"]])
-    candidates = [m for m in out["modes"] if m["within_margin"]][:int(config.search.max_chain_modes)]
-    if not candidates:
+    kept_modes = [m for m in out["modes"] if m["within_margin"]][:int(config.search.max_chain_modes)]
+    if not kept_modes:
         return out
     started = time.perf_counter()
+    # Only the best kept mode on the NUTS target (one evaluation each) is optimized; the others are dropped below and every
+    # chain starts at the optimized one.  The search's ranking can differ from the target's, so it is not used here.
+    target_value = [-float(objective.reduced(jnp.asarray(objective.flatten(np.asarray(m["theta"], dtype=float))[index]))) for m in kept_modes]
+    candidates = [kept_modes[int(np.argmax(target_value))]]
+    for mode, value in zip(kept_modes, target_value):
+        if not any(mode is c for c in candidates):
+            mode.update(nuts_target_log_posterior=float(value), converged_iterations=0, nuts_start_converged=False)
+            log(f"[init] chain start: mode at {value:.2f} on the NUTS target not optimized (best {max(target_value):.2f}); its chains start at the best")
     thetas = [np.asarray(m["theta"], dtype=float) for m in candidates]
     x0 = np.stack([objective.flatten(t)[index] for t in thetas])
     before = np.array([-float(objective.reduced(jnp.asarray(x))) for x in x0])
-    result = run_optax_lbfgs(objective, x0, max_iter)
+    tolerance = float(config.search.nuts_start_tolerance)
+    # scipy L-BFGS-B: 25 ms per iteration on CANUCS against 216 ms for the optax update, same gain per iteration; the
+    # far-field guard that stopped scipy here once is a smooth barrier now (2026-11-03).
+    result = search_module.run_scipy_lbfgs(objective, x0, max_iter, tolerance=tolerance)
+    ran = int(np.max(result.get("iterations", [max_iter])))
+    converged = np.asarray(result.get("converged", np.zeros(len(candidates), dtype=bool)))
     for k, mode in enumerate(candidates):
         after = -float(result["potential"][k])
         theta_new = objective.theta(objective.expand(result["final"][k]))
         determinant = float(evaluator.median_abs_determinant(jnp.asarray(theta_new)))
         accepted = bool(np.isfinite(after) and after > before[k] and determinant <= limit)
         value = after if accepted else before[k]
-        log(f"[init] chain start {k}: optax L-BFGS on the NUTS target, {max_iter} iterations: log posterior {before[k]:.2f} -> {after:.2f}, "
+        state_note = "converged" if converged[k] else f"NOT converged (gained >= {tolerance:g} over the last 50 iterations)"
+        log(f"[init] chain start {k}: L-BFGS-B on the NUTS target, {ran} iterations, {state_note}: log posterior {before[k]:.2f} -> {after:.2f}, "
             f"median |det A| {determinant:.3f}" + ("" if accepted else " (kept the search mode)"))
-        mode.update(nuts_target_log_posterior=float(value), converged_iterations=max_iter if accepted else 0)
+        mode.update(nuts_target_log_posterior=float(value), converged_iterations=ran if accepted else 0,
+                    nuts_start_converged=bool(converged[k]))
         if accepted:
             mode["theta"] = theta_new.tolist()
-    best = max(m["nuts_target_log_posterior"] for m in candidates)
-    kept = sorted([m for m in candidates if m["nuts_target_log_posterior"] >= best - margin], key=lambda m: -m["nuts_target_log_posterior"])
-    for mode in candidates:
+    kept = list(candidates)
+    for mode in kept_modes:
         if not any(mode is m for m in kept):
-            log(f"[init] chain start dropped: log posterior on the NUTS target {mode['nuts_target_log_posterior']:.2f}, "
-                f"{best - mode['nuts_target_log_posterior']:.1f} below the best (margin {margin:g}); its chains start at the kept modes")
             mode["dropped_for_nuts"] = True
     # Only the kept starts may seed chains: they come first, best first; every other mode leaves the margin.
     for mode in out["modes"]:
@@ -427,12 +460,14 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         # 0. Optional impact cut: members that deflect every image by less than the threshold leave the model.
         floor = config.members.min_deflection_arcsec
         if floor:
-            deflection = member_max_deflection_arcsec(state, evaluator, state.initial_theta)
-            dropped = tuple(mid for mid, value in zip(state.members.member_ids, deflection) if value < float(floor))
+            dropped, deflection = impact_cut(state, evaluator, state.initial_theta, floor)
+            protected = sum(1 for r, d in zip(state.scaling_component_records, deflection) if d < floor and r.get("keep", False))
             if dropped:
+                gone = np.isin(np.asarray(state.members.member_ids), dropped)
                 log(f"[classify] impact cut: dropping {len(dropped)} of {len(deflection)} members whose deflection at every image is "
-                    f"below {floor:g}\" at the initial model (summed maxima {float(np.sum(deflection[deflection < floor])):.3f}\"); "
-                    f"faintest kept member {max(float(r['catalog_mag']) for r, d in zip(state.scaling_component_records, deflection) if d >= floor):.1f} mag")
+                    f"below {floor:g}\" at the initial model (summed maxima {float(np.sum(deflection[gone])):.3f}\"); "
+                    f"faintest kept member {max(float(r['catalog_mag']) for r, g in zip(state.scaling_component_records, gone) if not g):.1f} mag"
+                    + (f"; {protected} below the cut kept (catalog keep flag or kinematics)" if protected else ""))
                 state = build_state(config, drop_member_ids=dropped)
                 evaluator = Evaluator(state, config.likelihood.likelihood_mode)
                 log(f"[init] parameters={state.n_parameters} members={len(state.members.member_ids)} after the impact cut")
@@ -471,6 +506,12 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         log(f"[init] log-likelihood at the start with final classes: {value:.3f}")
         if not np.isfinite(value):
             raise RuntimeError("The best mode is rejected by the likelihood after reclassification.")
+        if state.member_kinematics:
+            table = kinematics_table(state, evaluator, theta)
+            table.to_csv(paths.tables / "member_kinematics.csv", index=False)
+            log(f"[init] member kinematics at the start: {len(table)} members, chi2 {float(np.sum(table['z'] ** 2)):.1f}, "
+                f"median ln(measured / model) {float(np.median(table['ln_ratio'])):+.3f}, worst |z| {float(np.max(np.abs(table['z']))):.1f} "
+                f"({table.loc[np.argmax(np.abs(table['z'].to_numpy())), 'member']})")
         if evaluator.gp_mode:
             # Pre-run check of the shallow fold pairs at the start; sigma_fl is not changed here, the report says when to lower it.
             from .gp_image_plane import shallow_fold_pair_report, shallow_fold_pairs
@@ -645,8 +686,7 @@ def dry_run(config: LensClusterSolverConfig) -> dict[str, Any]:
     evaluator = Evaluator(state, config.likelihood.likelihood_mode)
     floor = config.members.min_deflection_arcsec
     if floor:
-        deflection = member_max_deflection_arcsec(state, evaluator, state.initial_theta)
-        dropped = tuple(mid for mid, value in zip(state.members.member_ids, deflection) if value < float(floor))
+        dropped, _ = impact_cut(state, evaluator, state.initial_theta, floor)
         if dropped:
             state = build_state(config, drop_member_ids=dropped)
             evaluator = Evaluator(state, config.likelihood.likelihood_mode)

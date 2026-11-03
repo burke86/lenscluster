@@ -148,6 +148,16 @@ class MemberPopulationConfig:
     cutkpc_prior: PriorConfig = field(default_factory=PriorConfig)
     exclude_catalog_ids: tuple[str, ...] = ()
     prior_mag0: float | None = None          # magnitude at which sigma, cutkpc and their priors are given when mag0 is "auto"
+    band: str | None = None                  # YAML catalogs: the magnitude band of the scaling relation (default: the file's band)
+    # Stellar kinematics (YAML catalogs): the catalog's kinematics sources whose measured dispersions enter the likelihood,
+    # one log-normal term per member, ln sigma_meas ~ N(ln(c sigma_i), e_i), with sigma_i the member's dispersion on the
+    # relation times its deviation, c = kinematics_aperture_factor (sigma_ap / sigma_LT) and
+    # e_i^2 = (err_i / sigma_meas)^2 + kinematics_systematic^2 (template and fitting systematics; the stellar-to-dPIE
+    # conversion is left to the member scatter).  The default c is Bergamini et al. 2021's: sigma_ap = 295.2 km/s at the
+    # BCG magnitude deprojected to a sigma_LT prior of 248 km/s.  Empty: no kinematics term.
+    kinematics_sources: tuple[str, ...] = ()
+    kinematics_systematic: float = 0.05
+    kinematics_aperture_factor: float = 295.2 / 248.0
 
     @classmethod
     def bergamini2019(cls, id: str, catalog_path: str | Path, z_lens: float, *, prior_mag0: float, sigma: float = 200.0,
@@ -752,6 +762,13 @@ def _validate_model_config(model: LensModelConfig | None) -> None:
         exclude_ids = tuple(str(value).strip() for value in population.exclude_catalog_ids)
         if any(not value for value in exclude_ids) or len(set(exclude_ids)) != len(exclude_ids):
             raise ValueError(f"member population {population.id!r} has empty or duplicate exclude_catalog_ids entries.")
+        if population.kinematics_sources:
+            if Path(population.catalog_path).suffix.lower() not in {".yaml", ".yml"}:
+                raise ValueError(f"member population {population.id!r}: kinematics_sources need a YAML member catalog.")
+            if len(set(population.kinematics_sources)) != len(population.kinematics_sources):
+                raise ValueError(f"member population {population.id!r} has duplicate kinematics_sources.")
+        if not (population.kinematics_systematic >= 0.0 and population.kinematics_aperture_factor > 0.0):
+            raise ValueError(f"member population {population.id!r}: kinematics_systematic must be >= 0 and kinematics_aperture_factor > 0.")
     keys: set[tuple[str, str]] = set()
     for independent in model.independent_member_halos:
         key = (str(independent.population_id).strip(), str(independent.catalog_id).strip())
