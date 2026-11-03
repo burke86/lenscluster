@@ -231,12 +231,21 @@ class SearchConfig:
     # reaches the same best stage-A mode as running all starts (log posterior equal to 1e-4) in 54 s instead of 201 s.
     screen_iterations: int | None = 50
     screen_keep: int = 16
-    # Converged chain starts: after the final classification, the chain-start modes are optimized together by the batched
-    # optax L-BFGS on the posterior NUTS samples (all parameters free, source-transport volume included) for this many
-    # iterations; starts still more than mode_margin below the best are dropped.  0 skips it.  On CANUCS
-    # (w500s500_fast_fixed_samplek) scipy stopped after one iteration at a far-field guard; optax lifted the second start
-    # by 119 in 100 iterations (most of its gain), at about 4 gradients per iteration plus ~2 min of compilation.
-    nuts_start_max_iter: int = 200
+    # Converged chain start: after the final classification, the best kept mode on the NUTS target (one evaluation per mode)
+    # is optimized by the batched optax L-BFGS on the posterior NUTS samples (all parameters free, source-transport volume
+    # included) for at most this many iterations; every chain starts there and the other modes are dropped.  0 skips it
+    # and the init only checks the start's conditioning (pipeline.chain_start_conditioning) and warns.  Even with the
+    # search and the target on the same blocks, the search's optimum (no transport volume, scatters pinned, provisional
+    # classes) was 47-162 in Newton decrement off the target's mode, and a start there cost a short NUTS check 11
+    # divergences in 60 iterations; converged (1700 iterations, 145 s) it ran clean (2026-11-03).  It stops once the
+    # start gains less than nuts_start_tolerance in log posterior over 50 iterations, or at the cap.
+    nuts_start_max_iter: int = 2000
+    nuts_start_tolerance: float = 0.1
+    # Pin the member scatters at polish_scatter and polish_radius_scatter (the search's values) in the chain-start step;
+    # NUTS frees them.  Free, the
+    # step on the nov3i shared-field run drove them to 7e-4 and 5e-6 (z -16 and -22): with centered deviations the density
+    # grows as -ln s per member when s -> 0, and an optimizer follows it (2026-11-03).
+    nuts_start_pin_scatter: bool = True
     # Warm start: a previous run directory (or its init/artifacts); its saved start, mapped by parameter name, replaces
     # stages A and B, and the polish runs from it.  Parameters it lacks start at the configured model.
     warm_start: str | None = None
@@ -246,7 +255,16 @@ class SearchConfig:
     svi_learning_rate: float = 0.05
     polish_max_iter: int = 2000             # the only full-dimension optimization: AS1063 needs 400 iterations to reach the joint
                                             # optimum, M0416 passes the one-stage multistart after 2000 (400 left it 27 short)
-    polish_scatter: float | None = 0.1      # pin the member scatter (ln sigma) at this value while optimizing; None keeps the prior median
+    # The member scatters (ln sigma, ln r_cut) are pinned at these values while optimizing (search, polish, chain start);
+    # NUTS frees them.  0.2 for the velocity: the MUSE dispersions of Granata et al. 2026 scatter by 0.22 in ln sigma about
+    # the relation, and 25-31 km/s is typical of MUSE-calibrated clusters.  0.3 for the radius: its prior median.  None
+    # for the velocity leaves both free (2026-11-03).
+    polish_scatter: float | None = 0.2
+    polish_radius_scatter: float | None = 0.3   # None pins the radius scatter at polish_scatter
+    # True frees the member scatters in the polish (the search keeps them pinned).  Off: on the search objective (no
+    # source-transport term) a free scatter collapsed to 0.001 on CANUCS (deviation rms 0.06, fragile verdict, 2026-11-03);
+    # the chain-start step keeps them pinned too (nuts_start_pin_scatter), and NUTS frees them.
+    polish_free_scatter: bool = False
     mode_margin: float = 10.0
     mode_parameter_tolerance: float = 0.05
     max_chain_modes: int = 4
@@ -279,8 +297,10 @@ class SamplingConfig:
 class MemberConfig:
     classification_prior_quantile: float | None = 0.975   # classify with the cut radii at this quantile of the cutkpc and beta priors
                                                           # (and never below the current model); None uses the current model only
-    centering: str = "auto"                 # which members sample their deviation directly (centered) rather than a unit offset:
-                                            # "auto" (data curvature of the deviation exceeds the prior's 1/s^2 at the start), "exact", "none"
+    centering: str = "none"                 # which members sample their deviation directly (centered) rather than a unit offset:
+                                            # "none" (every member a unit offset: one coordinate system throughout, and no
+                                            # optimizer trap, 2026-11-03), "auto" (data curvature of the deviation exceeds the
+                                            # prior's 1/s^2 at the start), "exact"
     centering_ratio: float = 1.0            # auto threshold on data/prior curvature
     """Member classification and far-field validity."""
     far_field_cut_radii: float = 3.0        # a far-field member stays at least this many of its (sampled) cut radii from every image
@@ -596,6 +616,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     _positive_int("search.polish_max_iter", search.polish_max_iter)
     if search.polish_scatter is not None:
         _positive("search.polish_scatter", search.polish_scatter)
+    if search.polish_radius_scatter is not None:
+        _positive("search.polish_radius_scatter", search.polish_radius_scatter)
     _positive("search.mode_margin", search.mode_margin)
     _positive("search.mode_parameter_tolerance", search.mode_parameter_tolerance)
     _positive_int("search.max_chain_modes", search.max_chain_modes)

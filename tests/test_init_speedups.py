@@ -117,10 +117,10 @@ def test_chain_starts_trailing_the_best_by_more_than_the_margin_are_dropped(synt
     evaluator = Evaluator(state)
     objective = Objective(state, evaluator, state.initial_theta, include_latent=True, log_likelihood=evaluator.log_likelihood)
 
-    def unchanged(objective_, starts_g, max_iter, memory=20):          # the optimizer leaves every start where it is
+    def unchanged(objective_, starts_g, max_iter, memory=20, **_):     # the optimizer leaves every start where it is
         values = np.array([float(objective_.reduced(jnp.asarray(g))) for g in starts_g])
         return dict(final=np.asarray(starts_g), potential=values)
-    monkeypatch.setattr(search_module, "run_optax_lbfgs", unchanged)
+    monkeypatch.setattr(search_module, "run_scipy_lbfgs", unchanged)
     names = [s.name for s in state.parameter_specs]
     first = np.asarray(state.initial_theta, dtype=float)
     second = first.copy()
@@ -135,3 +135,91 @@ def test_chain_starts_trailing_the_best_by_more_than_the_margin_are_dropped(synt
     assert [m["within_margin"] for m in out["modes"]] == [True, False] and out["modes"][1].get("dropped_for_nuts")
     starts = chain_starts(out, 4, config.search.max_chain_modes)
     assert all(np.allclose(s, good) for s in starts)                   # every chain starts at the kept mode
+
+
+def test_optax_lbfgs_stops_once_every_start_has_converged(synthetic_config):
+    from lenscluster.search import run_optax_lbfgs
+    state = build_state(synthetic_config)
+    evaluator = Evaluator(state)
+    objective = Objective(state, evaluator, state.initial_theta, include_latent=True, log_likelihood=evaluator.log_likelihood)
+    index = np.asarray(objective.global_index)
+    x0 = np.stack([objective.flatten(np.asarray(state.initial_theta, dtype=float))[index]] * 2)
+    fixed = run_optax_lbfgs(objective, x0, 40, window=10)
+    assert int(fixed["iterations"][0]) == 40 and fixed["traces"].shape[1] == 40 and not fixed["converged"].any()
+    # a huge tolerance is met at the first window that has a previous one to compare with
+    loose = run_optax_lbfgs(objective, x0, 40, tolerance=1.0e9, window=10)
+    assert int(loose["iterations"][0]) == 20 and loose["converged"].all()
+    # a negative tolerance is never met: the cap ends it, and the result matches the fixed-count run
+    strict = run_optax_lbfgs(objective, x0, 40, tolerance=-1.0, window=10)
+    assert int(strict["iterations"][0]) == 40 and not strict["converged"].any()
+    np.testing.assert_allclose(strict["potential"], fixed["potential"], rtol=1e-10)
+
+
+def test_scipy_lbfgs_stops_on_the_tolerance_and_matches_the_cap(synthetic_config):
+    from lenscluster.search import run_scipy_lbfgs
+    state = build_state(synthetic_config)
+    evaluator = Evaluator(state)
+    objective = Objective(state, evaluator, state.initial_theta, include_latent=True, log_likelihood=evaluator.log_likelihood)
+    index = np.asarray(objective.global_index)
+    x0 = objective.flatten(np.asarray(state.initial_theta, dtype=float))[index][None]
+    start = float(objective.reduced(jnp.asarray(x0[0])))
+    capped = run_scipy_lbfgs(objective, x0, 30)
+    assert int(capped["iterations"][0]) <= 30 and not capped["converged"].any() and capped["potential"][0] < start
+    loose = run_scipy_lbfgs(objective, x0, 30, tolerance=1.0e9, window=5)        # met at the first full window
+    assert loose["converged"].all() and int(loose["iterations"][0]) == 6
+    strict = run_scipy_lbfgs(objective, x0, 30, tolerance=-1.0, window=5)        # never met: same as the capped run
+    assert not strict["converged"].any()
+    np.testing.assert_allclose(strict["potential"], capped["potential"], rtol=1e-10)
+
+
+def test_chain_start_conditioning_flags_a_start_away_from_the_mode(synthetic_config):
+    from lenscluster.pipeline import START_DECREMENT_WARNING, chain_start_conditioning, converge_chain_starts
+    config = replace(synthetic_config, search=replace(synthetic_config.search, nuts_start_max_iter=300))
+    state = build_state(config)
+    evaluator = Evaluator(state)
+    theta = np.asarray(state.initial_theta, dtype=float)
+    search = {"theta": theta, "modes": [{"theta": theta.tolist(), "within_margin": True, "log_posterior": 0.0}]}
+    lines = []
+    converged = converge_chain_starts(state, evaluator, search, config, log=lambda *a: None)
+    at_mode = chain_start_conditioning(state, evaluator, converged, config, log=lines.append)["start_conditioning"]
+    names = [s.name for s in state.parameter_specs]
+    far = np.asarray(converged["theta"], dtype=float).copy()
+    far[names.index("halo.v_disp")] += 0.15                              # 16% in velocity dispersion: a start off the mode
+    off = chain_start_conditioning(state, evaluator, dict(converged, theta=far), config, log=lines.append)["start_conditioning"]
+    assert np.isfinite(at_mode["newton_decrement"]) and at_mode["newton_decrement"] < off["newton_decrement"]
+    assert off["newton_decrement"] > START_DECREMENT_WARNING and any(w.startswith("WARNING: the chain start is not a mode") for w in off["warnings"])
+    assert off["dim"] == at_mode["dim"] > 0 and any("chain start conditioning" in line for line in lines)
+
+
+def test_grouped_blocks_give_the_padded_mean_deflection_and_sources(tmp_path):
+    config, _ = two_knot_config(tmp_path)
+    state = build_state(knee_config(config, "system"))
+    ungrouped = copy.copy(state)
+    ungrouped.gp_group_blocks = False
+    grouped, padded = Evaluator(state, "gp_image_plane"), Evaluator(ungrouped, "gp_image_plane")
+    assert grouped.gp_groups is not None and padded.gp_groups is None
+    theta = np.asarray(state.initial_theta, dtype=float) + 0.01 * np.random.default_rng(3).normal(size=state.n_parameters)
+    images = state.images
+    x, y, fam = np.asarray(images.x_obs, float), np.asarray(images.y_obs, float), np.asarray(images.family_index_per_image)
+    for a, b in zip(grouped.gp_deflection_correction(theta)(x, y, fam), padded.gp_deflection_correction(theta)(x, y, fam)):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-10, atol=1e-14)
+    physical = np.asarray(grouped.reported_physical(jnp.asarray(theta)))
+    np.testing.assert_allclose(physical, np.asarray(padded.reported_physical(jnp.asarray(theta))), rtol=1e-10, atol=1e-12)
+
+
+def test_chain_start_keeps_the_member_scatters_pinned(synthetic_config):
+    """The chain-start step holds the member scatters at the search's value (free, an optimizer drives them to zero);
+    every member is a unit offset by default."""
+    from lenscluster.pipeline import converge_chain_starts
+    config = replace(synthetic_config, search=replace(synthetic_config.search, nuts_start_max_iter=50))
+    assert config.members.centering == "none"
+    state = build_state(config)
+    evaluator = Evaluator(state)
+    theta = np.asarray(state.initial_theta, dtype=float)
+    scatter = [i for i, s in enumerate(state.parameter_specs) if s.component_family == "member_velocity_scatter"]
+    assert scatter
+    search = {"theta": theta, "modes": [{"theta": theta.tolist(), "within_margin": True, "log_posterior": 0.0}]}
+    out = converge_chain_starts(state, evaluator, search, config, log=lambda *a: None)
+    expected = [np.log(config.search.polish_radius_scatter if state.parameter_specs[i].field == "radius_log_scatter" else config.search.polish_scatter)
+                for i in scatter]
+    np.testing.assert_allclose(np.asarray(out["theta"])[scatter], expected, rtol=0, atol=1e-12)

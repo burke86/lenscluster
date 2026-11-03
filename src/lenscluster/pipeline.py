@@ -352,9 +352,71 @@ def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[
     out["theta"] = np.asarray(kept[0]["theta"], dtype=float)
     model = posterior_model(state.parameter_specs, evaluator.log_likelihood)
     negative = block_mass_seed(model, state.parameter_specs, out["theta"])[2]
-    log(f"[init] chain starts: {len(kept)} of {len(candidates)} kept; best start: global-block Hessian negative eigenvalues "
+    log(f"[init] chain starts: the best of {len(kept_modes)} kept mode(s) on the NUTS target, optimized; every chain starts there; global-block Hessian negative eigenvalues "
         f"{negative.get('n_negative_eigenvalues')} of {negative.get('global_dim')}; {time.perf_counter() - started:.0f}s")
     out["nuts_start_seconds"] = float(time.perf_counter() - started)
+    return out
+
+
+START_DECREMENT_WARNING = 1.0   # Newton decrement (the quadratic estimate of the log-posterior gain to the mode) above
+                                # which the start is not a mode of the NUTS target: 0.09 at a converged start on its own
+                                # target, 4.0 for the same start on the other block structure (knee_band100_optimum)
+
+
+def chain_start_conditioning(state: ModelState, evaluator: Evaluator, search: dict[str, Any], config: LensClusterSolverConfig, *, log) -> dict[str, Any]:
+    """The conditioning of the best chain start on the posterior NUTS samples, when the optax step is off: the Newton
+    decrement g^T |H|^-1 g / 2 of the full Hessian (the log-posterior gain a Newton step would make; small at a mode
+    whatever the gradient's size in latent units), the count of negative eigenvalues and the condition number.  Logs
+    one line, and a WARNING when the decrement exceeds START_DECREMENT_WARNING or the negative eigenvalues exceed
+    sampling.HESSIAN_NEGATIVE_FRACTION_WARNING of the dimension.  Returns ``search`` with ``start_conditioning`` added."""
+    import jax
+    from .sampling import HESSIAN_NEGATIVE_FRACTION_WARNING
+    from .search import Objective
+    started = time.perf_counter()
+    theta = np.asarray(search["theta"], dtype=float)
+    objective = Objective(state, evaluator, theta, include_latent=True, log_likelihood=evaluator.log_likelihood)
+    x = jnp.asarray(objective.flatten(theta)[np.asarray(objective.global_index)])
+    value = -float(objective.reduced(x))
+    gradient = np.asarray(jax.grad(objective.reduced)(x), dtype=float)
+    hessian = np.asarray(jax.jacfwd(jax.grad(objective.reduced))(x), dtype=float)
+    hessian = 0.5 * (hessian + hessian.T)
+    if not (np.isfinite(value) and np.all(np.isfinite(gradient)) and np.all(np.isfinite(hessian))):
+        warning = (f"WARNING: the chain start is not a finite point of the NUTS target (log posterior {value:.2f}, "
+                   f"{int(np.sum(~np.isfinite(gradient)))} non-finite gradient components, {int(np.sum(~np.isfinite(hessian)))} non-finite Hessian entries).")
+        log(f"[init] {warning}")
+        out = dict(search)
+        out["start_conditioning"] = dict(nuts_target_log_posterior=value, newton_decrement=float("inf"), n_negative_eigenvalues=None, dim=int(gradient.size),
+                                         condition=float("nan"), max_abs_gradient=float("nan"), worst_direction="", warnings=[warning],
+                                         seconds=float(time.perf_counter() - started))
+        return out
+    eigenvalues, vectors = np.linalg.eigh(hessian)
+    floor = 1.0e-6 * float(np.abs(eigenvalues).max()) if eigenvalues.size else 1.0
+    projected = vectors.T @ gradient
+    decrement = 0.5 * float(np.sum(projected ** 2 / np.maximum(np.abs(eigenvalues), floor)))
+    negative, dim = int(np.sum(eigenvalues < 0)), int(eigenvalues.size)
+    positive = eigenvalues[eigenvalues > 0]
+    condition = float(positive.max() / positive.min()) if positive.size else float("nan")
+    contributions = 0.5 * projected ** 2 / np.maximum(np.abs(eigenvalues), floor)
+    names = [s.name for s in state.parameter_specs]
+    worst = int(np.argmax(contributions)) if contributions.size else 0
+    heavy = np.argsort(-np.abs(vectors[:, worst]))[:3] if contributions.size else []
+    direction = ", ".join(f"{names[j] if j < len(names) else f'latent {j}'} ({vectors[j, worst]:+.2f})" for j in heavy)
+    warnings = []
+    if not np.isfinite(decrement) or decrement > START_DECREMENT_WARNING:
+        warnings.append(f"WARNING: the chain start is not a mode of the NUTS target: Newton decrement {decrement:.2f} (log-posterior gain of one "
+                        f"Newton step; the limit is {START_DECREMENT_WARNING:g}), largest along {direction}.  Run with --start-max-iter 2000 "
+                        f"to converge the starts, or check that the search and the final stage use the same covariance blocks.")
+    if dim and negative / dim > HESSIAN_NEGATIVE_FRACTION_WARNING:
+        warnings.append(f"WARNING: the Hessian at the chain start has {negative} negative eigenvalues of {dim} (more than "
+                        f"{100 * HESSIAN_NEGATIVE_FRACTION_WARNING:.0f}%): the start sits on a saddle or a ridge, and the mass seed is floored there.")
+    log(f"[init] chain start conditioning (optax step off): log posterior on the NUTS target {value:.2f}, Newton decrement {decrement:.2f}, "
+        f"Hessian negative eigenvalues {negative} of {dim}, condition {condition:.1e}; {time.perf_counter() - started:.0f}s")
+    for warning in warnings:
+        log(f"[init] {warning}")
+    out = dict(search)
+    out["start_conditioning"] = dict(nuts_target_log_posterior=value, newton_decrement=decrement, n_negative_eigenvalues=negative, dim=dim,
+                                     condition=condition, max_abs_gradient=float(np.abs(gradient).max()) if gradient.size else 0.0,
+                                     worst_direction=direction, warnings=warnings, seconds=float(time.perf_counter() - started))
     return out
 
 
@@ -496,12 +558,15 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
         log(report)
         (paths.tables / "classification_report.txt").write_text(report + "\n")
         evaluator = Evaluator(state, config.likelihood.likelihood_mode)
-        # 4. Converge the chain starts on the posterior NUTS samples (final classes, transport volume, scatter free).
-        # Without it the start stays the state's own converted theta, which the final stage checks the chain starts against.
+        # 4. Converge the chain starts on the posterior NUTS samples (final classes, transport volume, scatter free), or,
+        # with the step off (the default), check the start's conditioning on that target and warn.  Without the step the
+        # start stays the state's own converted theta, which the final stage checks the chain starts against.
         if int(config.search.nuts_start_max_iter) > 0:
             search = converge_chain_starts(state, evaluator, search, config, log=log)
             theta = np.asarray(search["theta"], dtype=float)
             state.initial_theta = theta
+        else:
+            search = chain_start_conditioning(state, evaluator, search, config, log=log)
         value = float(evaluator.loglike(jnp.asarray(theta)))
         log(f"[init] log-likelihood at the start with final classes: {value:.3f}")
         if not np.isfinite(value):
@@ -713,6 +778,7 @@ def dry_run(config: LensClusterSolverConfig) -> dict[str, Any]:
         "search": {"halo_method": config.search.halo_method, "member_method": config.search.member_method, "n_starts": int(config.search.n_starts),
                    "member_starts": int(config.search.member_starts), "lbfgs_max_iter": int(config.search.lbfgs_max_iter),
                    "polish_max_iter": int(config.search.polish_max_iter), "polish_scatter": config.search.polish_scatter,
+                   "polish_radius_scatter": config.search.polish_radius_scatter,
                    "max_chain_modes": int(config.search.max_chain_modes)},
         "sampling": {"chains": int(config.runtime.chains), "warmup": int(config.sampling.warmup), "samples": int(config.sampling.samples),
                      "max_tree_depth": int(config.sampling.max_tree_depth)},

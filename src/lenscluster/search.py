@@ -45,11 +45,14 @@ def prior_starts(state: ModelState, n_starts: int, seed: int) -> np.ndarray:
     return theta
 
 
-def pinned_scatter_values(state: ModelState, scatter: float | None) -> dict[str, float]:
-    """Unconstrained value per member-scatter site when the scatter is pinned (the site holds ln sigma with a normal prior)."""
+def pinned_scatter_values(state: ModelState, scatter: float | None, radius_scatter: float | None = None) -> dict[str, float]:
+    """Unconstrained value per member-scatter site when the scatters are pinned (each site holds the log of its scatter
+    with a normal prior): the velocity scatter at ``scatter``, the radius scatter at ``radius_scatter`` (or ``scatter``
+    when that is None).  ``scatter`` None pins nothing."""
     if scatter is None:
         return {}
-    return {(spec.sample_site_name or spec.sample_name): float(np.log(scatter))
+    radius = scatter if radius_scatter is None else radius_scatter
+    return {(spec.sample_site_name or spec.sample_name): float(np.log(radius if spec.field == "radius_log_scatter" else scatter))
             for spec in state.parameter_specs if spec.component_family == "member_velocity_scatter"}
 
 
@@ -127,6 +130,43 @@ def _scipy_lbfgs(fun: Callable, x0: np.ndarray, max_iter: int, trace: list[float
     return np.asarray(result.x), float(result.fun), int(result.nit), int(result.nfev)
 
 
+def run_scipy_lbfgs(objective: Objective, starts_g: np.ndarray, max_iter: int, *, tolerance: float | None = None, window: int = 50) -> dict[str, Any]:
+    """scipy L-BFGS-B (memory 20) on the active block, one start at a time, with the stopping rule of ``run_optax_lbfgs``:
+    with ``tolerance``, a start stops once it gained less than ``tolerance`` in log posterior over the last ``window``
+    iterations (``converged``), else at ``max_iter``.  Invalid models get a large value and a zero gradient.  The same keys
+    as ``run_optax_lbfgs``.  On CANUCS (498 parameters, the NUTS target) it ran at 25 ms per iteration against 216 ms for the
+    jitted optax update, with 1.1 evaluations per iteration and the same gain per iteration (2026-11-03)."""
+    max_iter, window = int(max_iter), int(window)
+    finals, potentials, iterations, converged, traces = [], [], [], [], []
+    for g in np.asarray(starts_g, dtype=float):
+        trace: list[float] = []
+        last = [np.inf]
+
+        def fun(x):
+            value, grad = objective.reduced_value_and_grad(jnp.asarray(x))
+            value = float(value)
+            if not np.isfinite(value) or value >= BAD_POTENTIAL:
+                return 1.0e30, np.zeros_like(x)
+            last[0] = value
+            return value, np.asarray(grad, dtype=float)
+
+        stopped = [False]
+
+        def callback(intermediate_result):
+            trace.append(float(intermediate_result.fun))
+            if tolerance is not None and len(trace) > window and trace[-window - 1] - trace[-1] < float(tolerance):
+                stopped[0] = True
+                raise StopIteration
+
+        result = minimize(fun, g, jac=True, method="L-BFGS-B", callback=callback,
+                          options={"maxiter": max_iter, "maxcor": 20, "ftol": 1e-12, "gtol": 1e-6})
+        value = float(result.fun)
+        finals.append(np.asarray(result.x)); potentials.append(value if value < 1.0e29 else np.inf)
+        iterations.append(int(result.nit)); converged.append(bool(stopped[0])); traces.append(np.asarray(trace))
+    return dict(final=np.stack(finals), potential=np.asarray(potentials), iterations=np.asarray(iterations),
+                evaluations=np.asarray(iterations), traces=_pad_traces(traces), converged=np.asarray(converged))
+
+
 def run_lbfgs(objective: Objective, starts_g: np.ndarray, config: SearchConfig) -> dict[str, Any]:
     """scipy L-BFGS-B on the active block, one start at a time (1 to 2 evaluations per iteration).  With
     ``config.screen_iterations``, every start first runs that many iterations and only the ``screen_keep`` best continue
@@ -195,10 +235,13 @@ def run_adam(objective: Objective, starts_g: np.ndarray, steps: int, learning_ra
                 evaluations=np.full(len(starts_g), steps), traces=traces)
 
 
-def run_optax_lbfgs(objective: Objective, starts_g: np.ndarray, max_iter: int, memory: int = 20) -> dict[str, Any]:
+def run_optax_lbfgs(objective: Objective, starts_g: np.ndarray, max_iter: int, memory: int = 20, tolerance: float | None = None,
+                    window: int = 50) -> dict[str, Any]:
     """Vmapped optax L-BFGS with the zoom line search on the active block, every start in one jitted scan; keeps the best
     iterate per start.  Invalid models (the BAD_POTENTIAL sentinel) are given a finite large value and a zero gradient so
-    the line search backs off instead of stepping through them."""
+    the line search backs off instead of stepping through them.  With ``tolerance``, it runs in windows of ``window``
+    iterations and stops once every start gained less than ``tolerance`` in log posterior over the last window (or at
+    ``max_iter``); ``converged`` says which starts met it and ``iterations`` how many iterations ran."""
     max_iter = int(max_iter)
     optimizer = optax.lbfgs(memory_size=int(memory), linesearch=optax.scale_by_zoom_linesearch(max_linesearch_steps=25))
 
@@ -218,20 +261,28 @@ def run_optax_lbfgs(objective: Objective, starts_g: np.ndarray, max_iter: int, m
         updates, opt_state = optimizer.update(grad, opt_state, g, value=value, grad=grad, value_fn=safe_value)
         return (optax.apply_updates(g, updates), opt_state, best_g, best_value), value
 
-    chunk, chunks = _chunking(max_iter, target=50)
+    chunk, chunks = _chunking(max_iter, target=int(window))
     run_chunk = jax.jit(jax.vmap(lambda carry: jax.lax.scan(step, carry, None, length=chunk)))
     g0 = jnp.asarray(starts_g)
     carry = (g0, jax.vmap(optimizer.init)(g0), g0, jnp.full(len(starts_g), jnp.inf))
-    values = []
+    values, ran = [], 0
+    converged = np.zeros(len(starts_g), dtype=bool)
     with progress(total=max_iter, desc=f"optax L-BFGS x{len(starts_g)}") as bar:
         for _ in range(chunks):
+            previous = np.asarray(carry[3])
             carry, chunk_values = run_chunk(carry)
             values.append(np.asarray(chunk_values))
+            ran += chunk
             bar.update(chunk)
-    traces = np.concatenate(values, axis=1)[:, :max_iter]
+            if tolerance is not None and np.all(np.isfinite(previous)):
+                converged = (previous - np.asarray(carry[3])) < float(tolerance)
+                if converged.all():
+                    break
+    ran = min(ran, max_iter)
+    traces = np.concatenate(values, axis=1)[:, :ran]
     potential = np.where(np.asarray(carry[3]) >= 1.0e12, np.inf, np.asarray(carry[3]))
-    return dict(final=np.asarray(carry[2]), potential=potential, iterations=np.full(len(starts_g), max_iter),
-                evaluations=np.full(len(starts_g), max_iter), traces=traces)
+    return dict(final=np.asarray(carry[2]), potential=potential, iterations=np.full(len(starts_g), ran),
+                evaluations=np.full(len(starts_g), ran), traces=traces, converged=converged)
 
 
 def _chunking(steps: int, target: int = 100) -> tuple[int, int]:
@@ -312,13 +363,16 @@ def multistart_map(state: ModelState, evaluator: Evaluator, starts: np.ndarray, 
     """Optimize from every start with ``method``, cluster the end points into modes, polish the best modes with L-BFGS.
     ``active_sites`` restricts the search to those sample sites; the polish frees everything unless ``polish_sites`` is
     given (then only those sites move, the rest stay at the start's values)."""
-    pinned = pinned_scatter_values(state, config.polish_scatter)
+    pinned = pinned_scatter_values(state, config.polish_scatter, getattr(config, "polish_radius_scatter", None))
     objective = Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned, active_sites=active_sites)
+    # The polish frees the member scatters (config.polish_free_scatter); the search keeps them pinned.
+    polish_pinned = {} if getattr(config, "polish_free_scatter", False) else pinned
     if polish_sites is not None:
-        polish_objective = objective if polish_sites == active_sites else Objective(state, evaluator, starts[0], include_latent=True,
-                                                                                    pinned=pinned, active_sites=polish_sites)
+        polish_objective = (objective if polish_sites == active_sites and polish_pinned == pinned
+                            else Objective(state, evaluator, starts[0], include_latent=True, pinned=polish_pinned, active_sites=polish_sites))
     else:
-        polish_objective = objective if active_sites is None else Objective(state, evaluator, starts[0], include_latent=True, pinned=pinned)
+        polish_objective = (objective if active_sites is None and polish_pinned == pinned
+                            else Objective(state, evaluator, starts[0], include_latent=True, pinned=polish_pinned))
     starts_g = np.stack([objective.flatten(s)[np.asarray(objective.global_index)] for s in starts])
     started = time.perf_counter()
     if method == "lbfgs":
