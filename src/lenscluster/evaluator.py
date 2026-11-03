@@ -1,6 +1,7 @@
 """Lens fields and the smoothed-local-image-plane log-likelihood for one model state."""
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import jax
@@ -128,10 +129,14 @@ class Evaluator:
                                                      beta_low_grid=knee.get("beta_low_grid") if shape == "broken_power_law" else None)
                 self.gp_blocks = str(getattr(state, "gp_blocks", "all"))
                 self.gp = gp_knee.block_layout(images, self.gp_blocks, weights, self.gp_tables)
-                # The init search groups the blocks by size (search_split.search_blocks sets gp_group_blocks); the same
-                # likelihood at a fraction of the padded linear algebra.  block position: index of each block in the
-                # concatenated per-block outputs.
-                self.gp_groups = gp_knee.bucket_layouts(self.gp) if bool(getattr(state, "gp_group_blocks", False)) else None
+                # Blocks grouped by size (gp_knee.bucket_layouts), each group padded to its own largest block: the same
+                # likelihood at a fraction of the padded linear algebra (CANUCS system blocks: 11 ms against 47 ms per
+                # gradient).  On by default with several blocks; state.gp_group_blocks = False keeps one padded batch.
+                # The GP mean deflection, which reads the padded per-block factors, uses an ungrouped copy
+                # (_padded_evaluator).  block position: index of each block in the concatenated outputs.
+                group = getattr(state, "gp_group_blocks", None)
+                group = self.gp_blocks != "all" if group is None else bool(group)
+                self.gp_groups = gp_knee.bucket_layouts(self.gp) if group else None
                 self.gp_frozen_blocks = None                    # freeze_gp_kernels: kernel blocks at fixed error scales
                 order = (np.concatenate([g["block_ids"] for g in self.gp_groups]) if self.gp_groups is not None
                          else np.arange(int(self.gp["mask"].shape[0])))
@@ -623,8 +628,9 @@ class Evaluator:
         transported = gp_knee.transport_grouped_sources(coordinates, [p[4] for p in parts], groups, jnp.asarray(members.source_prior_mean),
                                                         members.source_prior_sigma)
         source = transported["source"]
-        terms = [gp.family_gaussian_loglike(cholesky, gp_knee.block_residual(padded, source, group), group["mask"], group["counts"])
-                 for group, _, cholesky, padded, _ in parts]
+        # The Gaussian term from the whitening's solves (L^-1 F = L^-1 b - L^-1 J beta): no third triangular solve.
+        terms = [gp_knee.block_gaussian_loglike(cholesky, whitening, block_source, group["mask"], group["counts"])
+                 for (group, _, cholesky, _, whitening), block_source in zip(parts, transported["block_sources"])]
         family_loglike, quadratic, logdet = (jnp.concatenate([t[i] for t in terms]) for i in range(3))
         counts = jnp.concatenate([group["counts"] for group in groups])
         block_finite = jnp.concatenate([jnp.all(jnp.isfinite(cholesky), axis=(-2, -1)) & whitening["valid"]
@@ -668,6 +674,17 @@ class Evaluator:
         scales = self.error_scales(stats["physical"])
         return v, jnp.stack([scales["gp_sigma_alpha"], scales["gp_knee"], scales["gp_knee_gamma"]])
 
+    def _padded_evaluator(self) -> "Evaluator":
+        """This evaluator, or with grouped blocks a cached copy on one padded batch: the GP mean deflection reads the
+        per-block Cholesky factors in the full block layout, which the grouped path does not assemble."""
+        if getattr(self, "gp_groups", None) is None:
+            return self
+        if getattr(self, "_padded", None) is None:
+            state = copy.copy(self.state)
+            state.gp_group_blocks = False
+            self._padded = Evaluator(state, self.likelihood_mode)
+        return self._padded
+
     def gp_deflection_correction(self, params) -> "gp.MeanDeflection | gp_knee.MeanDeflectionKnee | None":
         """Potential kernel: the GP conditional mean of the deflection error at this draw (``gp.MeanDeflection``), which the
         image solver adds to the lens so that the draw's source and lens belong together; None under the other likelihoods.
@@ -678,6 +695,8 @@ class Evaluator:
         if self.gp_knee:
             if self.gp_sigma_alpha_index < 0 or self.gp_knee_spectrum != "knee":
                 return None                                            # no mass field, or a spectrum the mean field does not cover
+            if self.gp_groups is not None:
+                return self._padded_evaluator().gp_deflection_correction(params)
             if not hasattr(self, "_knee_mean_inputs_jit"):
                 self._knee_mean_inputs_jit = jax.jit(self._knee_mean_inputs)
             v, s = self._knee_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))

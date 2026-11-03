@@ -32,7 +32,6 @@ from .gp_image_plane import family_slots
 
 _LOG_2PI = float(np.log(2.0 * np.pi))
 
-
 # ----------------------------------------------------------------------------- the knee spectrum, tabulated
 def _natural_second_derivative_operator(x) -> np.ndarray:
     """M (n, n) with m = M y the second derivatives of the natural cubic spline through (x, y) (zero at both ends)."""
@@ -373,24 +372,40 @@ def block_covariance(jacobian, k_alpha, k_img, white, mask, sigma_fl2):
 
 def block_source_whitening(cholesky, backprojected, indicator, mask, knot_mask):
     """Conditional of the block's K sources at fixed lens: S_beta = (J^T C^-1 J)^-1 (2K x 2K), beta_bar = S_beta J^T C^-1 b,
-    from the block Cholesky factor.  Padded knots get a unit precision, so their conditional is a standard normal."""
+    from the block Cholesky factor.  Padded knots get a unit precision, so their conditional is a standard normal.
+
+    L^-1 J and L^-1 b come from one solve (``lj``, ``lb``; ``block_gaussian_loglike`` reuses them).  The Cholesky factor of
+    S_beta = P^-1 is taken without inverting P: with E the exchange matrix (reversed order) and E P E = M M^T,
+    P^-1 = (E M^-T E)(E M^-T E)^T and E M^-T E is lower triangular with a positive diagonal, so it is chol(P^-1)."""
     mask, knot_mask = jnp.asarray(mask), jnp.asarray(knot_mask)
     n_blocks, size = mask.shape
-    lj = solve_triangular(cholesky, jnp.asarray(indicator), lower=True)                     # (S, 2M, 2K)
-    pad = jnp.repeat(~knot_mask, 2, axis=-1).astype(lj.dtype)                                # (S, 2K)
-    precision = jnp.einsum("fki,fkj->fij", lj, lj) + jnp.eye(pad.shape[-1], dtype=lj.dtype)[None] * pad[:, :, None]
-    precision = 0.5 * (precision + jnp.swapaxes(precision, -1, -2))
-    precision_chol = jnp.linalg.cholesky(precision)
-    eye = jnp.broadcast_to(jnp.eye(pad.shape[-1], dtype=lj.dtype), precision.shape)
-    covariance = jax.scipy.linalg.cho_solve((precision_chol, True), eye)
-    covariance = 0.5 * (covariance + jnp.swapaxes(covariance, -1, -2))
     b = jnp.where(mask[..., None], jnp.asarray(backprojected), 0.0).reshape(n_blocks, 2 * size)
-    lb = solve_triangular(cholesky, b[..., None], lower=True)[..., 0]
-    centroid = jnp.einsum("fij,fj->fi", covariance, jnp.einsum("fki,fk->fi", lj, lb))
-    chol = jnp.linalg.cholesky(covariance)
-    logdet_precision = 2.0 * jnp.sum(jnp.log(jnp.diagonal(precision_chol, axis1=-2, axis2=-1)), axis=-1)
+    solved = solve_triangular(cholesky, jnp.concatenate([jnp.asarray(indicator, dtype=b.dtype), b[..., None]], axis=-1), lower=True)
+    lj, lb = solved[..., :-1], solved[..., -1]                                               # (S, 2M, 2K), (S, 2M)
+    pad = jnp.repeat(~knot_mask, 2, axis=-1).astype(lj.dtype)                                # (S, 2K)
+    n_knot_coordinates = pad.shape[-1]
+    precision = jnp.einsum("fki,fkj->fij", lj, lj) + jnp.eye(n_knot_coordinates, dtype=lj.dtype)[None] * pad[:, :, None]
+    precision = 0.5 * (precision + jnp.swapaxes(precision, -1, -2))
+    reversed_chol = jnp.linalg.cholesky(precision[..., ::-1, ::-1])                          # M, E P E = M M^T
+    eye = jnp.broadcast_to(jnp.eye(n_knot_coordinates, dtype=lj.dtype), precision.shape)
+    chol = jnp.swapaxes(solve_triangular(reversed_chol, eye, lower=True), -1, -2)[..., ::-1, ::-1]   # E M^-T E = chol(P^-1)
+    covariance = jnp.einsum("fik,fjk->fij", chol, chol)
+    projected = jnp.einsum("fki,fk->fi", lj, lb)                                             # J^T C^-1 b
+    centroid = jnp.einsum("fij,fj->fi", chol, jnp.einsum("fji,fj->fi", chol, projected))
+    logdet_precision = 2.0 * jnp.sum(jnp.log(jnp.diagonal(reversed_chol, axis1=-2, axis2=-1)), axis=-1)
     valid = jnp.all(jnp.isfinite(chol), axis=(-2, -1)) & jnp.all(jnp.isfinite(centroid), axis=-1)
-    return dict(centroid=centroid, covariance=covariance, cholesky=chol, precision=precision, logdet_precision=logdet_precision, valid=valid)
+    return dict(centroid=centroid, covariance=covariance, cholesky=chol, precision=precision, logdet_precision=logdet_precision, valid=valid,
+                lj=lj, lb=lb)
+
+
+def block_gaussian_loglike(cholesky, whitening, block_source, mask, counts):
+    """``gp_image_plane.family_gaussian_loglike`` of the block residual F = b - J beta from the solves the whitening already
+    made: L^-1 F = L^-1 b - (L^-1 J) beta, with ``block_source`` the block's knot sources (S, 2K) in knot order."""
+    whitened = whitening["lb"] - jnp.einsum("fik,fk->fi", whitening["lj"], block_source)
+    whitened = jnp.where(jnp.repeat(jnp.asarray(mask), 2, axis=-1), whitened, 0.0)
+    quadratic = jnp.sum(whitened ** 2, axis=-1)
+    logdet = 2.0 * jnp.sum(jnp.log(jnp.diagonal(cholesky, axis1=-2, axis2=-1)), axis=-1)
+    return -0.5 * (quadratic + logdet) - jnp.asarray(counts) * _LOG_2PI, quadratic, logdet
 
 
 def transport_block_sources(offsets, whitening, layout, prior_mean, prior_sigma):
@@ -405,13 +420,15 @@ def transport_grouped_sources(offsets, whitenings, layouts, prior_mean, prior_si
     order of the groups."""
     offsets = jnp.asarray(offsets)
     source = jnp.zeros_like(offsets)
+    block_sources = []
     for whitening, layout in zip(whitenings, layouts):
         knot_family, knot_mask = layout["knot_family"], layout["knot_mask"]
         safe = jnp.where(knot_mask, knot_family, 0)
         u = jnp.where(knot_mask[..., None], offsets[safe], 0.0)                               # (S, K, 2)
         n_blocks, n_knots = knot_mask.shape
-        beta = whitening["centroid"] + jnp.einsum("fij,fj->fi", whitening["cholesky"], u.reshape(n_blocks, 2 * n_knots))
-        beta = beta.reshape(n_blocks, n_knots, 2)
+        flat = whitening["centroid"] + jnp.einsum("fij,fj->fi", whitening["cholesky"], u.reshape(n_blocks, 2 * n_knots))
+        block_sources.append(flat)                                                            # (S, 2K), knot order
+        beta = flat.reshape(n_blocks, n_knots, 2)
         source = source.at[layout["real_family"]].set(beta[layout["real_block"], layout["real_knot"]])
     sigma = jnp.asarray(prior_sigma)
     if sigma.ndim == 1:
@@ -421,7 +438,8 @@ def transport_grouped_sources(offsets, whitenings, layouts, prior_mean, prior_si
     log_jacobian = jnp.concatenate([-0.5 * w["logdet_precision"] for w in whitenings])     # per block
     correction = jnp.sum(physical_log_prior - base_log_prior) + jnp.sum(log_jacobian)
     valid = jnp.all(jnp.concatenate([w["valid"] for w in whitenings])) & jnp.all(jnp.isfinite(source))
-    return dict(source=source, log_correction=correction, log_jacobian=log_jacobian, physical_log_prior=physical_log_prior, valid=valid)
+    return dict(source=source, log_correction=correction, log_jacobian=log_jacobian, physical_log_prior=physical_log_prior, valid=valid,
+                block_sources=block_sources)
 
 
 def block_residual(backprojected_slots, source, layout):

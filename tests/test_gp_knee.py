@@ -300,3 +300,44 @@ def test_knee_on_all_images_costs_under_three_times_the_family_gp(tmp_path):
     # The toy lens costs nothing, so the covariance dominates here; at M0416 size the measured total is 10.7 ms against about
     # 4 ms for the lens alone.  Bounds: the coupled covariance of 160 images under 8 ms, system blocks under 2x the family GP.
     assert timings["knee/all"] < 8e-3 and timings["knee/system"] < 2.0 * timings["image_plane"], timings
+
+
+def test_block_whitening_and_gaussian_term_equal_the_direct_formulas(tmp_path):
+    """The source conditional's Cholesky factor from the reversed precision equals chol(P^-1), and the Gaussian term from
+    the whitening's solves (L^-1 b - L^-1 J beta) equals the direct one (residual per slot, then a triangular solve)."""
+    from jax.scipy.linalg import solve_triangular
+    from lenscluster import gp_image_plane as gp
+    config, _ = two_knot_config(tmp_path)
+    state = build_state(knee_config(config, "system"))
+    evaluator = Evaluator(state, "gp_image_plane")
+    theta = np.asarray(state.initial_theta, dtype=float) + 0.01 * np.random.default_rng(5).normal(size=state.n_parameters)
+    stats = evaluator.statistics(jnp.asarray(theta))
+    physical, fields = stats["physical"], stats["fields"]
+    scales = evaluator.error_scales(physical)
+    groups = evaluator.gp_groups if evaluator.gp_groups is not None else [evaluator.gp]
+    images = state.images
+    for group in groups:
+        blocks = evaluator.gp_kernel_blocks(physical, scales, group)
+        _, chol = gp_knee.block_covariance(fields["jacobian"][group["slots"]], blocks["k_alpha"], blocks["k_img"], blocks["white"],
+                                           group["mask"], jnp.square(evaluator.gp_floor))
+        padded = fields["backprojected"][group["slots"]]
+        whitening = gp_knee.block_source_whitening(chol, padded, group["indicator"], group["mask"], group["knot_mask"])
+        # chol(P^-1) and the centroid against the explicit inverse
+        inverse = np.linalg.inv(np.asarray(whitening["precision"]))
+        np.testing.assert_allclose(np.asarray(whitening["cholesky"]), np.linalg.cholesky(inverse), rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(np.asarray(whitening["covariance"]), inverse, rtol=1e-9, atol=1e-12)
+        b = np.where(np.asarray(group["mask"])[..., None], np.asarray(padded), 0.0).reshape(len(group["block_ids"]), -1)
+        lj = np.asarray(solve_triangular(chol, jnp.asarray(group["indicator"], dtype=jnp.float64), lower=True))
+        lb = np.asarray(solve_triangular(chol, jnp.asarray(b)[..., None], lower=True))[..., 0]
+        np.testing.assert_allclose(np.asarray(whitening["centroid"]), np.einsum("fij,fkj,fk->fi", inverse, lj, lb), rtol=1e-9, atol=1e-12)
+        # the Gaussian term at a block source vector against the residual route
+        n_blocks, n_knots = np.asarray(group["knot_mask"]).shape
+        beta = np.asarray(whitening["centroid"]) + 0.05 * np.random.default_rng(6).normal(size=(n_blocks, 2 * n_knots))
+        mine = gp_knee.block_gaussian_loglike(chol, whitening, jnp.asarray(beta), group["mask"], group["counts"])
+        source = np.zeros((int(images.n_families), 2))
+        knot_family, knot_mask = np.asarray(group["knot_family"]), np.asarray(group["knot_mask"])
+        for s_, k in zip(*np.nonzero(knot_mask)):
+            source[knot_family[s_, k]] = beta[s_].reshape(n_knots, 2)[k]
+        direct = gp.family_gaussian_loglike(chol, gp_knee.block_residual(padded, jnp.asarray(source), group), group["mask"], group["counts"])
+        for a, d in zip(mine, direct):
+            np.testing.assert_allclose(np.asarray(a), np.asarray(d), rtol=1e-10, atol=1e-10)

@@ -29,7 +29,10 @@ def _grouped(state):
 def test_grouped_blocks_and_frozen_kernels_reproduce_the_likelihood(tmp_path):
     config, _ = two_knot_config(tmp_path)
     state = build_state(knee_config(config, "system"))
-    padded, grouped = Evaluator(state, "gp_image_plane"), Evaluator(_grouped(state), "gp_image_plane")
+    ungrouped = copy.copy(state)
+    ungrouped.gp_group_blocks = False
+    padded, grouped = Evaluator(ungrouped, "gp_image_plane"), Evaluator(_grouped(state), "gp_image_plane")
+    assert padded.gp_groups is None and Evaluator(state, "gp_image_plane").gp_groups is not None     # grouped by default
     assert grouped.gp_groups is not None and sum(len(g["block_ids"]) for g in grouped.gp_groups) == int(padded.gp["mask"].shape[0])
     f0, f1 = jax.jit(jax.value_and_grad(padded.log_likelihood)), jax.jit(jax.value_and_grad(grouped.log_likelihood))
     rng = np.random.default_rng(1)
