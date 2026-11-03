@@ -228,6 +228,16 @@ def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarr
     return [global_names], inverse_mass, diagnostics
 
 
+def print_global_summary(grouped: dict[str, Any], specs: list[ParameterSpec], extra: dict[str, Any] | None = None) -> None:
+    """NumPyro's posterior summary table for the global sites only: halos, shear, scaling relation, scatters and error
+    scales.  The member offsets and the source positions (LATENT_FAMILIES, hundreds of rows) are left out."""
+    from numpyro.diagnostics import print_summary as numpyro_print_summary
+    latent = {site.name for site in sample_sites(specs) if all(specs[i].component_family in LATENT_FAMILIES for i in site.indices)}
+    numpyro_print_summary({name: value for name, value in grouped.items() if name not in latent}, group_by_chain=True)
+    if extra is not None and "diverging" in extra:
+        print(f"Number of divergences: {int(np.sum(np.asarray(extra['diverging'])))}")
+
+
 def chain_diagnostics(grouped_theta: np.ndarray) -> dict[str, Any]:
     """Split-R-hat and effective sample size per parameter (NaN with a single chain)."""
     from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
@@ -324,7 +334,7 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
     jax.block_until_ready(grouped)
     elapsed = time.perf_counter() - started
     if print_summary:
-        mcmc.print_summary()
+        print_global_summary(grouped, specs, extra)
     grouped_theta = theta_from_site_values({k: np.asarray(v) for k, v in grouped.items()}, specs)   # (chains, draws, n)
     flat = grouped_theta.reshape(-1, grouped_theta.shape[-1])
     log_prob = -np.asarray(extra["potential_energy"], dtype=float).reshape(-1)
