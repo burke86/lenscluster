@@ -27,10 +27,44 @@ def test_budget_follows_concurrent_chain_count(monkeypatch, chains, method):
 
 def test_none_preserves_available_allocation(monkeypatch):
     monkeypatch.setattr(cpu, "_ACTIVE_PLAN", None)
-    monkeypatch.setattr(os, "sched_getaffinity", lambda _: {5, 7, 19})
+    monkeypatch.setattr(cpu, "affinity_supported", lambda: True)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _: {5, 7, 19}, raising=False)
     plan = cpu.resolve_cpu_plan(2, threads_per_chain=None)
     assert plan.selected_cpu_ids == (5, 7, 19)
-    assert plan.blas_threads is None
+    assert plan.blas_threads == 1
+
+
+@pytest.mark.parametrize("chains,method,expected", [(4, "parallel", 1), (1, "parallel", None), (4, "sequential", None)])
+def test_parallel_blas_limit_without_affinity(monkeypatch, chains, method, expected):
+    monkeypatch.setattr(cpu, "_ACTIVE_PLAN", None)
+    monkeypatch.setattr(cpu, "affinity_supported", lambda: False)
+    plan = cpu.resolve_cpu_plan(chains, method, None)
+    assert plan.selected_cpu_ids == plan.available_cpu_ids
+    assert plan.blas_threads == expected
+
+
+def test_parallel_backend_without_affinity_limits_loaded_and_future_blas():
+    code = """
+import os
+import numpy as np
+from threadpoolctl import threadpool_info
+from lenscluster import cpu_runtime as cpu
+cpu.affinity_supported = lambda: False
+plan = cpu.configure_cpu_runtime(4, 'parallel', None)
+assert plan.blas_threads == 1
+assert all(os.environ[name] == '1' for name in cpu._BLAS_VARIABLES)
+import jax
+import jax.numpy as jnp
+jax.config.update('jax_enable_x64', True)
+a = np.array([[4., 1.], [1., 3.]])
+result = jax.pmap(jnp.linalg.cholesky)(jnp.asarray(np.stack([a] * 4)))
+np.testing.assert_allclose(result, np.stack([np.linalg.cholesky(a)] * 4), rtol=1e-12)
+blas = [p['num_threads'] for p in threadpool_info() if p['user_api'] == 'blas']
+assert blas and set(blas) == {1}
+assert cpu.configure_cpu_runtime(4, 'parallel', None) == plan
+"""
+    env = dict(os.environ, PYTHONPATH=str(Path('src').resolve()), OMP_NUM_THREADS='4', OPENBLAS_NUM_THREADS='4')
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "2"])

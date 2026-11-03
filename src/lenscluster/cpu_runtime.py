@@ -128,7 +128,7 @@ def affinity_supported():
 
 def threads_per_chain_if_supported(threads_per_chain):
     """The ``cpu_threads_per_chain`` setting for this platform: the requested value where CPU affinity exists,
-    otherwise None (no pinning, the default thread pools), so one run script serves Linux and macOS."""
+    otherwise None (no pinning), so one run script serves Linux and macOS. Parallel chains still limit BLAS."""
     return threads_per_chain if affinity_supported() else None
 
 
@@ -172,7 +172,8 @@ def resolve_cpu_plan(chains, chain_method="parallel", threads_per_chain=None, *,
         selected = (primary + tuple(cpu for cpu in ordered if cpu not in primary))[:count]
     return CPUPlan(chains, chain_method, threads_per_chain,
                    chains if chain_method == "parallel" else 1,
-                   available, selected, supported, 1 if threads_per_chain is not None else None)
+                   available, selected, supported,
+                   1 if threads_per_chain is not None or (chain_method == "parallel" and chains > 1) else None)
 
 
 def configure_cpu_runtime(chains, chain_method="parallel", threads_per_chain=None):
@@ -200,14 +201,19 @@ def configure_cpu_runtime(chains, chain_method="parallel", threads_per_chain=Non
         raise RuntimeError("cpu_threads_per_chain requires CPU affinity support; use None on this platform.")
     if threads_per_chain is not None:
         os.sched_setaffinity(0, plan.selected_cpu_ids)
+    if plan.blas_threads is not None:
+        # Parallel chains already provide concurrency. Limit nested BLAS/OpenMP
+        # before XLA creates workers, including on platforms without affinity.
+        # Changing OpenMP limits in the main thread afterward does not reliably
+        # change the limits inherited by existing XLA worker threads.
         for name in _BLAS_VARIABLES:
-            os.environ[name] = "1"
+            os.environ[name] = str(plan.blas_threads)
         # NumPy/SciPy may already be imported while constructing typed configs.
         # Limit those loaded libraries as well as future spawned processes.
         from threadpoolctl import threadpool_limits
-        _THREADPOOL_LIMITER = threadpool_limits(limits=1)
+        _THREADPOOL_LIMITER = threadpool_limits(limits=plan.blas_threads)
         if "numexpr" in sys.modules:
-            sys.modules["numexpr"].set_num_threads(1)
+            sys.modules["numexpr"].set_num_threads(plan.blas_threads)
     os.environ["JAX_NUM_CPU_DEVICES"] = str(plan.jax_cpu_devices)
     if jax is not None:
         jax.config.update("jax_num_cpu_devices", plan.jax_cpu_devices)
