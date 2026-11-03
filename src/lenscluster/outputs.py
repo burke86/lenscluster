@@ -117,6 +117,7 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
         from .cutouts import imaging_variants, load_cluster_imaging
         from .mass_figure import render_cluster_mass_figure
         fold_data = None
+        overview_configs = imaging_variants(config, overview_only=True)
         for image_config in imaging_variants(config):
             try:
                 imaging = load_cluster_imaging(image_config, config.model, config.paths.run_name)
@@ -124,6 +125,13 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
                 # Missing external imaging must not prevent the other outputs.
                 log(f"[outputs] cluster mass figure and covariance RGB cutouts skipped: {error}")
                 continue
+            write_covariance_cutouts(replace(config, image_catalog=image_config), state, evaluator, posterior,
+                                     paths, imaging, log=log)
+            overview_config = next((view for view in overview_configs
+                                    if replace(view, figure_suffix=image_config.figure_suffix) == image_config), None)
+            if overview_config is None:
+                continue
+            image_config = overview_config
             position_contours = None
             if image_config.figure_suffix == '_jwst':
                 from .image_position_contours import load_or_compute_contours
@@ -134,8 +142,6 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
                                        figure_path=plots.figure_path(figures, f"image_catalog_family_cluster_mass{image_config.figure_suffix}.pdf", prefix),
                                        tables_dir=tables, fits_dir=paths.fits, artifact_suffix=image_config.figure_suffix, position_contours=position_contours)
             log(f"[outputs] cluster mass figure rendered from {imaging[3]} imaging ({image_config.image_dir})")
-            write_covariance_cutouts(replace(config, image_catalog=image_config), state, evaluator, posterior,
-                                     paths, imaging, log=log)
             if fold_data is None:
                 fold_data = compute_fold_diagnostics(config, state, evaluator, posterior, log=log)
                 save_fold_data(fold_data, tables)

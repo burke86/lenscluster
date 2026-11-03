@@ -24,7 +24,7 @@ def main():
     elif 'systems' not in data:
         data = add_system_knots(config, state, evaluator, posterior, data, log=log)
     save_fold_data(data, paths.tables)
-    for image_config in imaging_variants(config):
+    for image_config in imaging_variants(config, overview_only=True):
         if args.imaging == 'jwst' and image_config.figure_suffix != '_jwst':
             continue
         try:

@@ -22,7 +22,7 @@ def main():
     import numpy as np
     import pandas as pd
     from lenscluster import artifacts, plots
-    from lenscluster.cutouts import load_cluster_imaging
+    from lenscluster.cutouts import imaging_variants, load_cluster_imaging
     from lenscluster.evaluator import Evaluator
     from lenscluster.mass_figure import render_cluster_mass_figure
     from lenscluster.state import build_state, with_member_classes
@@ -39,6 +39,8 @@ def main():
         config = replace(config, image_catalog=replace(config.image_catalog, image_dir="data/JWST_Images" if jwst else "data/BUFFALO_Images",
                                                        image_scale="auto", bands=tuple(DEFAULT_JWST_RGB_BANDS if jwst else DEFAULT_HFF_RGB_BANDS),
                                                        rgb=RGBDisplayConfig(), figure_suffix="_jwst" if jwst else ""))
+    from dataclasses import replace
+    config = replace(config, image_catalog=imaging_variants(config, overview_only=True)[0])
     classes = json.loads((init / artifacts.CLASSIFICATION_FILE).read_text())
     state = build_state(config, drop_member_ids=classes.get("dropped_members", ()))
     centered_ids = set(classes.get("centered_members", []))

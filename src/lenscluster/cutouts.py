@@ -83,8 +83,8 @@ def cluster_from_config(model_config: Any, run_name: str = "") -> str:
     return str(run_name).split("_", 1)[0].lower() or "cluster"
 
 
-def imaging_variants(config):
-    """Saved imaging plus the standard JWST view for M0416 and AS1063."""
+def imaging_variants(config, *, overview_only=False):
+    """Saved imaging plus JWST; CANUCS mass/fold overviews use only JWST."""
     from dataclasses import replace
     from .config import RGBDisplayConfig as DisplayConfig
 
@@ -97,6 +97,12 @@ def imaging_variants(config):
         variants.append(replace(primary, image_dir="data/JWST_Images", image_scale="auto",
                                 bands=tuple(DEFAULT_JWST_RGB_BANDS), rgb=DisplayConfig(),
                                 figure_suffix="_jwst"))
+    if overview_only:
+        catalog = str(getattr(getattr(config.model, "image_constraints", None), "catalog_path", "")).lower()
+        identity = f"{catalog} {config.paths.run_name} {config.paths.figure_prefix}".lower()
+        if "canucs" in identity and cluster == "m0416":
+            return [replace(view, figure_suffix="_jwst") for view in variants
+                    if any(str(band).upper() in DEFAULT_JWST_RGB_BANDS for band in (view.bands or ()))]
     return variants
 
 
