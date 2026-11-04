@@ -286,6 +286,9 @@ def _hff_clusters():
                     cut_radius_kpc=356.49532800000867 * AS1063_KPC_PER_ARCSEC,
                     v_disp=249.68220495795586, z_lens=0.348,
                 ),
+                # External shear, free amplitude and angle (2026-11-03), as for CANUCS: the GRF projection removes the field's
+                # field-wide shear on the assumption that a free external shear absorbs it.  AS1063_JWST inherits it.
+                ShearHaloConfig.free("shear", 0.348, gamma_upper=0.3),
             ),
             # Member priors at L* that come from no lens model (Bergamini et al. 2019 define L* as M_F160W = -23 with no
             # K-correction, so m* = -23 + mu(z = 0.348) = 18.33): sigma* TN(200, 100) km/s, r_cut* log-uniform 2-100 kpc,
