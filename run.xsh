@@ -66,9 +66,9 @@ def _usage() -> str:
         "          smoothed (the per-image source-plane floors sigma_def, sigma_extra)\n"
         "  --warm-start RUN_DIR: start the init search from a previous run's saved start (parameters matched by name; the\n"
         "          256-start search is skipped; NUTS still requires that run's init to have been robust)\n"
-        "  --gp-blocks: grf_gp only: system (default, also with --fast; grouped by size), family, or all (one covariance\n"
-        "          over every image, about 5x slower per gradient; only it removes the field-wide translation, convergence\n"
-        "          and shear from the mass field)\n"
+        "  --gp-blocks: grf_gp only: all (default for full runs: one shared mass field over every image, with the\n"
+        "          field-wide translation, convergence and shear projected out), or system / family (independent fields per\n"
+        "          system or family, about 5x cheaper per gradient, no projection; the default with --fast)\n"
         "  --gp-kernel-family: potential only: matern52 (default) or gaussian\n"
         "  --gp-band-max ARCSEC: grf_gp only: the longest wavelength of the mass field (default 30); above 30 the knee prior\n"
         "          becomes log-normal with median min(20, ARCSEC / 2), log-width 1, up to min(ARCSEC, 80), started at its median\n"
@@ -593,14 +593,16 @@ def build_config(
                                                      sigma_inst_arcsec=float(cluster_config.get("sigma_inst_arcsec", ImageConstraintsConfig.sigma_inst_arcsec))),
         ),
         # No selection term: in the oct28a M0416 run sigma_sel and sigma_def fit equally well and lambda_sel stayed at its prior.
-        # Covariance blocks: system by default (full and --fast), grouped by size in the evaluator: 4.4 ms per gradient on
-        # CANUCS against 20.9 ms for one covariance over all images, and the init search uses the same blocks, so its
-        # optimum is the NUTS target's.  Removing the field-wide translation, convergence and shear from the mass field
-        # needs one covariance over all images, so the projection is on only with --gp-blocks all.
+        # Covariance blocks: all by default for full runs, system for --fast (2026-11-03); one shared mass field over every image with the field-wide
+        # translation, convergence and shear projected out (absorbed by the sources and the free external shear).  System
+        # blocks give each system an independent field: 5x cheaper per gradient, but their posterior differs from the shared
+        # field's (importance reweighting kept 1 of 200 draws), and the projection needs one covariance, so they are for
+        # quick tests (--gp-blocks system).  The init search still runs on system blocks; the chain-start step and NUTS use all.
         likelihood=LikelihoodConfig(likelihood_mode=LIKELIHOODS[likelihood][0], sigma_sel_prior=None, gp_kernel=LIKELIHOODS[likelihood][1],
                                     gp_kernel_family=gp_kernel_family or "matern52",
-                                    gp_blocks=gp_blocks or "system",
-                                    gp_knee_project_modes=(("translation", "convergence", "shear") if likelihood == "grf_gp" and gp_blocks == "all"
+                                    gp_blocks=gp_blocks or ("system" if fast else "all"),
+                                    gp_knee_project_modes=(("translation", "convergence", "shear")
+                                                           if likelihood == "grf_gp" and (gp_blocks or ("system" if fast else "all")) == "all"
                                                            else ()),
                                     # The GRF slope fixed at 4 (a population of NFW-cusped lumps): sampled, it drifted to 5.3 in
                                     # w250s100_fast_gpblocksall without the data pinning it.
@@ -645,13 +647,15 @@ def build_config(
         ),
     )
     if fast:
-        # Exploratory: members deflecting every image by < 0.03" leave the model (Ares: 332 -> ~150), far-field members
-        # allowed down to 2 cut radii, classification at the current model, fewer starts, shorter chains at tree depth 7.
+        # Exploratory: far-field members allowed down to 2 cut radii, classified at the current model with 3x headroom on the
+        # cut radius, fewer starts, shorter chains.  No impact cut (2026-11-03): every catalog member stays, as in a full run;
+        # dropping members moved their mass into halo 2 and the field (0.05": knee 10 -> 20").
         config = replace(
             config,
             search=replace(config.search, n_starts=256),
-            sampling=SamplingConfig(warmup=250, samples=100, max_tree_depth=8, target_accept=0.8),
-            members=replace(config.members, far_field_cut_radii=2.0, classification_prior_quantile=None, min_deflection_arcsec=0.03),
+            sampling=SamplingConfig(warmup=200, samples=100, max_tree_depth=8, target_accept=0.8),
+            members=replace(config.members, far_field_cut_radii=2.0, classification_prior_quantile=None, min_deflection_arcsec=None,
+                            cut_radius_inflation=3.0),
         )
     if gp_band_max is not None and float(gp_band_max) > 30.0:
         # A longer band for the mass field: the knee left free up to min(band, 80") (the tables end at 80"), centred at 20"
@@ -673,13 +677,15 @@ def _fast_mode_warning(config) -> None:
     from rich.console import Console
     from rich.panel import Panel
     members = config.members
+    cut = members.min_deflection_arcsec
     text = ("This is a FAST run.  Its settings are exploratory:\n"
-            f"  - members deflecting every image by less than {members.min_deflection_arcsec:g}\" are dropped from the model\n"
-            f"  - far-field members are allowed down to {members.far_field_cut_radii:g} cut radii from an image (default 3)\n"
+            + (f"  - members deflecting every image by less than {cut:g}\" are dropped from the model\n" if cut is not None
+               else "  - every catalog member is kept (no impact cut)\n")
+            + f"  - far-field members are allowed down to {members.far_field_cut_radii:g} cut radii from an image (default 3)\n"
             f"  - {config.search.n_starts} search starts, {config.sampling.warmup} warmup + {config.sampling.samples} draws per chain "
             f"at tree depth {config.sampling.max_tree_depth}, target accept {config.sampling.target_accept:g}\n"
-            f"  - GP covariance blocks: {config.likelihood.gp_blocks} (the default for full runs too; --gp-blocks all is not\n"
-            f"    comparable in log-likelihood or hyperparameters)")
+            f"  - GP covariance blocks: {config.likelihood.gp_blocks}, projection {', '.join(config.likelihood.gp_knee_project_modes) or 'off'} "
+            f"(full runs default to all blocks with the projection)")
     Console(stderr=False).print(Panel(text, title="[bold]WARNING: --fast[/bold]", border_style="yellow", style="yellow", expand=False))
 
 
