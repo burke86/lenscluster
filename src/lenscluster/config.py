@@ -293,6 +293,9 @@ class SamplingConfig:
     # source coordinates stay diagonal.  The bright members' offsets trade off against sigma*, the core and the slopes
     # (correlations to 0.74 on M0416), which the diagonal mass cannot follow (2026-11-03).
     dense_member_offsets: bool = True
+    # After sampling: the stiffest direction at each chain's last state with its adapted mass (power iteration on
+    # Hessian-vector products, ~30 per chain), the step size it allows and the parameters in it (sampling.stiffness_diagnostic).
+    stiffness_diagnostic: bool = True
 
 
 @dataclass(frozen=True)

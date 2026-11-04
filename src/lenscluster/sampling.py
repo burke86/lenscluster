@@ -251,6 +251,73 @@ def print_global_summary(grouped: dict[str, Any], specs: list[ParameterSpec], ex
         print(f"Number of divergences: {int(np.sum(np.asarray(extra['diverging'])))}")
 
 
+def stiffest_direction(potential, x0, whiten, *, iterations: int = 30, seed: int = 0) -> tuple[float, np.ndarray]:
+    """Largest curvature of ``potential`` at ``x0`` in the sampler's whitened coordinates, by power iteration on
+    W^T H W (W = ``whiten``, a linear map from whitened to flat coordinates; H from Hessian-vector products), and its
+    direction in the flat coordinates (unit norm).  The leapfrog step is stable below 2 / sqrt(|lambda|)."""
+    gradient = jax.grad(potential)
+    hvp = jax.jit(lambda v: jax.jvp(gradient, (x0,), (v,))[1])
+    xi = jax.random.normal(jax.random.PRNGKey(int(seed)), jnp.shape(x0), dtype=jnp.float64)
+    xi = xi / jnp.linalg.norm(xi)
+    value = 0.0
+    for _ in range(int(iterations)):
+        hx = hvp(whiten(xi))
+        w = whiten(hx, transpose=True)
+        value = float(jnp.vdot(xi, w))
+        norm = jnp.linalg.norm(w)
+        if not bool(jnp.isfinite(norm)) or float(norm) == 0.0:
+            break
+        xi = w / norm
+    direction = np.asarray(whiten(xi), dtype=float)
+    return value, direction / max(np.linalg.norm(direction), 1e-300)
+
+
+def stiffness_diagnostic(model, specs: list[ParameterSpec], mcmc, step_size: np.ndarray, chains: int, *, top: int = 5,
+                         iterations: int = 30) -> list[dict[str, Any]]:
+    """Per chain, at its last state and with the mass matrix it adapted: the largest curvature of the potential in the
+    sampler's coordinates (power iteration with Hessian-vector products), the step size it allows (2 / sqrt(lambda)),
+    the adapted step size against it, and the parameters that make up that stiffest direction."""
+    state = mcmc.last_state
+    z_all, inverse_all = state.z, state.adapt_state.inverse_mass_matrix
+    sites = {site.name: site for site in sample_sites(specs)}
+    batched = int(chains) > 1
+    out = []
+    for c in range(int(chains)):
+        z = {k: jnp.asarray(v[c] if batched else v) for k, v in z_all.items()}
+        inverse = {k: jnp.asarray(v[c] if batched else v) for k, v in inverse_all.items()}
+        order = [name for key in inverse for name in key]                  # NumPyro flattens each block in its key's order
+        sizes = [int(jnp.size(z[name])) for name in order]
+        offsets = np.concatenate([[0], np.cumsum(sizes)])
+        x0 = jnp.concatenate([jnp.ravel(z[name]) for name in order])
+
+        def unflatten(vector):
+            return {name: jnp.reshape(vector[offsets[i]:offsets[i + 1]], jnp.shape(z[name])) for i, name in enumerate(order)}
+
+        factors = []                                                       # per block: (slice, cholesky or sqrt-diagonal)
+        start = 0
+        for key, block in inverse.items():
+            n = sum(int(jnp.size(z[name])) for name in key)
+            factors.append((slice(start, start + n), jnp.linalg.cholesky(block) if block.ndim == 2 else jnp.sqrt(block)))
+            start += n
+
+        def whiten(vector, transpose=False):
+            parts = []
+            for span, factor in factors:
+                piece = vector[span]
+                parts.append((factor.T @ piece if transpose else factor @ piece) if factor.ndim == 2 else factor * piece)
+            return jnp.concatenate(parts)
+
+        potential = lambda vector: potential_energy(model, (), {}, unflatten(vector))
+        value, direction = stiffest_direction(potential, x0, whiten, iterations=iterations, seed=c)
+        labels = [specs[i].name for name in order for i in sites[name].indices]
+        heavy = np.argsort(-np.abs(direction))[:int(top)]
+        limit = 2.0 / np.sqrt(abs(value)) if value != 0 and np.isfinite(value) else float("nan")
+        out.append(dict(chain=c, curvature=float(value), step_limit=float(limit), step_size=float(step_size[c]),
+                        step_fraction=float(step_size[c] / limit) if np.isfinite(limit) else float("nan"),
+                        direction=[(labels[j], float(direction[j])) for j in heavy]))
+    return out
+
+
 def chain_diagnostics(grouped_theta: np.ndarray) -> dict[str, Any]:
     """Split-R-hat and effective sample size per parameter (NaN with a single chain)."""
     from numpyro.diagnostics import effective_sample_size, split_gelman_rubin
@@ -371,9 +438,26 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
             f"tree-depth cap ({2 ** int(max_tree_depth) - 1} steps)")
     if adaptation["min_e_bfmi"] < 0.3:
         log(f"[nuts] WARNING: E-BFMI below 0.3 (min {adaptation['min_e_bfmi']:.2f}): the energy does not mix, typical of a funnel or heavy tails")
+    stiff = None
+    if stiffness:
+        # What sets the step size: the stiffest direction at each chain's last state, with the mass matrix it adapted.
+        try:
+            started_stiffness = time.perf_counter()
+            stiff = stiffness_diagnostic(model, specs, mcmc, step_size, int(chains))
+            for row in stiff:
+                parts = ", ".join(f"{name} {weight:+.2f}" for name, weight in row["direction"])
+                log(f"[nuts] chain {row['chain']} stiffness: step limit {row['step_limit']:.3g} (2/sqrt of curvature {row['curvature']:.3g}), "
+                    f"adapted step {row['step_size']:.3g} = {row['step_fraction']:.2f} of it; stiffest direction: {parts}")
+            fractions = [r["step_fraction"] for r in stiff if np.isfinite(r["step_fraction"])]
+            if fractions and min(fractions) > 0.3 and adaptation.get("max_tree_depth_saturation", 0.0) > 0.5:
+                log("[nuts] the step size sits near the stability limit of that direction and trajectories hit the tree-depth cap: "
+                    "the stiffness, not the posterior's width, sets the trajectory length")
+            log(f"[nuts] stiffness diagnostic: {time.perf_counter() - started_stiffness:.0f}s")
+        except Exception as error:                                     # a diagnostic must never fail a run
+            log(f"[nuts] WARNING: stiffness diagnostic failed ({type(error).__name__}: {error})")
     best = int(np.nanargmax(np.where(finite, log_prob, -np.inf)))
     diagnostics = dict(mass_seed=mass_diagnostics, adaptation=adaptation, elapsed_seconds=float(elapsed), chain_method=chain_method,
-                       n_nonfinite_draws=int((~finite).sum()), **chain_diagnostics(grouped_theta))
+                       n_nonfinite_draws=int((~finite).sum()), stiffness=stiff, **chain_diagnostics(grouped_theta))
     return PosteriorResults(samples=flat, physical=physical, log_prob=log_prob, accept_prob=accept, diverging=diverging,
                            num_steps=num_steps, warmup_steps=int(warmup), sample_steps=int(samples), num_chains=int(chains),
                            energy=energy_by_chain.reshape(-1), step_size=step_size,
