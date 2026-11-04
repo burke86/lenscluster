@@ -413,11 +413,12 @@ def _m0416_bergamini2023_cluster():
         # core_kpc (lo, hi): log-uniform.  v_disp (mean, std, lo, hi): normal, truncated.  cut_kpc: fixed.
         # Every site starts at its prior centre, so a run started here (or warm-started from one) is inside the priors.
         x, y = centre
+        sigma_x, sigma_y = centre_sigma if isinstance(centre_sigma, tuple) else (centre_sigma, centre_sigma)
         x_box = x_box or (x - half_width, x + half_width)
         y_box = y_box or (y - half_width, y + half_width)
         core_start = (core_kpc[0] * core_kpc[1]) ** 0.5                  # the log-uniform middle, where the core starts
-        priors = {"x_centre": PriorConfig("truncated_normal", mean=x, std=centre_sigma, lower=x_box[0], upper=x_box[1]),
-                  "y_centre": PriorConfig("truncated_normal", mean=y, std=centre_sigma, lower=y_box[0], upper=y_box[1]),
+        priors = {"x_centre": PriorConfig("truncated_normal", mean=x, std=sigma_x, lower=x_box[0], upper=x_box[1]),
+                  "y_centre": PriorConfig("truncated_normal", mean=y, std=sigma_y, lower=y_box[0], upper=y_box[1]),
                   "core_radius_kpc": PriorConfig("uniform", lower=core_kpc[0], upper=core_kpc[1], step=1.0),
                   "v_disp": PriorConfig("truncated_normal", mean=v_disp[0], std=v_disp[1], lower=v_disp[2], upper=v_disp[3])}
         e, angle = 0.0, 0.0
@@ -442,15 +443,27 @@ def _m0416_bergamini2023_cluster():
         canucs_halo("2", (20.3, -35.8), centre_sigma=2.0, half_width=5.0, e_box=(0.2, 0.9), angle_box=(90.0, 170.0),
                     **main_halo),                                                                                       # SW BCG
         canucs_halo("3", (-33.0, 9.0), centre_sigma=3.0, half_width=6.0, **group_halo),                                 # NW group, circular
-        # Halo 4's box reaches further south and east: in w250s100_fast_gpblocksall it sat in the (28, -54) corner of a +-6"
-        # box, and in nov3h one chain in four put it at y = -50 to -56.  The 5" width and the box to y = -62 let it move south;
-        # it stays clear of halo 2 (y < -42) and of the foreground galaxy (halo 5, at (32, -65.6)).
-        canucs_halo("4", (22.0, -48.0), centre_sigma=5.0, half_width=6.0, x_box=(16.0, 34.0), y_box=(-62.0, -42.0),
-                    e_box=(0.2, 0.9), angle_box=(0.0, 180.0), **group_halo),                                            # south, dark
+        # Halo 4 has room in the south (2026-11-03): centre width 10" in x on 0-40" and 5" in y on -62 to -40", core up to
+        # 150 kpc, ellipticity box to 0.94 with the smooth cap at 0.9.  With the image parities and the two southern halos
+        # below, this init gained 31 in log L and brought the lens-only image rms from 0.77" to 0.51" (nov3o_parity south_all).
+        canucs_halo("4", (22.0, -48.0), centre_sigma=(10.0, 5.0), half_width=6.0, x_box=(0.0, 40.0), y_box=(-62.0, -40.0),
+                    e_box=(0.2, 0.94), angle_box=(0.0, 180.0), e_soft_cap=0.9, core_kpc=(5.0, 150.0),
+                    **{k: v for k, v in group_halo.items() if k != "core_kpc"}),                                    # south, dark
         DPIEHaloConfig(id="5", x_centre=31.96420, y_centre=-65.55168, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.0001 * kpc,
                        cut_radius_kpc=33.6321 * kpc, v_disp=235.2454, z_lens=z,                                         # foreground galaxy
                        priors={"v_disp": PriorConfig("uniform", lower=50.0, upper=350.0, step=0.1),
                                "cut_radius_kpc": PriorConfig("uniform", lower=5.0 * kpc, upper=100.0 * kpc, step=0.1 * kpc)}),
+        # Two round southern components at the cluster redshift (2026-11-03), where the shared mass field had its strongest
+        # positive peaks: the z = 0.736 background galaxy of Chirivi et al. 2018 (F160W 19.8, at (38.5, -48.2)), and a dark
+        # lump at the field's strongest peak, (0.5, -57), with no galaxy within 5".
+        DPIEHaloConfig(id="los736", x_centre=38.5, y_centre=-48.2, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.0001 * kpc,
+                       cut_radius_kpc=float((5.0 * 100.0) ** 0.5) * kpc, v_disp=120.0, z_lens=z,
+                       priors={"v_disp": PriorConfig("uniform", lower=30.0, upper=350.0, step=0.1),
+                               "cut_radius_kpc": PriorConfig("uniform", lower=5.0 * kpc, upper=100.0 * kpc, step=0.1)}),
+        DPIEHaloConfig(id="dark_s", x_centre=0.5, y_centre=-57.0, ellipticite=0.0, angle_pos=0.0, core_radius_kpc=0.0001 * kpc,
+                       cut_radius_kpc=float((5.0 * 300.0) ** 0.5) * kpc, v_disp=150.0, z_lens=z,
+                       priors={"v_disp": PriorConfig("uniform", lower=30.0, upper=500.0, step=0.1),
+                               "cut_radius_kpc": PriorConfig("uniform", lower=5.0 * kpc, upper=300.0 * kpc, step=0.1)}),
         *halos[-4:],                        # the four fixed hot-gas clumps, identical in the CANUCS configuration
         # External shear, free amplitude and angle: not in the CANUCS configuration, but worth +35 in the lens log L for 2
         # parameters at the fast init (nov01b), and it moves the mass field's knee from 15" to 5" (.agents/gp-knee-plan.md).
