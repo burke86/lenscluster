@@ -40,3 +40,25 @@ def test_step_sizes_and_energies_are_saved_and_reloaded(synthetic_config):
     assert reloaded.diagnostics["adaptation"]["per_chain"] == adaptation["per_chain"]
     summary = (result.paths.final.tables / "run_summary.txt").read_text()
     assert "step size per chain" in summary and "E-BFMI per chain" in summary and "tree-depth cap" in summary
+
+
+def test_dense_member_offsets_join_the_hessian_seeded_block(synthetic_config):
+    """SamplingConfig.dense_member_offsets: the member-offset sites move from the diagonal into the dense block, whose
+    Hessian seed (chunked forward-over-reverse) is symmetric positive definite; the sources stay diagonal."""
+    import numpy as np
+    from lenscluster.evaluator import Evaluator
+    from lenscluster.sampling import block_mass_seed, posterior_model
+    from lenscluster.state import build_state
+    state = build_state(synthetic_config)
+    specs = state.parameter_specs
+    model = posterior_model(specs, Evaluator(state).log_likelihood)
+    theta = np.asarray(state.initial_theta, dtype=float)
+    n_offsets = sum(s.component_family == "member_scatter_offset" for s in specs)
+    assert n_offsets > 0
+    plain, _, d0 = block_mass_seed(model, specs, theta)
+    dense, inverse, d1 = block_mass_seed(model, specs, theta, dense_families=("member_scatter_offset",))
+    assert d1["global_dim"] == d0["global_dim"] + n_offsets and d1["latent_dim"] == d0["latent_dim"] - n_offsets
+    block = np.asarray(inverse[dense[0]])
+    assert block.shape == (d1["global_dim"], d1["global_dim"])
+    np.testing.assert_allclose(block, block.T, atol=1e-10)
+    assert np.linalg.eigvalsh(block).min() > 0

@@ -289,6 +289,10 @@ class SamplingConfig:
     thin: int = 1
     mass_matrix: str = "hessian"            # "hessian": dense global block seeded by the Hessian; "dense": dense global block, adapted
                                             # from the identity; "diagonal": NumPyro's default diagonal adaptation
+    # The member offsets join the dense block (global parameters + 2 x members), Hessian-seeded and adapted with it; the
+    # source coordinates stay diagonal.  The bright members' offsets trade off against sigma*, the core and the slopes
+    # (correlations to 0.74 on M0416), which the diagonal mass cannot follow (2026-11-03).
+    dense_member_offsets: bool = True
 
 
 @dataclass(frozen=True)

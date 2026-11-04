@@ -622,7 +622,8 @@ def run_final(config: LensClusterSolverConfig, init: InitResult) -> RunResult:
                              chain_method=runtime.nuts_chain_method, max_tree_depth=sampling.max_tree_depth,
                              target_accept=sampling.target_accept, initial_step_size=sampling.initial_step_size,
                              seed=runtime.seed, thin=sampling.thin, print_summary=runtime.numpyro_print_summary,
-                             mass_matrix=sampling.mass_matrix, log=log)
+                             mass_matrix=sampling.mass_matrix, dense_member_offsets=sampling.dense_member_offsets,
+                             stiffness=getattr(sampling, "stiffness_diagnostic", True), log=log)
         posterior.diagnostics["start_check"] = start_check
         artifacts.save_posterior(stage.artifacts, posterior)
         sampling_seconds = time.perf_counter() - sampling_started

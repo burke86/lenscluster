@@ -163,8 +163,15 @@ def unconstrained_from_theta(specs: list[ParameterSpec], theta: np.ndarray) -> d
     return unconstrain_fn(prior_model(specs), (), {}, constrained)
 
 
-def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarray) -> tuple[list, dict, dict[str, Any]]:
-    """Dense inverse mass for the global block from the Hessian at the reference; unit diagonal for latent sites."""
+HESSIAN_CHUNK = 16                      # Hessian columns per batched forward-over-reverse product (memory bound on all blocks)
+
+
+def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarray, *,
+                    dense_families: tuple[str, ...] = ()) -> tuple[list, dict, dict[str, Any]]:
+    """Dense inverse mass for the global block from the Hessian at the reference; unit diagonal for latent sites.
+    ``dense_families`` moves latent families into the dense block (SamplingConfig.dense_member_offsets: the member
+    offsets, whose bright members trade off against the relation's sigma*, core and slopes, which a diagonal cannot
+    follow)."""
     started = time.perf_counter()
     theta = np.asarray(reference_theta, dtype=float)
     if not np.all(np.isfinite(theta)):
@@ -172,7 +179,7 @@ def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarr
     sites = sample_sites(specs)
     global_names, latent_names = [], []
     for site in sites:
-        latent = [specs[i].component_family in LATENT_FAMILIES for i in site.indices]
+        latent = [specs[i].component_family in LATENT_FAMILIES and specs[i].component_family not in dense_families for i in site.indices]
         if any(latent) and not all(latent):
             raise ValueError(f"Sample site {site.name!r} mixes global and latent parameters")
         (latent_names if all(latent) else global_names).append(site.name)
@@ -203,7 +210,13 @@ def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarr
         return potential_energy(model, (), {}, current)
 
     try:
-        hessian = np.asarray(jax.jacfwd(jax.grad(global_potential))(global_vector), dtype=float)
+        # Forward-over-reverse Hessian-vector products, HESSIAN_CHUNK columns at a time: one jacfwd over a few hundred
+        # dimensions would hold that many copies of every intermediate (606 x 606 blocks under all-image covariances).
+        gradient_fn = jax.grad(global_potential)
+        products = jax.jit(jax.vmap(lambda tangent: jax.jvp(gradient_fn, (global_vector,), (tangent,))[1]))
+        basis = np.eye(int(global_vector.size))
+        hessian = np.concatenate([np.asarray(products(jnp.asarray(basis[k:k + HESSIAN_CHUNK])), dtype=float)
+                                  for k in range(0, basis.shape[0], HESSIAN_CHUNK)], axis=0).T
     except Exception as error:  # forward-over-reverse unsupported: central differences of the gradient
         diagnostics["autodiff_failure"] = repr(error)
         gradient = jax.jit(jax.grad(global_potential))
@@ -294,12 +307,14 @@ def adaptation_diagnostics(step_size: np.ndarray, energy: np.ndarray, accept: np
 
 def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, warmup: int, samples: int, chains: int,
              chain_method: str, max_tree_depth: int, target_accept: float, initial_step_size: float, seed: int,
-             thin: int = 1, print_summary: bool = False, mass_matrix: str = "hessian", log=print) -> PosteriorResults:
+             thin: int = 1, print_summary: bool = False, mass_matrix: str = "hessian", dense_member_offsets: bool = False,
+             stiffness: bool = True, log=print) -> PosteriorResults:
     """Run NUTS from one latent start per chain (starts has shape (chains, n_params))."""
     specs = state.parameter_specs
     model = posterior_model(specs, evaluator.log_likelihood)
     starts = np.asarray(starts, dtype=float).reshape(chains, -1)
-    dense_mass, inverse_mass, mass_diagnostics = block_mass_seed(model, specs, starts[0])
+    dense_families = ("member_scatter_offset",) if dense_member_offsets else ()
+    dense_mass, inverse_mass, mass_diagnostics = block_mass_seed(model, specs, starts[0], dense_families=dense_families)
     if mass_matrix == "hessian":
         log(f"[nuts] mass seed global_dim={mass_diagnostics.get('global_dim')} latent_dim={mass_diagnostics.get('latent_dim')} "
             f"cond_raw={mass_diagnostics.get('condition_raw', float('nan')):.3e} negative={mass_diagnostics.get('n_negative_eigenvalues')}")
