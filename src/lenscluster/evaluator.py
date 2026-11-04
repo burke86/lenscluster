@@ -129,6 +129,24 @@ class Evaluator:
                                                      beta_low_grid=knee.get("beta_low_grid") if shape == "broken_power_law" else None)
                 self.gp_blocks = str(getattr(state, "gp_blocks", "all"))
                 self.gp = gp_knee.block_layout(images, self.gp_blocks, weights, self.gp_tables)
+                # The second field's redshift weights: the cluster's (two_knee), 1 (knee_foreground: mass well in front), or
+                # those of a thin mass plane at knee["plane_redshift"] behind the cluster (knee_background): E(z_p, z_s) =
+                # D_ps / D_s relative to its value at the reference redshift, 0 for sources in front of the plane.
+                self.gp_weights2_per_image = self.gp_weights_per_image
+                if self.gp_knee_spectrum == "knee_foreground":
+                    self.gp_weights2_per_image = jnp.ones_like(self.gp_weights_per_image)
+                elif self.gp_knee_spectrum == "knee_background":
+                    from .jax_cosmology import flat_wcdm_lensing_efficiency, h0_from_config, om0_from_config, w0_from_config
+                    cosmo = (h0_from_config(state.cosmo_config), om0_from_config(state.cosmo_config), w0_from_config(state.cosmo_config))
+                    z_plane = float(knee["plane_redshift"])
+                    z_image = np.asarray(state.z_source_values, dtype=float)[np.asarray(images.z_index_per_image)]
+                    reference_z = float(getattr(state, "gp_reference_redshift", 2.0))
+                    efficiency = np.nan_to_num(np.asarray(flat_wcdm_lensing_efficiency(z_plane, jnp.asarray(z_image), *cosmo)), nan=0.0)
+                    reference_efficiency = float(np.asarray(flat_wcdm_lensing_efficiency(z_plane, jnp.asarray(max(reference_z, z_plane + 0.5)), *cosmo)))
+                    self.gp_weights2_per_image = jnp.asarray(efficiency / reference_efficiency)
+                if self.gp_knee_spectrum in ("knee_foreground", "knee_background"):
+                    slots, slot_mask = np.asarray(self.gp["slots"]), np.asarray(self.gp["mask"])
+                    self.gp["weights2"] = jnp.asarray(np.where(slot_mask, np.asarray(self.gp_weights2_per_image)[slots], 0.0))
                 # Blocks grouped by size (gp_knee.bucket_layouts), each group padded to its own largest block: the same
                 # likelihood at a fraction of the padded linear algebra (CANUCS system blocks: 11 ms against 47 ms per
                 # gradient).  On by default with several blocks; state.gp_group_blocks = False keeps one padded batch.
@@ -483,7 +501,7 @@ class Evaluator:
                       else jnp.asarray(getattr(self, "gp_knee_ell_fixed", None) or float("nan"), dtype=jnp.float64))
             sigma_img = jnp.sqrt(jnp.square(sigma_shared) + jnp.square(sigma_white))
             w = self.gp_weights_per_image
-            w2 = jnp.ones_like(w) if self.gp_knee_spectrum == "knee_foreground" else w
+            w2 = getattr(self, "gp_weights2_per_image", w)
             sigma_def = jnp.sqrt(jnp.square(w) * jnp.square(sigma_alpha) + jnp.square(w2) * jnp.square(sigma_alpha2) + jnp.square(self.gp_floor))
             return dict(sigma_def=sigma_def, sigma_extra=sigma_img, sigma_sel=zero, lambda_sel=one,
                         sigma_meas=jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_img)), sigma_img=sigma_img,
@@ -573,10 +591,11 @@ class Evaluator:
                 k_alpha = gp_knee.deflection_blocks(c_l, c_t, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha"]))
                 k_alpha = k_alpha * (w[:, :, None] * w[:, None, :])[..., None, None]
                 if self.gp_sigma_alpha2_index >= 0:
-                    # A second, independent knee field (two_knee: the same redshift weights; knee_foreground: weight 1).
+                    # A second, independent knee field (two_knee: the same redshift weights; knee_foreground: weight 1;
+                    # knee_background: a plane behind the cluster; the slot weights in layout["weights2"]).
                     c_l2, c_t2 = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee2"],
                                                            scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
-                    w2 = jnp.ones_like(w) if self.gp_knee_spectrum == "knee_foreground" else w
+                    w2 = layout.get("weights2", w)
                     k_alpha = k_alpha + (gp_knee.deflection_blocks(c_l2, c_t2, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha2"]))
                                          * (w2[:, :, None] * w2[:, None, :])[..., None, None])
                 if getattr(self, "gp_project_modes", ()):

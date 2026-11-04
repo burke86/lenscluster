@@ -336,8 +336,9 @@ def bucket_layouts(layout: dict) -> list[dict]:
         ids = np.flatnonzero(caps == cap)
         size, n_knots = int(counts[ids].max()), int(max(knots[ids].max(), 1))
         sub = {k: v for k, v in layout.items() if k in ("blocks", "pair_tables")}
-        for key in _PER_BLOCK_IMAGE_KEYS:
-            sub[key] = jnp.asarray(np.asarray(layout[key])[ids][:, :size])
+        for key in _PER_BLOCK_IMAGE_KEYS + ("weights2",):
+            if key in layout:
+                sub[key] = jnp.asarray(np.asarray(layout[key])[ids][:, :size])
         for key in _PER_BLOCK_PAIR_KEYS:
             if key in layout:
                 sub[key] = jnp.asarray(np.asarray(layout[key])[ids][:, :size, :size])

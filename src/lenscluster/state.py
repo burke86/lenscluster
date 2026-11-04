@@ -705,7 +705,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
             if spectrum != "power_law" and likelihood.gp_knee_fixed_arcsec is None:   # a power law has no knee; or it is fixed
                 gp_knee_index = len(specs)
                 specs.append(_error_scale_spec("images.gp_knee", "images_gp_knee", "images", "gp_knee", likelihood.gp_knee_prior))
-            if spectrum in ("two_knee", "knee_foreground"):
+            if spectrum in ("two_knee", "knee_foreground", "knee_background"):
                 gp_sigma_alpha2_index = len(specs)
                 specs.append(_error_scale_spec("images.gp_sigma_alpha2", "images_gp_sigma_alpha2", "images", "gp_sigma_alpha2",
                                                likelihood.gp_knee2_sigma_alpha_prior))
@@ -845,7 +845,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         gp_reference_redshift=float(config.likelihood.gp_reference_redshift),
         gp_blocks=str(config.likelihood.gp_blocks),
         gp_knee=dict(gamma=float(config.likelihood.gp_knee_gamma), project=tuple(str(m) for m in config.likelihood.gp_knee_project_modes),
-                     spectrum=spectrum, knee_fixed=config.likelihood.gp_knee_fixed_arcsec, ell_fixed=config.likelihood.gp_knee_ell_fixed_arcsec,
+                     spectrum=spectrum, plane_redshift=float(getattr(config.likelihood, "gp_knee2_plane_redshift", 0.7)), knee_fixed=config.likelihood.gp_knee_fixed_arcsec, ell_fixed=config.likelihood.gp_knee_ell_fixed_arcsec,
                      beta_low_grid=(float(config.likelihood.gp_knee_beta_low_prior[0]), float(config.likelihood.gp_knee_beta_low_prior[1]),
                                     int(round((float(config.likelihood.gp_knee_beta_low_prior[1]) - float(config.likelihood.gp_knee_beta_low_prior[0]))
                                               / float(config.likelihood.gp_knee_beta_low_step))) + 1),

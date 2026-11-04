@@ -457,6 +457,9 @@ class LikelihoodConfig:
     #   "broken_power_law": P = x^-beta_low (1 + x^gamma)^-((gamma - beta_low) / gamma), x = k / k_b, beta_low sampled
     #     (images.gp_knee_beta_low, uniform on gp_knee_beta_low_prior), gamma the fixed high-k slope; beta_low = 0 is the knee;
     #   "power_law": P = k^-gamma between the cutoffs, no knee site (gamma sampled on gp_knee_gamma_prior);
+    #   "knee_background": a second knee field on a thin mass plane at gp_knee2_plane_redshift behind the cluster, weighted by
+    #     D_ps / D_s (zero for sources in front of it), images.gp_sigma_alpha2 and images.gp_knee2 (first order: the plane's
+    #     coupling to the cluster deflection is left out);
     #   "knee_foreground": a second knee field with redshift weight 1 for every source (mass well in front of the cluster,
     #     whose D_ps / D_s is close to 1), images.gp_sigma_alpha2 and images.gp_knee2.
     # The image solver's mean-deflection correction is implemented for "knee" only.
@@ -465,6 +468,7 @@ class LikelihoodConfig:
     gp_knee2_sigma_alpha_start_arcsec: float = 0.05
     gp_knee2_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=3.0, log_sigma=0.5, upper=10.0))
     gp_knee2_start_arcsec: float = 3.0
+    gp_knee2_plane_redshift: float = 0.7            # knee_background: the redshift of the background mass plane
     gp_knee_beta_low_prior: tuple[float, float] = (-1.0, 3.5)
     gp_knee_beta_low_step: float = 0.25
     gp_knee_beta_low_start: float = 0.0
@@ -691,8 +695,9 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     if not (0.0 < float(lam_lo) < float(lam_hi)) or int(lam_n) < 8:
         raise ValueError("likelihood.gp_knee_lambda_grid must be (min, max, count) with 0 < min < max and count >= 8.")
     spectrum = config.likelihood.gp_knee_spectrum
-    if spectrum not in {"knee", "two_knee", "broken_power_law", "power_law", "knee_foreground"}:
-        raise ValueError("likelihood.gp_knee_spectrum must be 'knee', 'two_knee', 'broken_power_law', 'power_law' or 'knee_foreground'.")
+    if spectrum not in {"knee", "two_knee", "broken_power_law", "power_law", "knee_foreground", "knee_background"}:
+        raise ValueError("likelihood.gp_knee_spectrum must be 'knee', 'two_knee', 'broken_power_law', 'power_law', 'knee_foreground' "
+                         "or 'knee_background'.")
     if config.likelihood.gp_kernel == "knee" and spectrum != "knee":
         if config.likelihood.gp_sigma_alpha_prior is None:
             raise ValueError(f"likelihood.gp_knee_spectrum {spectrum!r} needs the mass field (gp_sigma_alpha_prior).")
@@ -707,15 +712,17 @@ def validate_config(config: LensClusterSolverConfig) -> None:
                 raise ValueError("likelihood.gp_knee_beta_low_step must divide gp_knee_beta_low_prior into at least 2 intervals.")
             if config.likelihood.gp_knee_gamma_prior is not None:
                 raise ValueError("likelihood.gp_knee_spectrum 'broken_power_law' fixes the high-k slope: set gp_knee_gamma_prior to None.")
-        if spectrum in {"two_knee", "knee_foreground"}:
+        if spectrum in {"two_knee", "knee_foreground", "knee_background"}:
             upper2 = config.likelihood.gp_knee2_prior.upper
             if upper2 is None or float(upper2) > float(config.likelihood.gp_knee_lambda_grid[1]):
                 raise ValueError("likelihood.gp_knee2_prior.upper must be set and at most the largest tabulated knee wavelength.")
             if spectrum == "two_knee" and (config.likelihood.gp_knee_prior.lower is None or float(upper2) > float(config.likelihood.gp_knee_prior.lower)):
                 raise ValueError("likelihood.gp_knee_spectrum 'two_knee': gp_knee2_prior.upper must not exceed gp_knee_prior.lower, "
                                  "so the small and the large knee cannot swap.")
-            if spectrum == "knee_foreground" and config.likelihood.gp_knee_project_modes:
-                raise ValueError("likelihood.gp_knee_project_modes assume one redshift weighting; not with 'knee_foreground'.")
+            if spectrum in {"knee_foreground", "knee_background"} and config.likelihood.gp_knee_project_modes:
+                raise ValueError(f"likelihood.gp_knee_project_modes assume one redshift weighting; not with {spectrum!r}.")
+            if spectrum == "knee_background" and not float(config.likelihood.gp_knee2_plane_redshift) > float(config.model.large_halos[0].z_lens):
+                raise ValueError("likelihood.gp_knee2_plane_redshift must lie behind the cluster.")
             for name in ("gp_knee2_sigma_alpha_start_arcsec", "gp_knee2_start_arcsec"):
                 _positive(f"likelihood.{name}", getattr(config.likelihood, name))
     for start, prior, label in ((config.likelihood.gp_knee_start_arcsec, config.likelihood.gp_knee_prior, "gp_knee"),
