@@ -338,6 +338,9 @@ class ScalingModelConfig:
     # Student-t the scatter is the scale; the standard deviation is scatter * sqrt(dof / (dof - 2)).
     member_deviation_tail: str = "normal"
     member_deviation_dof: float = 4.0
+    # Member core radius at the pivot (fit_corekpc): log-normal with this median (kpc) and log width, on 0.01-10 kpc.
+    corekpc_prior_median: float = 0.15
+    corekpc_prior_log_sigma: float = 0.7
     radius_deviation_members: str = "exact"  # which members' radius deviations act on the model: "exact" (far-field members keep
                                             # the relation radius, so they cannot cross the far-field guard) or "all"
     fit_corekpc: bool = True                # sample the member core radius at the pivot; False fixes it at the population's corekpc
@@ -776,6 +779,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("scaling.member_deviation_tail must be 'normal' or 'student_t'.")
     if not float(scaling.member_deviation_dof) > 2.0:
         raise ValueError("scaling.member_deviation_dof must exceed 2 (a finite variance).")
+    if not (0.01 < float(scaling.corekpc_prior_median) < 10.0) or not float(scaling.corekpc_prior_log_sigma) > 0.0:
+        raise ValueError("scaling.corekpc_prior_median must lie in (0.01, 10) kpc and corekpc_prior_log_sigma be positive.")
     for halo in config.model.large_halos:
         cap = getattr(halo, "ellipticity_soft_cap", None)
         if cap is None:

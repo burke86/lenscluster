@@ -84,3 +84,12 @@ def test_the_ellipticity_cap_is_flat_below_and_smooth_above(synthetic_config):
 def test_a_cap_above_the_box_is_refused(synthetic_config):
     with pytest.raises(ValueError, match="ellipticity_soft_cap"):
         _capped(synthetic_config, cap=0.95, upper=0.94).validate()
+
+
+def test_member_core_prior_follows_the_scaling_config(synthetic_config):
+    default = next(s for s in build_state(synthetic_config.validate()).parameter_specs if s.field == "corekpc")
+    np.testing.assert_allclose([np.exp(default.mean), default.std], [0.15, 0.7])
+    config = replace(synthetic_config, scaling=replace(synthetic_config.scaling, corekpc_prior_median=0.3, corekpc_prior_log_sigma=1.0))
+    relaxed = next(s for s in build_state(config.validate()).parameter_specs if s.field == "corekpc")
+    np.testing.assert_allclose([np.exp(relaxed.mean), relaxed.std], [0.3, 1.0])
+    assert (relaxed.lower, relaxed.upper) == (default.lower, default.upper)

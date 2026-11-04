@@ -387,8 +387,8 @@ def build_scaling_parameter_specs(potfiles: list[dict[str, Any]], scaling: Any, 
             if prior["transform_kind"] == "log_positive":
                 if field_name == "corekpc":
                     lower, upper = float(np.log(physical_lower)), float(np.log(physical_upper))
-                    physical_mean = float(SOLVER_POTFILE_DEFAULTS["corekpc"]["median"])
-                    mean, std = float(np.log(physical_mean)), float(prior["latent_std"])
+                    physical_mean = float(getattr(scaling, "corekpc_prior_median", SOLVER_POTFILE_DEFAULTS["corekpc"]["median"]))
+                    mean, std = float(np.log(physical_mean)), float(getattr(scaling, "corekpc_prior_log_sigma", prior["latent_std"]))
                 else:
                     lower, upper, mean, std = transform_positive_prior_to_log_space(
                         prior["prior_kind"], physical_lower, physical_upper, physical_mean, physical_std,

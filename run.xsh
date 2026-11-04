@@ -517,7 +517,9 @@ def _m0416_bergamini2023_cluster():
                                   # pushed the normal radius scatter to 1.6-1.8 against its 0.3 prior (2026-11-03).
                                   scaling=replace(ScalingModelConfig.neutral(fit_corekpc=True), alpha_sigma_prior_std=0.05,
                                                   alpha_sigma_prior_lower=0.1, alpha_sigma_prior_upper=0.4,
-                                                  member_deviation_tail="student_t", member_deviation_dof=4.0)),
+                                                  member_deviation_tail="student_t", member_deviation_dof=4.0,
+                                                  # the member core sat at 0.67-0.77 kpc (z +2.1 to +2.3) at the starts
+                                                  corekpc_prior_log_sigma=1.0)),
     }
 
 
