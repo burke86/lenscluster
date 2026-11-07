@@ -44,6 +44,32 @@ AGENTS.md
 
 validation_runs/
 
-# Catalogs are tracked whatever their extension (the JSON, TXT and FITS rules above do not apply under catalogs/)
+# Catalogs: tracked whatever the text extension (the rules above would drop .cat, .dat, .par, .csv, .json, .txt), but
+# never the large or binary files: FITS, images, documents, archives, numpy and pickle dumps, Lenstool chains.
 !catalogs/**
 catalogs/**/*.fits
+catalogs/**/*.fits.gz
+catalogs/**/*.fit
+catalogs/**/*.fz
+catalogs/**/*.png
+catalogs/**/*.jpg
+catalogs/**/*.jpeg
+catalogs/**/*.gif
+catalogs/**/*.pdf
+catalogs/**/*.zip
+catalogs/**/*.gz
+catalogs/**/*.tgz
+catalogs/**/*.tar
+catalogs/**/*.bz2
+catalogs/**/*.xz
+catalogs/**/*.7z
+catalogs/**/*.npy
+catalogs/**/*.npz
+catalogs/**/*.pkl
+catalogs/**/*.h5
+catalogs/**/*.hdf5
+catalogs/**/*.parquet
+catalogs/**/*.feather
+catalogs/**/*.sqlite
+catalogs/**/bayes.dat
+catalogs/**/index.html*
