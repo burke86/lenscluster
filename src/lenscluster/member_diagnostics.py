@@ -184,7 +184,9 @@ def compute_member_diagnostics(state, evaluator, posterior, config, *, log=print
             k = .5*np.trace(u, axis1=-2, axis2=-1)
             own = np.asarray(state.members.component_indices)[start:start+len(points)]
             kappas.extend(k.sum(axis=0)-k[own, np.arange(len(points))])
-        table['environment_kappa'] = kappas
+        from .reporting_fields import shared_grf_fields
+        _, grf_u = shared_grf_fields(evaluator, samples[0], z, xy)
+        table['environment_kappa'] = np.asarray(kappas) + .5*np.trace(grf_u, axis1=-2, axis2=-1)
         variables['environment_kappa'] = rf'Environmental $\kappa$ ($z_s={z:g}$; self excluded)'
     packed = evaluator.packed_state(best_physical)[0]
     profile = np.asarray(state.packed_lens_spec.profile_type)

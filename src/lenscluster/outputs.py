@@ -140,7 +140,7 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
             render_cluster_mass_figure(evaluator, best, image_df, recovery["image_recovery_extra_images"], imaging,
                                        z_source=z_crit, kappa_true_fits=config.truth.kappa_true_fits,
                                        figure_path=plots.figure_path(figures, f"image_catalog_family_cluster_mass{image_config.figure_suffix}.pdf", prefix),
-                                       tables_dir=tables, fits_dir=paths.fits, artifact_suffix=image_config.figure_suffix, position_contours=position_contours)
+                                       tables_dir=tables, fits_dir=paths.fits, artifact_suffix=image_config.figure_suffix, position_contours=position_contours, posterior=posterior)
             log(f"[outputs] cluster mass figure rendered from {imaging[3]} imaging ({image_config.image_dir})")
             if fold_data is None:
                 fold_data = compute_fold_diagnostics(config, state, evaluator, posterior, log=log)

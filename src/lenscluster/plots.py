@@ -1,5 +1,6 @@
 """Figures for one run: image recovery, residual histogram, corner, scaling relation, critical curves, truth recovery."""
 from __future__ import annotations
+from .plot_style import CRITICAL_COLOR
 
 import math
 from pathlib import Path
@@ -322,12 +323,15 @@ def plot_critical_curves(state: ModelState, evaluator: Evaluator, theta: np.ndar
     pixel = np.arange(n, dtype=float)
     physical = evaluator.physical(jnp.asarray(theta))
     packed = evaluator.packed_state_for_z(physical, z_source)
-    for field, color in ((1.0 - kappa - shear, "black"), (1.0 - kappa + shear, "0.5")):
+    for field, linestyle in ((1.0 - kappa - shear, "-"), (1.0 - kappa + shear, "--")):
+        color = CRITICAL_COLOR
         for vertices in find_contours(field, 0.0):
             cx, cy = np.interp(vertices[:, 1], pixel, axis), np.interp(vertices[:, 0], pixel, axis)
-            image_ax.plot(cx, cy, color=color, linewidth=1.0)
+            image_ax.plot(cx, cy, color=color, linestyle=linestyle, linewidth=1.0)
             xy = np.stack((cx, cy), -1)
-            beta = xy - evaluator.total_fields_at(xy, packed)[0]
+            from .reporting_fields import shared_grf_fields
+            correction, _ = shared_grf_fields(evaluator, theta, z_source, xy)
+            beta = xy - evaluator.total_fields_at(xy, packed)[0] - correction
             source_ax.scatter(beta[:, 0], beta[:, 1], color=color, s=2, alpha=0.75, linewidths=0.0)
     cmap = plt.get_cmap("tab20", max(1, len(state.family_data)))
     for idx, family in enumerate(state.family_data):
@@ -345,13 +349,6 @@ def plot_critical_curves(state: ModelState, evaluator: Evaluator, theta: np.ndar
 
 
 # ----------------------------------------------------------------------------- truth recovery
-def _shifted_diverging_colormap(name: str, zero_position: float, samples: int = 256) -> LinearSegmentedColormap:
-    base = plt.get_cmap(name)
-    positions = np.linspace(0.0, 1.0, samples)
-    shifted = np.where(positions < zero_position, 0.5 * positions / zero_position, 0.5 + 0.5 * (positions - zero_position) / (1.0 - zero_position))
-    return LinearSegmentedColormap.from_list(f"{name}_shifted", list(zip(positions, base(shifted))))
-
-
 def plot_truth_recovery_residuals(recovery: dict[str, Any], image_df: pd.DataFrame | None, path: Path) -> Path | None:
     truth, model = recovery["truth"], recovery["model"]
     if "abs_mu" not in truth:
@@ -366,7 +363,9 @@ def plot_truth_recovery_residuals(recovery: dict[str, Any], image_df: pd.DataFra
 
     residuals = (fractional(model["kappa"]["median"], truth["kappa"]), fractional(model["abs_mu"]["median"], truth["abs_mu"]))
     norm = Normalize(vmin=-1.0, vmax=2.0, clip=True)
-    cmap = _shifted_diverging_colormap("RdBu_r", 1.0 / 3.0)
+    # Crop the symmetric [-2, 2] palette, rather than stretching its blue half.
+    cmap = LinearSegmentedColormap.from_list(
+        "RdBu_r_cropped", plt.get_cmap("RdBu_r")(np.linspace(0.25, 1.0, 768)), N=768)
     cmap.set_bad("#e8e8e8")
     style = {"font.size": 9, "axes.labelsize": 9, "xtick.labelsize": 8, "ytick.labelsize": 8, "legend.fontsize": 8, "axes.linewidth": 0.8, "pdf.fonttype": 42}
     with plt.rc_context(style):

@@ -123,7 +123,8 @@ def write_magnification_recovery(truth, images, reference, z_lens, cosmology, tr
     points.to_csv(tables / 'magnification_recovery_images.csv', index=False)
     metadata = dict(map_source_redshift=float(truth['z_source']), truth_field_reference_redshifts=reference_z,
                     truth_paths=list(map(str, paths)), region='convex hull of observed images; finite true |mu| >= 1',
-                    map_model='coordinatewise median parameter vector', image_model='best-fit exact kernels at observed positions',
+                    map_model='coordinatewise median parameter vector',
+                    map_grf_conditional_mean=truth.get('grf_conditional_mean', 'not recorded'), image_model='best-fit exact kernels at observed positions',
                     image_redshift='each family source redshift', truth_interpolation='native kappa/shear bilinear interpolation, then lens-efficiency scaling, then inverse determinant',
                     error_bars='spatial 16-84 percentiles, not posterior uncertainty or standard error',
                     bin_edges=np.geomspace(1, 100, 13).tolist(), min_bin_pixels=8,

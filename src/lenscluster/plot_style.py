@@ -1,5 +1,8 @@
 """Shared publication-sized overrides for style.mplstyle."""
 
+# Critical curves and their uncertainty bands across all production figures.
+CRITICAL_COLOR = '#559DFF'
+
 # Scale the shared stylesheet for single-column figures and a 7.1-inch panel array.
 PAPER_STYLE = {"font.size": 10, "axes.labelsize": 10, "legend.fontsize": 8.5,
                "xtick.labelsize": 8, "ytick.labelsize": 8, "axes.linewidth": .9,

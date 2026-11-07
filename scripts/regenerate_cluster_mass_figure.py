@@ -73,7 +73,7 @@ def main():
     print(f"Rendering saved draw {best_index}: {output}", flush=True)
     provenance = render_cluster_mass_figure(evaluator, theta, catalog, extra, imaging,
         z_source=float(config.truth.caustic_source_redshift), kappa_true_fits=config.truth.kappa_true_fits,
-        figure_path=output, tables_dir=final / "tables", fits_dir=final / "fits", artifact_suffix=config.image_catalog.figure_suffix, position_contours=position_contours)
+        figure_path=output, tables_dir=final / "tables", fits_dir=final / "fits", artifact_suffix=config.image_catalog.figure_suffix, position_contours=position_contours, posterior=posterior)
     print(json.dumps(provenance["arc_directions"], indent=2))
 
 

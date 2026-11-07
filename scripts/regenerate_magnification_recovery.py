@@ -31,6 +31,12 @@ def main():
         provenance = json.loads((final / 'tables/image_catalog_mass_provenance.json').read_text())
         t, header = fits.getdata(final / 'fits/truth_recovery_mu_true.fits', header=True)
         m, mh = fits.getdata(final / 'fits/truth_recovery_mu_model_median.fits', header=True)
+        # Older cached grids can be parametric-only even when the fit has a GRF.
+        likelihood = cfg.get('likelihood', {})
+        if (likelihood.get('gp_kernel') == 'knee' and likelihood.get('gp_blocks') == 'all'
+                and not mh.get('GRFMEAN', False)):
+            raise ValueError('Cached model maps do not record a shared GRF. Run '
+                             'scripts/regenerate_truth_recovery.py on this run first.')
         import numpy as np
         if t.shape != m.shape or header['ZSOURCE'] != mh['ZSOURCE']:
             raise ValueError('Saved truth and model grids differ')
@@ -39,7 +45,7 @@ def main():
         mx, my = grid_arcsec(state, WCS(mh), m.shape)
         np.testing.assert_allclose(x, mx, rtol=0, atol=1e-8)
         np.testing.assert_allclose(y, my, rtol=0, atol=1e-8)
-        truth = dict(x=x, y=y, truth={'mu': t}, model={'mu': {'median': m}}, z_source=header['ZSOURCE'])
+        truth = dict(x=x, y=y, grf_conditional_mean=bool(mh.get('GRFMEAN', False)), truth={'mu': t}, model={'mu': {'median': m}}, z_source=header['ZSOURCE'])
         images = pd.read_csv(final / 'tables/image_fit_quality.csv', dtype={'image_label': str, 'family_id': str})
         write_magnification_recovery(truth, images, reference, provenance['z_lens'], astropy_cosmology(cosmo),
                                      SimpleNamespace(**cfg['truth']), final / 'figures', final / 'tables', cfg['paths']['figure_prefix'])

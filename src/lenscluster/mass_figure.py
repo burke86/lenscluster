@@ -20,6 +20,7 @@ from . import cutouts
 from .evaluator import Evaluator
 from .exact_images import astropy_cosmology
 from .truth_recovery import lens_quantities, load_truth_fits
+from .reporting_fields import shared_grf_fields
 
 MIN_OVERVIEW_SIZE_ARCSEC = 40.0
 CONTOUR_LEVELS_MSUN_PER_KPC2 = np.array([0.5, 1.0, 2.0, 4.0]) * 1.0e9
@@ -44,7 +45,14 @@ def _stretch_directions(jacobian):
 def arc_direction_table(evaluator: Evaluator, theta: np.ndarray, catalog: pd.DataFrame) -> pd.DataFrame:
     """Exact image-plane minimum right-singular vectors, matched by stable image label."""
     fields = evaluator.fields(evaluator.physical(theta), force_exact=True, derivative=False)
-    directions, singular, defined = _stretch_directions(fields["jacobian"])
+    jacobian = np.asarray(fields["jacobian"]).copy()
+    if getattr(evaluator, "gp_knee", False):
+        correction = evaluator.gp_deflection_correction(theta)
+        if correction is not None:
+            images = evaluator.state.images
+            terms = correction(images.x_obs, images.y_obs, images.family_index_per_image)
+            jacobian -= np.stack(terms[2:], axis=-1).reshape(-1, 2, 2)
+    directions, singular, defined = _stretch_directions(jacobian)
     images = evaluator.state.images
     labels = list(map(str, images.image_labels))
     if len(set(labels)) != len(labels) or catalog["image_label"].astype(str).duplicated().any():
@@ -69,6 +77,13 @@ def extra_arc_direction_table(evaluator: Evaluator, theta: np.ndarray, extra: pd
         family = families[str(family_id)]
         packed = evaluator.packed_state_for_z(physical, float(family.z_source))
         _, u = evaluator.total_fields_at(rows[["x_model_arcsec", "y_model_arcsec"]].to_numpy(float), packed)
+        if getattr(evaluator, "gp_knee", False):
+            correction = evaluator.gp_deflection_correction(theta)
+            if correction is not None:
+                index = list(map(str, evaluator.state.images.family_ids)).index(str(family_id))
+                terms = correction(rows.x_model_arcsec.to_numpy(), rows.y_model_arcsec.to_numpy(),
+                                   np.full(len(rows), index, dtype=int))
+                u = u + np.stack(terms[2:], axis=-1).reshape(-1, 2, 2)
         directions, singular, defined = _stretch_directions(np.eye(2) - u)
         result.loc[rows.index, ["e_arc_x", "e_arc_y"]] = directions
         result.loc[rows.index, ["s_arc", "s_perp"]] = singular[:, ::-1]
@@ -171,7 +186,7 @@ def convergence_maps(evaluator: Evaluator, theta: np.ndarray, geometry: dict[str
     sigma_crit = float((const.c ** 2 / (4 * np.pi * const.G) * ds / (dl * dls)).to_value(u.Msun / u.kpc ** 2))
     kpc_per_arcsec = float(dl.to_value(u.kpc) * np.pi / (180 * 3600))
     x, y = geometry["x"], geometry["y"]
-    model = lens_quantities(evaluator, theta, z_source, x.ravel(), y.ravel())["kappa"].reshape(x.shape)
+    model = lens_quantities(evaluator, theta, z_source, x.ravel(), y.ravel(), include_grf=False)["kappa"].reshape(x.shape)
     if not np.isfinite(model).all():
         raise ValueError("Model convergence is nonfinite in the displayed rectangle")
     truth = None
@@ -300,21 +315,42 @@ def overview_axes(fig, ax, images, bands, display, display_image, catalog, extra
               facecolor="black", edgecolor="none", framealpha=0.65, borderpad=0.6, handletextpad=0.5, handlelength=1.2)
 
 
+def shared_grf_convergence(evaluator, theta, geometry, z_source, chunk=384):
+    """Conditional mean convergence at the overview redshift, with the fitted projection."""
+    if not (getattr(evaluator, "gp_knee", False) and evaluator.state.gp_blocks == "all"):
+        return None
+    if evaluator.gp_deflection_correction(theta) is None:
+        return None
+    points = np.column_stack([geometry["x"].ravel(), geometry["y"].ravel()])
+    _, jacobian = shared_grf_fields(evaluator, theta, z_source, points, chunk=chunk)
+    return (.5 * np.trace(jacobian, axis1=-2, axis2=-1)).reshape(geometry["x"].shape)
+
+
 def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog: pd.DataFrame, extra: pd.DataFrame, imaging, *,
-                               z_source: float, kappa_true_fits: str | Path | None, figure_path: Path, tables_dir: Path, fits_dir: Path, artifact_suffix: str = "", position_contours=None) -> dict[str, Any]:
+                               z_source: float, kappa_true_fits: str | Path | None, figure_path: Path, tables_dir: Path, fits_dir: Path, artifact_suffix: str = "", position_contours=None, posterior=None) -> dict[str, Any]:
     """Write the overview-plus-mass-panels figure, the strip profiles and the convergence FITS. Returns provenance."""
     images, bands, display, cluster = imaging
     display_image = images[cutouts.rgb_reference_band(bands)]
     geometry = overview_geometry(display_image, catalog, extra, evaluator.state.reference)
     arc_directions = arc_direction_table(evaluator, theta, catalog)
     extra_directions = extra_arc_direction_table(evaluator, theta, extra if extra is not None else pd.DataFrame())
-    model, truth, physical = convergence_maps(evaluator, theta, geometry, z_source, kappa_true_fits)
+    map_theta = theta
+    if posterior is not None:
+        from .reporting_fields import posterior_median_theta
+        map_theta = posterior_median_theta(evaluator, posterior)
+    model, truth, physical = convergence_maps(evaluator, map_theta, geometry, z_source, kappa_true_fits)
     sigma_crit = physical["sigma_crit_msun_per_kpc2"]
     sigma_angle = sigma_crit * physical["kpc_per_arcsec"] ** 2
     x, y, xe, ye = (geometry[k] for k in ("x", "y", "xe", "ye"))
     bounds = (float(xe.min()), float(xe.max()), float(ye.min()), float(ye.max()))
-    maps = {"model": model, **({"truth": truth} if truth is not None else {})}
-    provenance: dict[str, Any] = {"cluster": cluster, "bands": list(bands), **physical}
+    grf = shared_grf_convergence(evaluator, map_theta, geometry, z_source)
+    maps = {"model": model, **({"model_grf": model + grf} if grf is not None else {}), **({"truth": truth} if truth is not None else {})}
+    provenance: dict[str, Any] = {"cluster": cluster, "bands": list(bands), "map_statistic": "coordinatewise physical posterior median" if posterior is not None else "supplied model", **physical}
+    if grf is not None:
+        provenance["grf"] = dict(quantity="conditional mean at the displayed model; not posterior mean field",
+            projection=list(getattr(evaluator, "gp_project_modes", ())),
+            map_redshift=z_source, reference_redshift=evaluator.state.gp_reference_redshift,
+            minimum_kappa=float(grf.min()), maximum_kappa=float(grf.max()))
     profiles, profile, yprofile = {}, pd.DataFrame(), pd.DataFrame()
     for name, values in maps.items():
         integral = values[::1 if ye[-1] > ye[0] else -1, ::1 if xe[-1] > xe[0] else -1]
@@ -336,6 +372,10 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
     header = geometry["wcs"].to_header()
     header["ZSOURCE"] = physical["z_source"]
     fits.writeto(fits_dir / f"image_catalog_mass_kappa_model{artifact_suffix}.fits", model, header, overwrite=True)
+
+    if grf is not None:
+        fits.writeto(fits_dir / f"image_catalog_mass_kappa_grf{artifact_suffix}.fits", grf, header, overwrite=True)
+        fits.writeto(fits_dir / f"image_catalog_mass_kappa_model_grf{artifact_suffix}.fits", model + grf, header, overwrite=True)
 
     covariance_curves = None
     if cutouts.rgb_instrument(bands) == "jwst" and position_contours is None:
@@ -362,7 +402,7 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
     rx, ry = grid_pixels(geometry, x, y)
     selected = available(model * sigma_crit)
     if len(selected):
-        contours = ax.contour(rx, ry, model * sigma_crit / 1e9, levels=selected / 1e9, colors="#D2BC82", linewidths=0.65, alpha=0.85, zorder=2)
+        contours = ax.contour(rx, ry, model * sigma_crit / 1e9, levels=selected / 1e9, colors="#E69F00" if grf is not None else "#D2BC82", linestyles="--" if grf is not None else "-", linewidths=0.65, alpha=0.85, zorder=2)
         n = geometry["resolution"]
         positions = []
         for segments in contours.allsegs:
@@ -372,11 +412,26 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
                 positions.append(tuple(longest[len(longest) // 3]))
         if positions:
             ax.clabel(contours, manual=positions, fmt="%g", fontsize=7, inline_spacing=3)
-    styles = {"model": ("#2878A5", "-", 1.5), "truth": ("0.2", "--", 1.2)}
+    if grf is not None:
+        total_levels = available((model + grf) * sigma_crit)
+        if len(total_levels):
+            ax.contour(rx, ry, (model + grf) * sigma_crit / 1e9, levels=total_levels / 1e9,
+                       colors="#CC79A7", linewidths=.7, zorder=3)
+        legend = ax.get_legend()
+        handles = list(legend.legend_handles)
+        labels = [text.get_text() for text in legend.get_texts()]
+        handles += [Line2D([], [], color="#E69F00", ls="--", lw=.8),
+                    Line2D([], [], color="#CC79A7", lw=.8)]
+        labels += ["Parametric only", "Parametric + GRF"]
+        ax.legend(handles, labels, loc="upper right", fontsize=7, labelcolor="white", frameon=True,
+                  facecolor="black", edgecolor="none", framealpha=.65)
+    styles = {"model": ("#E69F00", "--", 1.2) if grf is not None else ("#2878A5", "-", 1.5),
+              "model_grf": ("#CC79A7", "-", 1.5), "truth": ("0.2", "--", 1.2)}
+    names = {"model": "Parametric only" if grf is not None else "Model", "model_grf": "Parametric + GRF", "truth": "Truth"}
     for name, values in maps.items():
         color, ls, lw = styles[name]
         px, py = profiles[name]
-        lower.plot(centers, px / 1e12, color=color, ls=ls, lw=lw, label=name.title())
+        lower.plot(centers, px / 1e12, color=color, ls=ls, lw=lw, label=names[name])
         right.plot(py / 1e12, yc, color=color, ls=ls, lw=lw)
         corner_levels = available(values * sigma_crit)
         if len(corner_levels):
@@ -403,7 +458,7 @@ def render_cluster_mass_figure(evaluator: Evaluator, theta: np.ndarray, catalog:
     corner.set_ylabel(r"$y$ (arcsec)", fontsize=9)
     corner.yaxis.set_label_position("right")
     corner.yaxis.tick_right()
-    lower.legend(loc="upper right", fontsize=9, frameon=True, facecolor="white", edgecolor="none", framealpha=0.85)
+    lower.legend(loc="upper right", fontsize=7 if grf is not None else 9, frameon=True, facecolor="white", edgecolor="none", framealpha=0.85)
     lower.xaxis.set_major_locator(MaxNLocator(5, prune="both"))
     lower.yaxis.set_major_locator(MaxNLocator(4))
     right.xaxis.set_major_locator(MaxNLocator(3))

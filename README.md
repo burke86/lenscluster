@@ -291,3 +291,32 @@ unknown extra images elsewhere are not exhaustively discovered. Numerical draws
 and recovery counts are cached in `posterior_overview_positions.npz` and `.json`.
 HST overviews retain their existing markers. Regenerate with
 `scripts/regenerate_cluster_mass_figure.py RUN_DIRECTORY --imaging jwst`.
+
+Shared knee-spectrum GRF runs (`gp_blocks="all"`) also write
+`<prefix>_total_grf_dimensionless_power.pdf` and
+`<prefix>_gp_correction_correlation.pdf` with the standard final figures.
+These use the highest-log-probability saved draw, retaining its source positions
+and field projection. The spectrum is the homogeneous kernel before projection.
+The numerical maps and draw provenance are saved in `final/tables/conditional_field_maps.*`.
+Regenerate them with the other GP diagnostics using
+`scripts/make_gp_illustrations.py <run_directory>` through the authorized Python interpreter.
+System- or family-block runs do not define a single shared map and skip these figures.
+
+For shared knee-spectrum GRF runs, total-model truth maps, magnification recovery,
+projected aperture profiles, critical curves and caustics include the conditional
+mean GRF at each evaluated posterior draw. Image-position recovery already uses
+that same correction. Image-stretch overlays include its Jacobian at the image's
+family redshift. Explicit parametric/component comparisons remain labeled as such;
+parameter posteriors and likelihood-covariance diagnostics retain their statistical
+definitions. These fields are conditional means, not additional random GRF draws.
+Truth-map FITS headers record `GRFMEAN` and `GRFTYPE`. Old cached maps must be
+recomputed before regenerating dependent magnification figures:
+
+```bash
+MPLCONFIGDIR=/tmp/lenscluster-mpl NUMBA_CACHE_DIR=/tmp/lenscluster-numba PYTHONPATH=src \
+/home/dutra/.conda/envs/lenstronomy/bin/python scripts/regenerate_truth_recovery.py RUN_DIRECTORY
+```
+
+Runs without a shared mass field retain their parametric maps; independent
+family/system GPs cannot be interpreted as a single cluster-wide mass correction.
+

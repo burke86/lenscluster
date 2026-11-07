@@ -18,6 +18,7 @@ from .config import TruthRecoveryConfig
 from .evaluator import Evaluator
 from .model import ModelState
 from .utils import progress
+from .reporting_fields import shared_grf_fields
 
 QUANTITIES = ("kappa", "gamma1", "gamma2", "detA", "mu", "abs_mu")
 APERTURE_CENTER_SMOOTHING_SIGMA_PIX = 2.0
@@ -76,11 +77,15 @@ def grid_arcsec(state: ModelState, wcs: WCS, shape: tuple[int, int]) -> tuple[np
     return delta_ra * cos_dec0 * 3600.0, (np.asarray(dec, dtype=float) - dec0) * 3600.0
 
 
-def lens_quantities(evaluator: Evaluator, theta: np.ndarray, z_source: float, x: np.ndarray, y: np.ndarray) -> dict[str, np.ndarray]:
+def lens_quantities(evaluator: Evaluator, theta: np.ndarray, z_source: float, x: np.ndarray, y: np.ndarray,
+                    *, include_grf: bool = True) -> dict[str, np.ndarray]:
     """kappa, gamma, det A and magnification of the full lens model at the given points."""
     physical = evaluator.physical(jnp.asarray(theta, dtype=jnp.float64))
     packed = evaluator.packed_state_for_z(physical, z_source)
     _, u = evaluator.total_fields_at(np.stack((np.asarray(x, dtype=float), np.asarray(y, dtype=float)), -1), packed)
+    if include_grf:
+        _, correction = shared_grf_fields(evaluator, theta, z_source, np.column_stack((x, y)))
+        u = u + correction
     a = np.eye(2) - u
     a00, a01, a10, a11 = a[:, 0, 0], a[:, 0, 1], a[:, 1, 0], a[:, 1, 1]
     kappa = 1.0 - 0.5 * (a00 + a11)
@@ -191,6 +196,10 @@ def compute_truth_recovery(state: ModelState, evaluator: Evaluator, samples: np.
     fits_dir.mkdir(parents=True, exist_ok=True)
     header = wcs.to_header()
     header["ZSOURCE"] = z_source
+    truth_header = header.copy()
+    header["GRFMEAN"] = bool(getattr(evaluator, "gp_knee", False) and state.gp_blocks == "all"
+                              and evaluator.gp_sigma_alpha_index >= 0 and evaluator.gp_knee_spectrum == "knee")
+    header["GRFTYPE"] = "conditional mean; same draw"
     products: dict[str, dict[str, np.ndarray]] = {}
     for q in QUANTITIES:
         products[q] = {"median": grids[q][0]}
@@ -201,7 +210,7 @@ def compute_truth_recovery(state: ModelState, evaluator: Evaluator, samples: np.
             fits.writeto(fits_dir / f"truth_recovery_{q}_model_q16.fits", q16, header, overwrite=True)
             fits.writeto(fits_dir / f"truth_recovery_{q}_model_q84.fits", q84, header, overwrite=True)
         if q in truth:
-            fits.writeto(fits_dir / f"truth_recovery_{q}_true.fits", truth[q], header, overwrite=True)
+            fits.writeto(fits_dir / f"truth_recovery_{q}_true.fits", truth[q], truth_header, overwrite=True)
     center = smoothed_peak_center(truth["kappa"], x, y)
     profile = None
     if center is not None:
@@ -209,4 +218,5 @@ def compute_truth_recovery(state: ModelState, evaluator: Evaluator, samples: np.
         tables_dir.mkdir(parents=True, exist_ok=True)
         profile.to_csv(tables_dir / "truth_recovery_m2d_aperture_profile.csv", index=False)
     return {"wcs": wcs, "shape": shape, "x": x, "y": y, "truth": truth, "model": products, "profile": profile, "center": center,
+            "grf_conditional_mean": bool(header["GRFMEAN"]),
             "z_source": z_source, "mass_per_kappa_pixel_msun": mass_per_kappa_pixel_msun(state, wcs, z_source)}

@@ -1,4 +1,4 @@
-"""Regenerate the three standard GP diagnostics from a saved run."""
+"""Regenerate standard GP diagnostics, including shared-field maps, from a saved run."""
 import argparse
 
 from _covariance_plot_cli import load_run
