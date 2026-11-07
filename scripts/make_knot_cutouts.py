@@ -6,7 +6,7 @@ images.  Systems with knots come first, then systems that share a redshift and a
 apart, then the rest.  Stamps are in the mosaic's pixel orientation.
 
 Example:
-    python scripts/make_knot_cutouts.py data/Bergamini/M0416_Bergamini22/images.yaml output/knot_cutouts/m0416_bergamini_jwst_knots.pdf \\
+    python scripts/make_knot_cutouts.py catalogs/m0416/bergamini2023/images.yaml output/knot_cutouts/m0416_bergamini_jwst_knots.pdf \\
         --image-dir /Users/isaque.dutra/sync/GalaxyClusterImaging/JWST_Images
 """
 from __future__ import annotations

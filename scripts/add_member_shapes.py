@@ -8,7 +8,7 @@ M0416 against HFF-DeepSpace: PA_canucs = 180 - theta_Shipley to 4 deg for 64 elo
 galaxies CANUCS models and subtracts (FLAG_BCG) the shape is that of the model.  Unmatched members stay round.  The
 edit is textual, so comments and layout survive; the old file is copied to --backup first.
 
-    python scripts/add_member_shapes.py data/CANUCS/M0416_Rihtarsic2025/members.yaml \
+    python scripts/add_member_shapes.py catalogs/m0416/canucs2025/members.yaml \
         data/CANUCS/M0416_Rihtarsic2025/canucs_dr1/hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz
 """
 from __future__ import annotations

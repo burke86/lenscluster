@@ -242,7 +242,7 @@ def _parse_args(argv: list[str]) -> dict:
 FF_SIMS_CLUSTERS = {
     "ARES": {
         "cluster_key": "ares",
-        "image_catalog": "data/ff_sims/ares/images.yaml",
+        "image_catalog": "catalogs/ares/images.yaml",
         "cosmology": CosmologyConfig(H0=70.4, Om0=0.272, Ode0=0.728),
         # One cluster-scale halo at the light peak of each clump of the MOKA cluster (Meneghetti et al. 2017) plus shear.
         "halos": (
@@ -250,7 +250,7 @@ FF_SIMS_CLUSTERS = {
             DPIEHaloConfig.cluster_scale("2", -40.0, 40.0, 0.5, v_disp=950.0),
             ShearHaloConfig.free("S1", 0.5),
         ),
-        "member_population": MemberPopulationConfig.bergamini2019("potfile_1", "data/ff_sims/ares/members.yaml", 0.5, prior_mag0=19.82),
+        "member_population": MemberPopulationConfig.bergamini2019("potfile_1", "catalogs/ares/members.yaml", 0.5, prior_mag0=19.82),
         # The brightest cluster galaxies stay in the scaling relation, as on Hera: independent halos cost parameters, made
         # the chains multi-well and did not improve the fit.
         "independent_member_halos": (),
@@ -262,14 +262,14 @@ FF_SIMS_CLUSTERS = {
     },
     "HERA": {
         "cluster_key": "hera",
-        "image_catalog": "data/ff_sims/hera/images.yaml",
+        "image_catalog": "catalogs/hera/images.yaml",
         "cosmology": CosmologyConfig(H0=72.0, Om0=0.24, Ode0=0.76),
         "halos": (
             DPIEHaloConfig.cluster_scale("1", 19.54080009, 2.37820005, 0.507, v_disp=800.0),
             DPIEHaloConfig.cluster_scale("2", 0.001, 0.003, 0.507, v_disp=700.0),
             ShearHaloConfig.free("S1", 0.507),
         ),
-        "member_population": MemberPopulationConfig.bergamini2019("potfile_1", "data/ff_sims/hera/members.yaml", 0.507, prior_mag0=19.82),
+        "member_population": MemberPopulationConfig.bergamini2019("potfile_1", "catalogs/hera/members.yaml", 0.507, prior_mag0=19.82),
         "independent_member_halos": (),
         "kappa_true_fits": "data/ff_sims/published/hera/kappa_z9_0.fits",
         "gammax_true_fits": "data/ff_sims/published/hera/gammax_z9_0.fits",
@@ -282,11 +282,11 @@ FF_SIMS_CLUSTERS = {
 
 
 # Native configuration transcribed from
-# data/Bergamini/RXJ2248_Bergamini19/Bergamini_RXCJ2248_lenstool_Normal.par.
+# catalogs/as1063/bergamini2019/source/Bergamini_RXCJ2248_lenstool_Normal.par.
 # That model gives radii in arcseconds; native configurations require kpc.
 def _hff_clusters():
     AS1063_KPC_PER_ARCSEC = kpc_per_arcsec_from_config(0.348, {"H0": 70.0, "Om0": 0.3})
-    AS1063_CATALOG_DIR = "data/Bergamini/RXJ2248_Bergamini19"
+    AS1063_CATALOG_DIR = "catalogs/as1063/bergamini2019"
     AS1063_MSTAR_F160W = 18.33
     clusters = {
         "AS1063": {
@@ -394,7 +394,7 @@ def _hff_clusters():
             "cut_radius_kpc": _bcg_cut_prior(pop.cutkpc * fr, (2.0 * fr, 100.0 * fr)),
         },
     )
-    jwst_dir = "data/JWST/AS1063_Diego2026_Beauchesne2025"
+    jwst_dir = "catalogs/as1063/diego2026"
     clusters["AS1063_JWST"] = {
         **old, "cluster_key": "as1063_jwst", "imaging": "jwst",
         "image_catalog": f"{jwst_dir}/images.yaml",
@@ -406,12 +406,12 @@ def _hff_clusters():
 
 
 # MACS J0416, two image catalogs over the same mass model: the HST + MUSE catalog of Bergamini et al. 2023 (237 spectroscopic
-# images in 88 families; the files are their 2022 release) and the JWST CANUCS gold catalog.  Native configuration transcribed from data/Bergamini/M0416_Bergamini22/Bergamini22_MACS0416_Normal.par:
+# images in 88 families; the files are their 2022 release) and the JWST CANUCS gold catalog.  Native configuration transcribed from catalogs/m0416/bergamini2023/source/Bergamini22_MACS0416_Normal.par:
 # four dark-matter dPIE halos with their prior boxes, a free foreground galaxy, four fixed hot-gas clumps,
 # and the members (including galaxy 8971) on the neutral relation.
 def _m0416_bergamini2023_cluster():
     kpc = kpc_per_arcsec_from_config(0.396, {"H0": 70.0, "Om0": 0.3})
-    catalog_dir = "data/Bergamini/M0416_Bergamini22"
+    catalog_dir = "catalogs/m0416/bergamini2023"
     z = 0.396
     mstar_f160w = 18.66        # -23 + mu(z = 0.396), the Bergamini et al. 2019 definition of L*
     inf = float("inf")
@@ -566,12 +566,12 @@ def _m0416_bergamini2023_cluster():
             # default 1.5 mas floor applies; pass gp_floor_arcsec 0.0005 again for a --likelihood gp_image_plane run.
         }
 
-    canucs_dir = "data/CANUCS/M0416_Rihtarsic2025"
+    canucs_dir = "catalogs/m0416/canucs2025"
     return {
         # HST + MUSE: 237 spectroscopic images in 88 families (Bergamini et al. 2023), HST astrometry; images.yaml groups
         # them into 60 systems, 12 with knots (scripts/group_bergamini_knots.py).
         "M0416_BERGAMINI2023": entry("m0416_bergamini2023", reference=(64.0381417, -24.0674722), image_catalog=f"{catalog_dir}/images.yaml",
-                                     member_catalog=f"{catalog_dir}/CM_cat_MACSJ0416.cat", sigma_inst_arcsec=SIGMA_INST_ARCSEC),
+                                     member_catalog=f"{catalog_dir}/members.cat", sigma_inst_arcsec=SIGMA_INST_ARCSEC),
         # JWST + HST: the CANUCS gold catalog, 303 spectroscopic images in 83 systems, 15 with knots, 111 knot-families
         # (Rihtarsic et al. 2025; scripts/convert_canucs_catalog.py), NIRCam positions in the frame of their lens model; their
         # member catalog (+ galaxy 8971, on the relation), their independent halos and reference centre.  The members follow the

@@ -18,7 +18,7 @@ from lenscluster.image_catalog import write_image_catalog, load_image_catalog
 from lenscluster.member_catalog import write_member_catalog, load_member_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
-DEST = ROOT / 'data/JWST/AS1063_Diego2026_Beauchesne2025'
+DEST = ROOT / 'catalogs/as1063/diego2026'
 # Same-source knot groups, identified by shared spectroscopic redshift and the
 # corresponding compact groups in each macroimage. These are curated mappings,
 # not galaxy IDs supplied by Diego's table. Preserve each original label in notes.

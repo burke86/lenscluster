@@ -7,7 +7,7 @@ their names.  Lensing keeps colours, so images of one source should look alike i
 images could form one lensing configuration.
 
 Example:
-    python scripts/make_family_candidate_cutouts.py data/Bergamini/M0416_Bergamini22/images.yaml \\
+    python scripts/make_family_candidate_cutouts.py catalogs/m0416/bergamini2023/images.yaml \\
         output/knot_cutouts/m0416_bergamini_same_redshift_candidates.pdf --image-dir /Users/isaque.dutra/sync/GalaxyClusterImaging/JWST_Images
 """
 from __future__ import annotations

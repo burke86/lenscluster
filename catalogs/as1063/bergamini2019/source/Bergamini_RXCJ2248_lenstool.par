@@ -1,0 +1,128 @@
+runmode
+    reference 3 342.18321 -44.530878
+    inverse   3 .1 10000
+    restart   1 19867
+    end
+
+
+image
+    multfile    1     obs_arcs.dat
+    forme       -10
+    end
+
+
+cosmology
+    H0 70.0
+    omega 0.3
+    lambda 0.7
+    end
+
+
+grille
+    nlens 500
+    nlens_opt 2
+    nombre 256
+    end
+
+
+champ
+    xmin   -100.000
+    xmax    50.000
+    ymin   -50.000
+    ymax    70.000
+    end
+
+
+potentiel 1 # Main dark matter halo
+    profil      81
+    x_centre    0.0
+    y_centre    0.0
+    ellipticite 0.5
+    angle_pos   -35.7557
+    core_radius 13.5871
+    cut_radius  2000.000
+    v_disp      1500
+    z_lens      0.348
+    end
+
+limit 1
+    v_disp      1 1000. 1400. 0.1
+    angle_pos   1 -42 -36 0.1
+    ellipticity 1 0.4 0.8 0.05
+    x_centre    1 -2 4 0.1
+    y_centre    1 -2 2 0.1
+    core_radius 1 5 35 0.1
+    end
+
+
+potentiel 2 #extra DM halo
+    profil      81
+    x_centre   -84.6455835
+    y_centre    45.0147600
+    ellipticite 0.0
+    angle_pos   0.0
+    core_radius 0.05
+    cut_radius  2000.000
+    v_disp      300
+    z_lens      0.348
+    end
+
+limit 2
+    v_disp      1 0.0 1000 0.1
+    x_centre    1 -100. 50. 0.1
+    y_centre    1 -50. 70. 0.1
+    end
+
+
+potentiel 3   # Gas clump 1
+	profil	81
+	v_disp	355.9263730614334
+	core_radius	188.39998560000458
+	cut_radius	189.2403216000046
+	x_centre	18.898068688515124
+	y_centre	-73.3566238994408
+	ellipticite	0.804756331682532
+	angle_pos	-162.04793432346537
+	z_lens	0.348
+	end
+
+potentiel 4   # Gas clump 2
+	profil	81
+	v_disp	442.5672747534171
+	core_radius	36.323966400000884
+	cut_radius	339.1572480000082
+	x_centre	-18.0530993114858
+	y_centre	13.469568100561368
+	ellipticite	0.13273356095824723
+	angle_pos	-27.795099374268442
+	z_lens	0.348
+	end
+
+potentiel 5   # Gas clump 3
+	profil	81
+	v_disp	249.68220495795586
+	core_radius	14.434532160000352
+	cut_radius	356.49532800000867
+	x_centre	0.19813268851464938
+	y_centre	-1.2372958994389047
+	ellipticite	0.34435532608684766
+	angle_pos	-15.486418948811508
+	z_lens	0.348
+	end
+		
+	
+potfile
+    filein 3  members.cat
+    type 81
+    mag0  16.176001
+    core 0.05
+    z_lens 0.348
+    sigma 3 310. 15.
+    cut   1 0 20
+    vdslope 0 3.74 0.
+    slope 0 3.00 0.
+    end
+
+  
+fini
+

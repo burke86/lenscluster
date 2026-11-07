@@ -1,0 +1,101 @@
+runmode
+    reference 3 342.18321 -44.530878
+    inverse   3 .05 1000000
+    end
+image
+    multfile    1     A1063_obs_arcs_v11.dat
+    z_m_limit 1 50a   1 0.5 4.0 0.05
+    z_m_limit 1 51a   1 0.5 4.0 0.05
+    forme       -10
+    end
+cosmology
+    H0 70.0
+    omega 0.3
+    lambda 0.7
+    end
+cosmolimit
+    omegaM      0 0.000 1.000
+    omegaX      0 0.000 1.000
+    wX      0 0.000 -2.000
+    wa  0 0.000 0.000
+    end
+grille
+    nlens 500
+    nlens_opt 3
+    nombre 256
+    end
+potentiel 1 # Main dark matter halo
+    profil      81
+    x_centre    0.0
+    y_centre    0.0
+    ellipticite 0.5
+    angle_pos   -35.7557
+    core_radius 13.5871
+    cut_radius  2000.000
+    v_disp      1500
+    z_lens      0.348
+    end
+limit 1
+    v_disp      1 1000. 1400. 0.1
+    angle_pos   1 -42 -36 0.1
+    ellipticity 1 0.4 0.8 0.05
+    x_centre    1 -2 4 0.1
+    y_centre    1 -2 2 0.1
+    core_radius 1 5 35 0.1
+    end
+potentiel 2 #BCG
+    profil      81
+    x_centre    0.0
+    y_centre    0.0
+    ellipticite 0.0
+    angle_pos   0.0
+    core_radius 0.005
+    cut_radius     10
+    v_disp      300
+    z_lens      0.348
+    end
+limit 2
+    v_disp 1 150 450 0.1
+#    ellipticite 1 0.3 0.7 0.1
+#    angle_pos 1 9 16.4 0.1
+    cut_radius 1 1 50 1
+#    core_radius 1 0 30 0.1
+#    x_centre    1 -15 15.0 0.1
+#    y_centre    1 -15 15 0.1
+    end
+potentiel 3 #extra DM halo
+    profil      81
+    x_centre   -84.6455835
+    y_centre    45.0147600
+    ellipticite 0.0
+    angle_pos   0.0
+    core_radius     0.005
+    cut_radius     1500
+    v_disp      300
+    z_lens      0.348
+    end
+limit 3
+    v_disp      1 0.0 1000 0.1
+#    ellipticite 1 0 0.6 0.1
+#    angle_pos   1 -90 90 0.1
+#    x_centre    1 -90 -80  0.1
+#    y_centre    1  40  50  0.1
+    cut_radius  1 5 500 0.1
+    end
+potfile
+    filein 3  members_95_160_nonan_cuts.cat
+    type 81
+    mag0  18.236799
+    core 0.05
+    z_lens 0.348
+    sigma 1 0 400
+    cut   1 0 50
+    end
+champ
+    xmin   -100.000
+    xmax    50.000
+    ymin   -50.000
+    ymax    70.000
+    end
+fini
+

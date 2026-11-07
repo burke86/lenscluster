@@ -14,7 +14,7 @@ from lenscluster.image_catalog import CatalogError, load_image_catalog, write_im
 from lenscluster.state import build_state
 
 ROOT = Path(__file__).resolve().parents[1]
-BERGAMINI = ROOT / "data/Bergamini/M0416_Bergamini22/obs_arcs.cat"
+BERGAMINI = ROOT / "catalogs/m0416/bergamini2023/source/obs_arcs.cat"
 
 
 def write(tmp_path: Path, text: str, name: str = "images.yaml") -> Path:

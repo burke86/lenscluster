@@ -1,0 +1,271 @@
+# Parities (2026-11-04): fold pairs only, from the sign of det A at the images over 97 posterior draws (lens and lens+field
+# agree in >= 95% of draws; D1C and D19C decided by the field and the mirrored knot order).  D36 stays 0 (undecided).
+# The file before this edit is images.before_parity.yaml.
+# AS1063 JWST: Diego et al., arXiv:2601.11704v2, Table 1.
+# Observed rank A positions plus spectroscopic system 60; no model-predicted positions.
+# System/knot grouping is curated; original labels and selection are in image_mapping.json.
+# No published astrometric errors or photometry supplied: use configured sigma_inst_arcsec.
+# Coordinates unchanged, J2000 degrees. See README.md for provenance and limitations.
+format: lenscluster-images/1
+systems:
+  D1:
+    z: 1.229
+    images:
+      a:
+        parity: -1
+        knots:
+          A: {ra: 342.194458, dec: -44.5270042, notes: Diego label 1.a; rank A; footnote flag 0.}
+          B: {ra: 342.1948242, dec: -44.5273552, notes: Diego label 2.a; rank A; footnote flag 0.}
+          C: {ra: 342.1952209, dec: -44.5278244, notes: Diego label 3.a; rank A; footnote flag 0.}
+          D: {ra: 342.1940613, dec: -44.526577, notes: Diego label 4.a; rank A; footnote flag 0.}
+      b:
+        parity: 1
+        knots:
+          A: {ra: 342.1958618, dec: -44.5289497, notes: Diego label 1.b; rank A; footnote flag 0.}
+          B: {ra: 342.1955872, dec: -44.5284042, notes: Diego label 2.b; rank A; footnote flag 0.}
+          C: {ra: 342.195282, dec: -44.5279121, notes: Diego label 3.b; rank A; footnote flag 0.}
+          D: {ra: 342.1962585, dec: -44.5296631, notes: Diego label 4.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.1864319, dec: -44.5212021, notes: Diego label 1.c; rank A; footnote flag 0.}
+          B: {ra: 342.1864014, dec: -44.5211296, notes: Diego label 2.c; rank A; footnote flag 0.}
+          C: {ra: 342.1863098, dec: -44.5210533, notes: Diego label 3.c; rank A; footnote flag 0.}
+          D: {ra: 342.1867676, dec: -44.5213547, notes: Diego label 4.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C, D]
+  D5:
+    z: 1.261
+    images:
+      a:
+        parity: 1
+        knots:
+          A: {ra: 342.1927185, dec: -44.531189, notes: Diego label 5.a; rank A; footnote flag 0.}
+          B: {ra: 342.1925659, dec: -44.530735, notes: Diego label 6.a; rank A; footnote flag 0.}
+          C: {ra: 342.1924438, dec: -44.5309067, notes: Diego label 7.a; rank A; footnote flag 0.}
+      b:
+        parity: -1
+        knots:
+          A: {ra: 342.1921387, dec: -44.5298309, notes: Diego label 5.b; rank A; footnote flag 0.}
+          B: {ra: 342.1923828, dec: -44.5302696, notes: Diego label 6.b; rank A; footnote flag 0.}
+          C: {ra: 342.1921997, dec: -44.5303154, notes: Diego label 7.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.1798706, dec: -44.5215607, notes: Diego label 5.c; rank A; footnote flag 0.}
+          B: {ra: 342.1797485, dec: -44.5215759, notes: Diego label 6.c; rank A; footnote flag 0.}
+          C: {ra: 342.1796875, dec: -44.5216293, notes: Diego label 7.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C]
+  D8:
+    z: 1.2583
+    images:
+      a: {ra: 342.1936951, dec: -44.5301628, notes: Diego label 8.a; rank A; footnote flag 0., parity: 1}
+      b: {ra: 342.1933289, dec: -44.5294189, notes: Diego label 8.b; rank A; footnote flag 0., parity: -1}
+      c: {ra: 342.1816406, dec: -44.5214043, notes: Diego label 8.c; rank A; footnote flag 1.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D9:
+    z: 1.398
+    images:
+      a:
+        knots:
+          A: {ra: 342.1791992, dec: -44.5235901, notes: Diego label 9.a; rank A; footnote flag 0.}
+          B: {ra: 342.178894, dec: -44.5236092, notes: Diego label 10.a; rank A; footnote flag 0.}
+          C: {ra: 342.1782227, dec: -44.5236626, notes: Diego label 11.a; rank A; footnote flag 0.}
+      b:
+        knots:
+          A: {ra: 342.1878357, dec: -44.5273094, notes: Diego label 9.b; rank A; footnote flag 0.}
+          B: {ra: 342.1877136, dec: -44.527504, notes: Diego label 10.b; rank A; footnote flag 0.}
+          C: {ra: 342.1875305, dec: -44.527874, notes: Diego label 11.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.1931763, dec: -44.5365295, notes: Diego label 9.c; rank A; footnote flag 0.}
+          B: {ra: 342.1929016, dec: -44.5365944, notes: Diego label 10.c; rank A; footnote flag 0.}
+          C: {ra: 342.1923828, dec: -44.5367279, notes: Diego label 11.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C]
+  D12:
+    z: 1.428
+    images:
+      a:
+        knots:
+          A: {ra: 342.1742554, dec: -44.5283318, notes: Diego label 12.a; rank A; footnote flag 0.}
+          B: {ra: 342.1741943, dec: -44.5286293, notes: Diego label 13.a; rank A; footnote flag 0.}
+          C: {ra: 342.1740417, dec: -44.5289001, notes: Diego label 14.a; rank A; footnote flag 0.}
+          D: {ra: 342.1740723, dec: -44.5276871, notes: Diego label 15.a; rank A; footnote flag 0.}
+          E: {ra: 342.1740417, dec: -44.5274696, notes: Diego label 16.a; rank A; footnote flag 0.}
+          F: {ra: 342.1744385, dec: -44.527771, notes: Diego label 17.a; rank A; footnote flag 0.}
+      b:
+        knots:
+          A: {ra: 342.1758423, dec: -44.5325394, notes: Diego label 12.b; rank A; footnote flag 0.}
+          B: {ra: 342.1756287, dec: -44.5323296, notes: Diego label 13.b; rank A; footnote flag 0.}
+          C: {ra: 342.1753845, dec: -44.5322609, notes: Diego label 14.b; rank A; footnote flag 0.}
+          D: {ra: 342.1763306, dec: -44.533062, notes: Diego label 15.b; rank A; footnote flag 0.}
+          E: {ra: 342.1765442, dec: -44.5331497, notes: Diego label 16.b; rank A; footnote flag 0.}
+          F: {ra: 342.1763611, dec: -44.5326691, notes: Diego label 17.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.188446, dec: -44.5399933, notes: Diego label 12.c; rank A; footnote flag 0.}
+          B: {ra: 342.188385, dec: -44.5400963, notes: Diego label 13.c; rank A; footnote flag 0.}
+          C: {ra: 342.1881714, dec: -44.540226, notes: Diego label 14.c; rank A; footnote flag 0.}
+          D: {ra: 342.1883545, dec: -44.5397873, notes: Diego label 15.c; rank A; footnote flag 0.}
+          E: {ra: 342.188324, dec: -44.5396767, notes: Diego label 16.c; rank A; footnote flag 0.}
+          F: {ra: 342.1889038, dec: -44.539772, notes: Diego label 17.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C, D, E, F]
+  D18:
+    z: 1.837
+    images:
+      a: {ra: 342.1693726, dec: -44.5272484, notes: Diego label 18.a; rank A; footnote flag 0.}
+      b: {ra: 342.1742554, dec: -44.5371094, notes: Diego label 18.b; rank A; footnote flag 0.}
+      c: {ra: 342.1818237, dec: -44.5405006, notes: Diego label 18.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D19:
+    z: 0.73
+    images:
+      a:
+        parity: 1
+        knots:
+          A: {ra: 342.1902466, dec: -44.5297623, notes: Diego label 19.a; rank A; footnote flag 0.}
+          B: {ra: 342.1902161, dec: -44.5303574, notes: Diego label 20.a; rank A; footnote flag 0.}
+          C: {ra: 342.1896973, dec: -44.5297546, notes: Diego label 21.a; rank A; footnote flag 0.}
+      b:
+        parity: -1
+        knots:
+          A: {ra: 342.1895447, dec: -44.5288429, notes: Diego label 19.b; rank A; footnote flag 0.}
+          B: {ra: 342.1888428, dec: -44.5285225, notes: Diego label 20.b; rank A; footnote flag 0.}
+          C: {ra: 342.1896362, dec: -44.5295753, notes: Diego label 21.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.184967, dec: -44.5257034, notes: Diego label 19.c; rank A; footnote flag 0.}
+          B: {ra: 342.1852722, dec: -44.5256157, notes: Diego label 20.c; rank A; footnote flag 1.}
+          C: {ra: 342.1847534, dec: -44.5256767, notes: Diego label 21.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C]
+  D22:
+    z: 3.116
+    images:
+      a: {ra: 342.1750488, dec: -44.5410309, notes: Diego label 22.a; rank A; footnote flag 0., parity: 1}
+      b: {ra: 342.1731567, dec: -44.5399818, notes: Diego label 22.b; rank A; footnote flag 0., parity: -1}
+      c: {ra: 342.1655579, dec: -44.5295296, notes: Diego label 22.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D23:
+    z: 6.112
+    images:
+      a: {ra: 342.1890564, dec: -44.5300484, notes: Diego label 23.a; rank A; footnote flag 0.}
+      b: {ra: 342.1810303, dec: -44.5346184, notes: Diego label 23.b; rank A; footnote flag 0.}
+      c: {ra: 342.1908875, dec: -44.537468, notes: Diego label 23.c; rank A; footnote flag 0.}
+      d: {ra: 342.1712952, dec: -44.5198097, notes: Diego label 23.d; rank A; footnote flag 0.}
+      e: {ra: 342.184082, dec: -44.5316277, notes: Diego label 23.e; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D24:
+    z: 4.113
+    images:
+      a: {ra: 342.1815491, dec: -44.5393753, notes: Diego label 24.a; rank A; footnote flag 0., parity: 1}
+      b: {ra: 342.1791382, dec: -44.5386772, notes: Diego label 24.b; rank A; footnote flag 0., parity: -1}
+      c: {ra: 342.1687927, dec: -44.522377, notes: Diego label 24.c; rank A; footnote flag 1.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D25:
+    z: 3.118
+    images:
+      a:
+        knots:
+          A: {ra: 342.178833, dec: -44.5358696, notes: Diego label 25.a; rank A; footnote flag 0.}
+          B: {ra: 342.1796265, dec: -44.5357208, notes: Diego label 26.a; rank A; footnote flag 0.}
+          C: {ra: 342.1799927, dec: -44.5356026, notes: Diego label 27.a; rank A; footnote flag 0.}
+          D: {ra: 342.1782532, dec: -44.5360031, notes: Diego label 28.a; rank A; footnote flag 0.}
+          E: {ra: 342.1782532, dec: -44.5358238, notes: Diego label 29.a; rank A; footnote flag 0.}
+      b:
+        knots:
+          A: {ra: 342.1874084, dec: -44.5386887, notes: Diego label 25.b; rank A; footnote flag 0.}
+          B: {ra: 342.1877747, dec: -44.5382805, notes: Diego label 26.b; rank A; footnote flag 0.}
+          C: {ra: 342.1878662, dec: -44.5380402, notes: Diego label 27.b; rank A; footnote flag 0.}
+          D: {ra: 342.1871338, dec: -44.5390434, notes: Diego label 28.b; rank A; footnote flag 0.}
+          E: {ra: 342.1876831, dec: -44.5390015, notes: Diego label 29.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.1706543, dec: -44.5220871, notes: Diego label 25.c; rank A; footnote flag 0.}
+          B: {ra: 342.1708374, dec: -44.5216904, notes: Diego label 26.c; rank A; footnote flag 0.}
+          C: {ra: 342.170929, dec: -44.5214958, notes: Diego label 27.c; rank A; footnote flag 0.}
+          D: {ra: 342.1704712, dec: -44.5224648, notes: Diego label 28.c; rank A; footnote flag 0.}
+          E: {ra: 342.1705933, dec: -44.5223846, notes: Diego label 29.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C, D, E]
+  D30:
+    z: 3.606
+    images:
+      a: {ra: 342.1858215, dec: -44.5388489, notes: Diego label 30.a; rank A; footnote flag 0.}
+      b: {ra: 342.178833, dec: -44.5367317, notes: Diego label 30.b; rank A; footnote flag 0.}
+      c: {ra: 342.1697998, dec: -44.5219765, notes: Diego label 30.c; rank A; footnote flag 1.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D31:
+    z: 1.035
+    images:
+      a:
+        knots:
+          A: {ra: 342.1800232, dec: -44.5384293, notes: Diego label 31.a; rank A; footnote flag 0.}
+          B: {ra: 342.1809082, dec: -44.5387344, notes: Diego label 32.a; rank A; footnote flag 0.}
+          C: {ra: 342.1803284, dec: -44.5387154, notes: Diego label 33.a; rank A; footnote flag 0.}
+          D: {ra: 342.178894, dec: -44.5380211, notes: Diego label 34.a; rank A; footnote flag 0.}
+      b:
+        knots:
+          A: {ra: 342.1755371, dec: -44.5359383, notes: Diego label 31.b; rank A; footnote flag 0.}
+      c:
+        knots:
+          A: {ra: 342.1719055, dec: -44.5302505, notes: Diego label 31.c; rank A; footnote flag 0.}
+          B: {ra: 342.1722717, dec: -44.5307045, notes: Diego label 32.b; rank A; footnote flag 0.}
+          C: {ra: 342.1719055, dec: -44.5307159, notes: Diego label 33.b; rank A; footnote flag 0.}
+          D: {ra: 342.1715698, dec: -44.5299568, notes: Diego label 34.b; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+    knots: [A, B, C, D]
+  D35:
+    z: 3.666
+    images:
+      a: {ra: 342.1758118, dec: -44.5363693, notes: Diego label 35.a; rank A; footnote flag 0.}
+      b: {ra: 342.1878967, dec: -44.5404205, notes: Diego label 35.b; rank A; footnote flag 0.}
+      c: {ra: 342.1705322, dec: -44.5235825, notes: Diego label 35.c; rank A; footnote flag 1.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D36:
+    z: 3.23
+    images:
+      a: {ra: 342.1737976, dec: -44.5411797, notes: Diego label 36.a; rank A; footnote flag 0.}
+      b: {ra: 342.1739197, dec: -44.5412369, notes: Diego label 36.b; rank A; footnote flag 0.}
+      c: {ra: 342.1650696, dec: -44.5310555, notes: Diego label 36.c; rank A; footnote flag 1.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D37:
+    z: 3.082
+    images:
+      a: {ra: 342.1802979, dec: -44.5246391, notes: Diego label 37.a; rank A; footnote flag 0.}
+      b: {ra: 342.1838684, dec: -44.5257568, notes: Diego label 37.b; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D38:
+    z: 2.976
+    images:
+      a: {ra: 342.1983643, dec: -44.5357513, notes: Diego label 38.a; rank A; footnote flag 0.}
+      b: {ra: 342.1924438, dec: -44.5250702, notes: Diego label 38.b; rank A; footnote flag 0.}
+      c: {ra: 342.1815186, dec: -44.5202599, notes: Diego label 38.c; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D40:
+    z: 5.051
+    images:
+      a: {ra: 342.190155, dec: -44.5309296, notes: Diego label 40.a; rank A; footnote flag 0.}
+      b: {ra: 342.1908569, dec: -44.5356598, notes: Diego label 40.b; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D41:
+    z: 5.2373
+    images:
+      a: {ra: 342.1837769, dec: -44.5212479, notes: Diego label 41.a; rank A; footnote flag 0.}
+      b: {ra: 342.1887512, dec: -44.5227585, notes: Diego label 41.b; rank A; footnote flag 0.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D43:
+    z: 3.2857
+    images:
+      a: {ra: 342.1960754, dec: -44.5230103, notes: Diego label 43.a; rank A; footnote flag 0.}
+      b: {ra: 342.1891785, dec: -44.5187225, notes: Diego label 43.b; rank A; footnote flag 0.}
+      c: {ra: 342.2021484, dec: -44.5321312, notes: Diego label 43.c; rank A; footnote flag 1.}
+    notes: Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank A.
+  D60:
+    z: 3.72
+    images:
+      a: {ra: 342.1802368, dec: -44.5392647, notes: Diego label 60.a; rank B; footnote flag 0., parity: 1}
+      b: {ra: 342.1789246, dec: -44.5388603, notes: Diego label 60.b; rank B; footnote flag 0., parity: -1}
+      c: {ra: 342.168457, dec: -44.5235786, notes: Diego label 60.c; rank B; footnote flag 1.}
+    notes: 'Spectroscopic redshift from Diego et al. 2601.11704v2 Table 1. Rank B system 60: spectroscopic z=3.72 added in v2; retained rank B in the paper.'

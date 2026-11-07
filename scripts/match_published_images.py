@@ -28,8 +28,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-CANUCS_FULL = ROOT / "data/CANUCS/M0416_Rihtarsic2025/hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
-DIEGO = ROOT / "data/JWST/M0416_Diego2024_PEARLS/images.ecsv"
+CANUCS_FULL = ROOT / "catalogs/m0416/canucs2025/source/hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
+DIEGO = ROOT / "catalogs/m0416/diego2024/images.ecsv"
 REFERENCE = (64.03821668520617, -24.06750122335985)      # CANUCS lenstool reference (param file), the model frame
 GOLD_RADIUS = 0.5          # arcsec: a Diego image this close to a gold image is in our catalog
 MATCH, NEAR = 1.0, 2.0     # arcsec: verdict thresholds on the distance to the nearest predicted image of the system

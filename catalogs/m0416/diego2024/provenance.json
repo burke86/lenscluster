@@ -1,0 +1,76 @@
+{
+  "retrieved_utc": "2026-11-04T19:33:15.625680+00:00",
+  "raw_files": {
+    "raw/pearls_tableb1.tsv": {
+      "sha256": "23e7224d23dff3c016d4af21e54d8add8c5890fdbf4d69b2d5a373f8039c334c",
+      "bytes": 29388,
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=J/A%2bA/690/A114&-out.max=10000&-out.all"
+    },
+    "raw/pearls_tableb1.txt": {
+      "sha256": "969b03f76077964c0b76044cc86025919efb378d8417be158680e0c3b66bda67",
+      "bytes": 29963,
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-txt?-source=J/A%2bA/690/A114&-out.max=10000&-out.all"
+    },
+    "raw/pearls_tableb1.vot": {
+      "sha256": "46969f1684ae5ab6d0897442f9ec28bfc52e5b8abe81ef31b69e326e2b2a0013",
+      "bytes": 57730,
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/votable?-source=J/A%2bA/690/A114&-out.max=10000&-out.all"
+    },
+    "earlier_BUFFALO_Flashlights/tableb1.vot": {
+      "sha256": "668a9dc36bf514581809eb4425c4d997b30d03f28592a05b0be45dd628aaf2bb",
+      "bytes": 30379,
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/votable?-source=J/A%2bA/681/A124&-out.max=10000&-out.all"
+    },
+    "earlier_BUFFALO_Flashlights/tableb1.txt": {
+      "sha256": "812e5de6d7b5047d53a064e167fe0b84bba4b3711269c2ba4ea6c4e24efb8128",
+      "bytes": 16194,
+      "url": "https://vizier.cfa.harvard.edu/viz-bin/asu-txt?-source=J/A%2bA/681/A124&-out.max=10000&-out.all"
+    }
+  },
+  "validation": {
+    "PEARLS": {
+      "rows": 343,
+      "columns": [
+        "recno",
+        "Arc",
+        "RAJ2000",
+        "DEJ2000",
+        "zsp",
+        "zgeom",
+        "e_zgeom",
+        "zph",
+        "mu",
+        "dTime",
+        "Rank"
+      ],
+      "fits_ecsv_values_and_masks_roundtrip": "passed; FITS read with mask_invalid=False to retain empty string notes",
+      "unique_image_ids": 343,
+      "unique_source_ids": 119,
+      "ranks": {
+        "A": 212,
+        "C": 41,
+        "B": 84,
+        "D": 6
+      },
+      "redshift_entries_present": {
+        "zsp": 77,
+        "zgeom": 119,
+        "zph": 309
+      }
+    },
+    "earlier_BUFFALO_Flashlights": {
+      "rows": 214,
+      "columns": [
+        "recno",
+        "ID",
+        "n_ID",
+        "RAJ2000",
+        "DEJ2000",
+        "zMUSE",
+        "ID2",
+        "z2"
+      ],
+      "fits_ecsv_values_and_masks_roundtrip": "passed; FITS read with mask_invalid=False to retain empty string notes"
+    }
+  }
+}

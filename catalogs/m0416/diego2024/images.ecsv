@@ -1,0 +1,488 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: recno
+#   datatype: int32
+#   description: Record number assigned by the VizieR team. Should Not be used for identification.
+#   meta: !!omap
+#   - {ucd: meta.record}
+#   - {width: 8}
+#   - links:
+#     - {href: 'http://vizier.cfa.harvard.edu/viz-bin/VizieR-5?-info=XML&-out.add=.&-source=J/A+A/690/A114/tableb1&recno=${recno}'}
+# - name: Arc
+#   datatype: string
+#   description: Arc ID (NNN.a)
+#   meta: !!omap
+#   - {ucd: meta.id;meta.main}
+#   - {_votable_string_dtype: char}
+# - name: RAJ2000
+#   unit: deg
+#   datatype: float64
+#   format: '{:10.6f}'
+#   description: Arc Right ascension (J2000)
+#   meta: !!omap
+#   - {ucd: pos.eq.ra;meta.main}
+#   - {width: 10}
+#   - {precision: '6'}
+# - name: DEJ2000
+#   unit: deg
+#   datatype: float64
+#   format: '{:10.6f}'
+#   description: Arc declination (J2000)
+#   meta: !!omap
+#   - {ucd: pos.eq.dec;meta.main}
+#   - {width: 10}
+#   - {precision: '6'}
+# - name: zsp
+#   datatype: float32
+#   format: '{:7.4f}'
+#   description: '? Arc spectroscopic redshift'
+#   meta: !!omap
+#   - {ucd: src.redshift}
+#   - {width: 7}
+#   - {precision: '4'}
+#   - values: {'null': .nan}
+# - {name: zsp.mask, datatype: bool}
+# - name: zgeom
+#   datatype: float32
+#   format: '{:6.3f}'
+#   description: '? Arc geometric redshift'
+#   meta: !!omap
+#   - {ucd: stat.param}
+#   - {width: 6}
+#   - {precision: '3'}
+#   - values: {'null': .nan}
+# - {name: zgeom.mask, datatype: bool}
+# - name: e_zgeom
+#   datatype: float32
+#   format: '{:6.3f}'
+#   description: '? Error in geometric redshift of the arc'
+#   meta: !!omap
+#   - {ucd: stat.error}
+#   - {width: 6}
+#   - {precision: '3'}
+#   - values: {'null': .nan}
+# - {name: e_zgeom.mask, datatype: bool}
+# - name: zph
+#   datatype: float32
+#   format: '{:5.2f}'
+#   description: '? Arc photometric redshift'
+#   meta: !!omap
+#   - {ucd: src.redshift}
+#   - {width: 5}
+#   - {precision: '2'}
+#   - values: {'null': .nan}
+# - {name: zph.mask, datatype: bool}
+# - name: mu
+#   datatype: float32
+#   format: '{:4.1f}'
+#   description: '? Arc magnification'
+#   meta: !!omap
+#   - {ucd: phot.flux;arith.ratio}
+#   - {width: 4}
+#   - {precision: '1'}
+#   - values: {'null': .nan}
+# - {name: mu.mask, datatype: bool}
+# - name: dTime
+#   unit: yr
+#   datatype: float32
+#   format: '{:5.2f}'
+#   description: Arc time delay with respect to image arriving first
+#   meta: !!omap
+#   - {ucd: time;arith.diff}
+#   - {width: 5}
+#   - {precision: '2'}
+# - name: Rank
+#   datatype: string
+#   description: Arc Rank
+#   meta: !!omap
+#   - {ucd: meta.code}
+#   - {_votable_string_dtype: char}
+# meta: !!omap
+# - {ID: J_A_A_690_A114_tableb1}
+# - {name: J/A+A/690/A114/tableb1}
+# - {description: All available lensing constraints}
+# - __serialized_columns__:
+#     Arc:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: Arc}
+#     DEJ2000:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: DEJ2000}
+#     RAJ2000:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: RAJ2000}
+#     Rank:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: Rank}
+#     dTime:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: dTime}
+#     e_zgeom:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: e_zgeom}
+#       mask: !astropy.table.SerializedColumn {name: e_zgeom.mask}
+#     mu:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: mu}
+#       mask: !astropy.table.SerializedColumn {name: mu.mask}
+#     recno:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: recno}
+#     zgeom:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: zgeom}
+#       mask: !astropy.table.SerializedColumn {name: zgeom.mask}
+#     zph:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: zph}
+#       mask: !astropy.table.SerializedColumn {name: zph.mask}
+#     zsp:
+#       __class__: astropy.table.column.MaskedColumn
+#       data: !astropy.table.SerializedColumn {name: zsp}
+#       mask: !astropy.table.SerializedColumn {name: zsp.mask}
+# schema: astropy-2.0
+recno Arc RAJ2000 DEJ2000 zsp zsp.mask zgeom zgeom.mask e_zgeom e_zgeom.mask zph zph.mask mu mu.mask dTime Rank
+1 1.a 64.036575 -24.067059 0.9397 False 0.923 False 0.007 False 0.78 False 9.2 False 0.0 A
+2 1.b 64.036919 -24.06749 nan True nan True nan True 0.56 False 31.7 False 2.99 A
+3 1.c 64.040962 -24.071217 nan True nan True nan True 0.78 False 5.8 False 1.64 A
+4 2.a 64.039337 -24.070425 1.0054 False 1.005 False 0.01 False 0.99 False 46.1 False 23.15 A
+5 2.b 64.038368 -24.069754 nan True nan True nan True 0.72 False nan True 23.25 A
+6 2.c 64.034309 -24.06605 nan True nan True nan True 0.77 False 4.4 False 0.0 A
+7 3.a 64.033348 -24.067499 1.1472 False 1.146 False 0.001 False 0.73 False 7.2 False 0.0 A
+8 3.b 64.040443 -24.073088 nan True nan True nan True 1.05 False 5.8 False 6.91 A
+9 3.c 64.035667 -24.069759 nan True nan True nan True 0.59 False 3.3 False 11.67 C
+10 4.a 64.026321 -24.074366 1.6333 False 1.663 False 0.016 False 1.63 False 4.2 False 0.0 A
+11 4.b 64.031113 -24.078981 nan True nan True nan True 1.7 False 3.5 False 12.87 A
+12 4.c 64.035912 -24.08135 nan True nan True nan True 1.62 False 5.7 False 6.39 A
+13 5.a 64.023895 -24.077621 1.8178 False 1.91 False 0.021 False 1.7 False 3.4 False 0.0 A
+14 5.b 64.030571 -24.082706 nan True nan True nan True 0.56 False 6.1 False 11.35 A
+15 5.c 64.032509 -24.083782 nan True nan True nan True 1.8 False 10.8 False 9.86 A
+16 6.a 64.041161 -24.061836 1.895 False 1.915 False 0.017 False 1.93 False 9.1 False 0.89 A
+17 6.b 64.043152 -24.06312 nan True nan True nan True 1.89 False 8.5 False 2.25 A
+18 6.c 64.047531 -24.068851 nan True nan True nan True 1.9 False 4.0 False 0.0 A
+19 7.a 64.040871 -24.061646 1.896 False 1.911 False 0.024 False 1.86 False 7.5 False 0.0 A
+20 7.b 64.043541 -24.063534 nan True nan True nan True 1.78 False 20.7 False 2.39 A
+21 7.c 64.04744 -24.068699 nan True nan True nan True 1.71 False 4.2 False 0.69 A
+22 8.a 64.029121 -24.06678 1.953 False 1.979 False 0.036 False 2.36 False 3.6 False 0.0 A
+23 8.b 64.037506 -24.073175 nan True nan True nan True 1.18 False 12.3 False 29.54 A
+24 8.c 64.03862 -24.073906 nan True nan True nan True 1.27 False 68.9 False 29.2 A
+25 9.a 64.024155 -24.080921 1.9656 False 1.97 False 0.023 False 1.78 False 7.5 False 0.0 A
+26 9.b 64.028412 -24.084572 nan True nan True nan True 1.84 False 9.9 False 1.82 A
+27 9.c 64.031693 -24.085789 nan True nan True nan True 1.98 False 6.4 False 0.72 A
+28 10.a 64.030846 -24.067158 1.9894 False 2.031 False 0.022 False 2.29 False 5.4 False 1.25 A
+29 10.b 64.035332 -24.07102 nan True nan True nan True 2.28 False 4.7 False 12.13 A
+30 10.c 64.041878 -24.07576 nan True nan True nan True 2.29 False 4.8 False 0.0 A
+31 11.a 64.039871 -24.06312 2.0881 False 2.045 False 0.032 False 2.29 False 31.9 False 11.77 A
+32 11.b 64.040741 -24.063623 nan True nan True nan True 1.98 False 14.3 False 12.07 A
+33 11.c 64.047173 -24.071136 nan True nan True nan True 2.09 False 3.1 False 0.0 A
+34 12.a 64.036674 -24.066154 2.091 False 2.281 False 0.044 False 2.0 False 33.7 False 37.35 A
+35 12.b 64.036919 -24.066378 nan True nan True nan True 1.97 False 41.3 False 37.5 A
+36 12.c 64.04615 -24.075211 nan True nan True nan True 2.07 False 3.4 False 0.0 B
+37 13.a 64.034409 -24.063763 2.0943 False 2.061 False 0.002 False 1.93 False 4.0 False 0.0 A
+38 13.b 64.03965 -24.06666 nan True nan True nan True 1.9 False 1.1 False 11.03 A
+39 13.c 64.044632 -24.072124 nan True nan True nan True 2.0 False 4.0 False 2.43 A
+40 14.a 64.032478 -24.068443 2.0948 False 2.147 False 0.019 False nan True nan True 29.13 A
+41 14.b 64.03273 -24.068697 nan True nan True nan True 2.07 False 44.9 False 29.4 A
+42 14.c 64.033592 -24.069477 nan True nan True nan True 2.07 False 28.1 False 30.53 A
+43 14.d 64.043633 -24.076994 nan True nan True nan True 2.04 False 4.3 False 0.0 A
+44 15.a 64.042274 -24.060577 2.1067 False 2.054 False 0.002 False 1.85 False 6.0 False 0.0 A
+45 15.b 64.047539 -24.066078 nan True nan True nan True 2.24 False 49.7 False 3.48 A
+46 15.c 64.048187 -24.066992 nan True nan True nan True 1.99 False 7.2 False 3.36 A
+47 16.a 64.023552 -24.081749 2.2182 False 2.203 False 0.039 False 2.28 False 7.6 False 0.0 A
+48 16.b 64.028671 -24.086002 nan True nan True nan True 0.04 False nan True 1.18 A
+49 16.c 64.0299 -24.086395 nan True nan True nan True 2.27 False 17.3 False 1.24 A
+50 17.a 64.025124 -24.08334 2.221 False 2.009 False 0.038 False 2.28 False nan True 1.39 A
+51 17.b 64.026176 -24.08428 nan True nan True nan True 2.28 False 18.7 False 1.51 A
+52 17.c 64.030945 -24.086756 nan True nan True nan True 2.31 False 6.3 False 0.0 A
+53 18.a 64.026718 -24.074705 2.23 False 2.286 False 0.036 False 2.28 False 6.0 False 12.5 A
+54 18.b 64.030228 -24.078606 nan True nan True nan True 0.55 False 1.6 False 16.98 A
+55 18.c 64.038177 -24.082342 nan True nan True nan True 2.27 False 3.6 False 0.0 A
+56 19.a 64.040993 -24.062986 2.243 False 2.168 False 0.038 False 2.3 False 64.7 False 11.12 A
+57 19.b 64.041161 -24.063095 nan True nan True nan True 2.32 False 28.1 False 11.17 A
+58 19.c 64.047653 -24.07081 nan True nan True nan True 1.76 False 3.1 False 0.0 B
+59 20.a 64.025841 -24.072264 2.28 False 2.409 False 0.002 False 1.89 False 6.3 False 0.0 A
+60 20.b 64.032974 -24.077028 nan True nan True nan True 0.53 False 2.2 False 20.27 A
+61 20.c 64.037712 -24.080503 nan True nan True nan True 2.29 False 6.4 False 15.5 A
+62 21.a 64.034332 -24.063032 2.281 False 2.199 False 0.002 False 2.17 False 3.1 False 0.0 A
+63 21.b 64.04055 -24.06636 nan True nan True nan True 2.01 False 6.9 False 14.06 A
+64 21.c 64.044701 -24.07152 nan True nan True nan True 2.16 False 4.6 False 9.9 A
+65 22.a 64.026131 -24.077278 2.2982 False 2.262 False 0.027 False 1.94 False 8.9 False 13.33 A
+66 22.b 64.028481 -24.079771 nan True nan True nan True 2.24 False 6.9 False 14.64 A
+67 22.c 64.036781 -24.083941 nan True nan True nan True nan True 3.1 False 0.0 A
+68 23.a 64.026939 -24.075771 2.334 False 2.396 False 0.028 False 2.31 False 8.8 False 18.28 A
+69 23.b 64.029526 -24.078621 nan True nan True nan True 0.52 False 4.6 False 19.99 A
+70 23.c 64.038307 -24.083006 nan True nan True nan True 2.31 False 3.2 False 0.0 A
+71 24.a 64.024704 -24.071487 2.5425 False 2.604 False 0.002 False 2.7 False 3.6 False 0.0 A
+72 24.b 64.032715 -24.078537 nan True nan True nan True 2.68 False 12.0 False 29.5 A
+73 24.c 64.035736 -24.079952 nan True nan True nan True 2.62 False 13.4 False 29.42 A
+74 25.a 64.036278 -24.060682 2.922 False 2.978 False 0.002 False 2.68 False 2.5 False 0.0 A
+75 25.b 64.044838 -24.066723 nan True nan True nan True 0.29 False nan True 14.83 A
+76 25.c 64.046104 -24.068829 nan True nan True nan True 2.72 False 8.5 False 14.91 A
+77 26.a 64.026299 -24.076046 2.9259 False 3.029 False 0.002 False 3.19 False 7.7 False 20.77 A
+78 26.b 64.028923 -24.079155 nan True nan True nan True 2.79 False 4.9 False 21.32 A
+79 26.c 64.038338 -24.083937 nan True nan True nan True 2.29 False 2.9 False 0.0 B
+80 27.a 64.037872 -24.068842 2.9911 False 2.836 False 0.002 False 0.55 False 2.8 False 15.52 A
+81 27.b 64.043831 -24.073641 nan True nan True nan True 0.38 False 5.9 False 6.86 A
+82 27.c 64.032242 -24.064041 nan True nan True nan True 3.07 False 3.4 False 0.0 C
+83 28.a 64.028976 -24.075569 3.075 False 3.098 False 0.944 False 4.08 False nan True 0.13 A
+84 28.b 64.029701 -24.07621 nan True nan True nan True 4.67 False 43.0 False 0.0 A
+85 29.a 64.025269 -24.073608 3.0773 False 3.086 False 0.087 False 2.76 False 4.0 False 0.0 A
+86 29.b 64.030563 -24.079248 nan True nan True nan True 3.31 False 3.1 False 9.78 A
+87 29.c 64.037796 -24.082417 nan True nan True nan True 2.76 False 4.1 False 0.41 A
+88 30.a 64.02552 -24.073679 3.1103 False 3.13 False 0.079 False 2.7 False 4.3 False 3.36 A
+89 30.b 64.030449 -24.079046 nan True nan True nan True 0.57 False 2.7 False 11.77 A
+90 30.c 64.038147 -24.082426 nan True nan True nan True 2.72 False 3.9 False 0.0 A
+91 31.a 64.027649 -24.072704 3.2175 False 3.142 False 0.05 False 2.71 False 8.6 False 20.35 A
+92 31.b 64.032234 -24.075134 nan True nan True nan True 3.0 False 4.7 False 22.84 A
+93 31.c 64.040428 -24.081505 nan True nan True nan True nan True 4.3 False 0.0 A
+94 32.a 64.026863 -24.069242 3.2195 False 3.225 False 0.002 False 2.73 False 4.6 False 0.0 A
+95 32.b 64.034866 -24.074615 nan True nan True nan True 3.01 False 5.7 False 17.74 A
+96 32.c 64.039764 -24.078896 nan True nan True nan True 2.77 False 6.1 False 13.39 A
+97 33.a 64.034569 -24.066988 3.2215 False 3.213 False 0.002 False 2.78 False nan True 43.08 A
+98 33.b 64.034264 -24.066517 nan True nan True nan True 0.33 False 7.0 False 43.19 A
+99 33.c 64.034042 -24.06694 nan True nan True nan True 0.45 False 2.6 False 43.21 A
+100 33.d 64.046127 -24.076797 nan True nan True nan True 2.71 False 4.3 False 0.0 A
+101 33.e 64.034081 -24.066479 nan True nan True nan True 2.79 False 19.2 False 43.18 A
+102 34.a 64.046532 -24.060431 3.2355 False 3.331 False 0.345 False 3.17 False 34.6 False 0.08 A
+103 34.b 64.047035 -24.060827 nan True nan True nan True 2.74 False nan True 0.09 A
+104 34.c 64.049156 -24.062895 nan True nan True nan True 3.19 False nan True 0.0 A
+105 35.a 64.038429 -24.084162 3.2526 False 3.206 False 0.078 False 2.71 False 2.9 False 0.0 A
+106 35.b 64.026405 -24.076729 nan True nan True nan True 3.06 False 13.5 False 23.47 A
+107 35.c 64.028404 -24.079033 nan True nan True nan True 2.94 False 7.3 False 23.3 A
+108 36.a 64.040154 -24.066771 3.2882 False 3.161 False 0.125 False 2.69 False 2.4 False 5.71 A
+109 36.b 64.045181 -24.072372 nan True nan True nan True 3.06 False 4.4 False 0.0 A
+110 37.a 64.04007 -24.066681 3.2883 False 3.098 False 0.098 False nan True 1.7 False 7.19 A
+111 37.b 64.045425 -24.072557 nan True nan True nan True 2.79 False 4.3 False 0.0 A
+112 38.a 64.041634 -24.060032 3.2885 False 3.319 False 0.105 False 3.04 False 5.7 False 1.04 A
+113 38.b 64.045334 -24.062792 nan True nan True nan True 3.02 False 15.9 False 2.09 A
+114 38.c 64.049309 -24.068213 nan True nan True nan True 2.71 False 4.2 False 0.0 A
+115 39.a 64.023926 -24.075027 3.291 False 3.206 False 0.042 False 3.13 False 3.4 False 0.0 A
+116 39.b 64.030174 -24.080952 nan True nan True nan True 4.19 False 4.4 False 11.39 A
+117 39.c 64.035744 -24.083611 nan True nan True nan True 0.28 False 4.5 False 7.29 A
+118 40.a 64.045586 -24.072701 3.292 False 3.079 False 0.082 False 3.0 False 4.3 False 0.0 A
+119 40.b 64.040001 -24.066645 nan True nan True nan True 2.7 False 1.4 False 8.29 A
+120 41.a 64.046913 -24.075411 3.2922 False 3.316 False 0.08 False 2.98 False 3.7 False 0.0 A
+121 41.b 64.035301 -24.064764 nan True nan True nan True 2.72 False 10.3 False 35.99 A
+122 41.c 64.038589 -24.065998 nan True nan True nan True 0.55 False 10.2 False 36.25 A
+123 42.a 64.022774 -24.074625 3.4406 False 3.493 False 0.002 False 2.72 False 2.8 False 0.0 A
+124 42.b 64.031319 -24.081928 nan True nan True nan True 2.72 False 6.2 False 21.65 A
+125 42.c 64.033714 -24.08322 nan True nan True nan True 2.72 False 14.4 False 21.88 A
+126 43.a 64.025024 -24.07505 3.4909 False 3.417 False 0.056 False 3.55 False 4.4 False 6.99 A
+127 43.b 64.029488 -24.079918 nan True nan True nan True 3.56 False 4.3 False 12.01 A
+128 43.c 64.037552 -24.083683 nan True nan True nan True 3.65 False 3.3 False 0.0 A
+129 44.a 64.03775 -24.060776 3.6065 False 3.574 False 0.065 False 0.37 False 3.4 False 0.51 A
+130 44.b 64.043709 -24.064419 nan True nan True nan True 2.98 False 6.0 False 4.67 A
+131 44.c 64.047882 -24.070196 nan True nan True nan True nan True 3.7 False 0.0 A
+132 45.a 64.023621 -24.073181 3.7153 False 4.005 False 0.002 False 0.15 False 3.2 False 0.0 A
+133 45.b 64.031158 -24.080338 nan True nan True nan True 3.49 False 4.5 False 19.4 A
+134 45.c 64.03595 -24.0826 nan True nan True nan True 2.67 False 6.0 False 18.18 A
+135 46.a 64.026932 -24.069977 3.871 False 3.651 False 0.086 False 0.2 False 5.3 False 0.0 A
+136 46.b 64.034012 -24.074596 nan True nan True nan True 0.58 False 4.6 False 11.16 A
+137 46.c 64.04026 -24.079895 nan True nan True nan True 0.87 False 5.6 False 1.19 A
+138 47.a 64.023819 -24.078503 3.9228 False 3.598 False 0.002 False 0.13 False 5.3 False 5.27 A
+139 47.b 64.027702 -24.082638 nan True nan True nan True 4.63 False 7.2 False 7.0 A
+140 47.c 64.035065 -24.08568 nan True nan True nan True 0.91 False 3.4 False 0.0 B
+141 48.a 64.027199 -24.073603 3.923 False 3.393 False 0.254 False 3.83 False 8.2 False 0.0 A
+142 48.b 64.031067 -24.077208 nan True nan True nan True 0.57 False 85.8 False 0.36 A
+143 49.a 64.027245 -24.068253 3.968 False 3.997 False 0.035 False 4.09 False 4.7 False 0.0 A
+144 49.b 64.035187 -24.073887 nan True nan True nan True 2.98 False 6.0 False 16.59 A
+145 49.c 64.040565 -24.078417 nan True nan True nan True 0.63 False 6.8 False 12.22 A
+146 50.a 64.031136 -24.064331 4.069 False 4.039 False 0.033 False 0.67 False 3.4 False 0.0 A
+147 50.b 64.037308 -24.069706 nan True nan True nan True 0.63 False 4.1 False 12.43 A
+148 50.c 64.043991 -24.075085 nan True nan True nan True 0.65 False 4.9 False 2.88 A
+149 51.a 64.03376 -24.065819 4.0707 False 4.068 False 0.084 False 4.89 False 12.0 False 41.64 A
+150 51.b 64.035835 -24.067743 nan True nan True nan True 0.62 False 4.0 False 41.17 A
+151 51.c 64.046516 -24.076773 nan True nan True nan True 2.97 False 4.4 False 0.0 A
+152 52.a 64.026611 -24.070532 4.1032 False 3.947 False 0.002 False 0.65 False 5.2 False 0.59 A
+153 52.b 64.03376 -24.074852 nan True nan True nan True nan True 4.4 False 10.79 A
+154 52.c 64.040154 -24.080339 nan True nan True nan True 4.6 False 5.4 False 0.0 A
+155 53.a 64.037743 -24.06106 4.1138 False 4.116 False 0.113 False 0.92 False 3.8 False 6.72 A
+156 53.b 64.042961 -24.063931 nan True nan True nan True 4.12 False 7.8 False 9.11 A
+157 53.c 64.048248 -24.070921 nan True nan True nan True 0.38 False 3.3 False 0.0 A
+158 54.a 64.037834 -24.059858 4.115 False 4.105 False 0.091 False nan True 2.7 False 0.0 A
+159 54.b 64.045944 -24.065847 nan True nan True nan True nan True 10.2 False 8.95 A
+160 54.c 64.047768 -24.068672 nan True nan True nan True 0.63 False 5.7 False 9.23 A
+161 55.a 64.023491 -24.07616 4.1218 False 3.952 False 0.086 False nan True 3.5 False 0.0 A
+162 55.b 64.029312 -24.081839 nan True nan True nan True 4.35 False 5.0 False 7.55 A
+163 55.c 64.035568 -24.084707 nan True nan True nan True 4.34 False 3.8 False 2.5 A
+164 56.a 64.039207 -24.06983 4.298 False 4.207 False 0.002 False 17.1 False 4.1 False 27.04 A
+165 56.b 64.042809 -24.072178 nan True nan True nan True 3.53 False 8.6 False 27.33 A
+166 56.c 64.030678 -24.063269 nan True nan True nan True 0.55 False 2.6 False 0.0 C
+167 57.a 64.036659 -24.063314 4.299 False 4.385 False 0.002 False 6.36 False 8.3 False 31.55 A
+168 57.b 64.039703 -24.064278 nan True nan True nan True 4.79 False 7.5 False 30.76 A
+169 57.c 64.04808 -24.074223 nan True nan True nan True 0.41 False 3.2 False 0.0 A
+170 58.a 64.025612 -24.071329 4.5018 False 4.511 False 0.002 False 4.48 False 4.2 False 0.0 A
+171 58.b 64.033104 -24.076052 nan True nan True nan True 0.57 False 2.1 False 11.43 A
+172 58.c 64.03933 -24.081331 nan True nan True nan True nan True 4.9 False 2.02 A
+173 59.a 64.024651 -24.077213 4.53 False 6.107 False 1.112 False 0.23 False 6.0 False 15.25 B
+174 59.b 64.028671 -24.081221 nan True nan True nan True nan True 5.4 False 14.95 B
+175 59.c 64.037582 -24.08573 nan True nan True nan True 0.61 False 2.5 False 0.0 C
+176 60.a 64.036697 -24.068043 4.609 False 4.453 False 0.122 False 0.45 False 2.2 False 35.24 A
+177 60.b 64.046585 -24.076204 nan True nan True nan True 0.56 False 4.3 False 0.0 A
+178 60.c 64.033569 -24.065058 nan True nan True nan True 4.85 False 7.5 False 35.31 C
+179 61.a 64.040672 -24.059166 5.0996 False 5.195 False 0.003 False 0.23 False 3.5 False 0.0 A
+180 61.b 64.046875 -24.063866 nan True nan True nan True 4.64 False 11.2 False 2.38 A
+181 61.c 64.049652 -24.068056 nan True nan True nan True 0.3 False 4.5 False 1.63 A
+182 62.a 64.029366 -24.073355 5.106 False 5.001 False 0.131 False 5.15 False 68.2 False 38.54 A
+183 62.b 64.030869 -24.074207 nan True nan True nan True 5.15 False 12.3 False 37.72 A
+184 62.c 64.042152 -24.082333 nan True nan True nan True 5.14 False 4.5 False 0.0 B
+185 63.a 64.026344 -24.068735 5.106 False 5.016 False 0.054 False 5.13 False 4.6 False 0.0 A
+186 63.b 64.034988 -24.074608 nan True nan True nan True 0.28 False 5.5 False 17.73 A
+187 63.c 64.040131 -24.079134 nan True nan True nan True 5.12 False 6.8 False 14.83 A
+188 64.a 64.023064 -24.077299 5.365 False 4.874 False 0.147 False 5.48 False 3.8 False 0.0 A
+189 64.b 64.028481 -24.083029 nan True nan True nan True 4.86 False 7.9 False 4.9 A
+190 64.c 64.035126 -24.085533 nan True nan True nan True 5.48 False 3.6 False 0.2 A
+191 65.a 64.022209 -24.077309 5.638 False 5.246 False 0.002 False 5.72 False 3.0 False 0.0 A
+192 65.b 64.028748 -24.084246 nan True nan True nan True 0.6 False 4.4 False 9.43 A
+193 65.c 64.033806 -24.08573 nan True nan True nan True 3.89 False 5.3 False 7.95 A
+194 66.a 64.030907 -24.083735 5.9729 False 4.348 False 1.517 False 6.01 False 24.7 False 0.0 A
+195 66.b 64.032112 -24.084261 nan True nan True nan True 6.05 False nan True 0.7 A
+196 67.a 64.03994 -24.066923 5.998 False 6.033 False 0.39 False 0.35 False 1.7 False 9.1 A
+197 67.b 64.046043 -24.07407 nan True nan True nan True 4.67 False 4.7 False 0.0 A
+198 68.a 64.036499 -24.062275 6.0665 False 6.107 False 0.208 False nan True 5.0 False 24.54 A
+199 68.b 64.041115 -24.064133 nan True nan True nan True nan True 3.7 False 23.71 A
+200 68.c 64.048477 -24.073648 nan True nan True nan True 5.71 False 3.1 False 0.0 A
+201 69.a 64.043648 -24.059034 6.1452 False 6.277 False 0.409 False 6.19 False 6.2 False 1.39 A
+202 69.b 64.047913 -24.06209 nan True nan True nan True 6.07 False 14.8 False 0.88 A
+203 69.c 64.050941 -24.066565 nan True nan True nan True 5.97 False 5.7 False 0.0 A
+204 70.a 64.050858 -24.066435 6.145 False 6.06 False 0.422 False 5.65 False 6.1 False 0.0 A
+205 70.b 64.043488 -24.058945 nan True nan True nan True 6.38 False 5.6 False 0.64 A
+206 70.c 64.048248 -24.062433 nan True nan True nan True 5.92 False 16.2 False 0.47 A
+207 71.a 64.038963 -24.06068 6.147 False 6.491 False 0.281 False 1.05 False 4.8 False 12.44 A
+208 71.b 64.043365 -24.062984 nan True nan True nan True 0.58 False 4.9 False 11.7 A
+209 71.c 64.04937 -24.071024 nan True nan True nan True nan True 3.0 False 0.0 C
+210 72.a 64.051147 -24.066538 6.149 False 5.783 False 0.438 False 1.09 False 5.4 False 0.0 A
+211 72.b 64.047218 -24.061197 nan True nan True nan True 1.75 False 16.7 False 1.65 A
+212 72.c 64.044563 -24.059338 nan True nan True nan True nan True 9.8 False 2.27 A
+213 73.a 64.041496 -24.06263 6.149 False 6.037 False 0.167 False 0.58 False 20.8 False 22.24 A
+214 73.b 64.040092 -24.061878 nan True nan True nan True 6.57 False 24.4 False 22.6 A
+215 73.c 64.049477 -24.072273 nan True nan True nan True 0.12 False 2.8 False 0.0 C
+216 74.a 64.050758 -24.065859 6.149 False 6.762 False 2.167 False 3.82 False 8.4 False 0.0 A
+217 74.b 64.049301 -24.063375 nan True nan True nan True 6.23 False 24.2 False 0.17 A
+218 75.a 64.045898 -24.0602 6.629 False 11.108 False 7.257 False 4.67 False nan True 0.0 A
+219 75.b 64.045601 -24.060043 nan True nan True nan True nan True nan True 0.02 A
+220 76.a 64.030846 -24.067251 1.99 False 2.031 False 0.022 False 1.92 False 5.5 False 2.64 A
+221 76.b 64.03524 -24.071032 nan True nan True nan True 1.88 False 4.4 False 12.84 A
+222 76.c 64.041916 -24.075859 nan True nan True nan True 1.94 False 4.8 False 0.0 A
+223 77.a 64.034386 -24.066576 3.2215 False 3.246 False 0.031 False 2.78 False 7.2 False 42.82 A
+224 77.b 64.034546 -24.066895 nan True nan True nan True 2.78 False 69.8 False 42.83 A
+225 77.c 64.034004 -24.066929 nan True nan True nan True 0.44 False 2.9 False 43.0 A
+226 77.d 64.04615 -24.076826 nan True nan True nan True nan True 4.3 False 0.0 A
+227 78.a 64.037956 -24.07445 nan True 2.458 False 0.053 False 2.75 False 56.4 False 31.96 B
+228 78.b 64.038078 -24.07456 nan True nan True nan True 1.79 False nan True 31.99 B
+229 78.c 64.027893 -24.06707 nan True nan True nan True 0.97 False 3.6 False 0.0 B
+230 79.a 64.036247 -24.074194 nan True 1.524 False 0.002 False nan True 13.5 False 23.94 B
+231 79.b 64.037827 -24.075367 nan True nan True nan True 1.59 False 15.3 False 23.11 B
+232 79.c 64.028877 -24.069141 nan True nan True nan True 1.64 False 4.3 False 0.0 C
+233 80.a 64.043884 -24.072388 nan True 3.269 False 0.051 False 2.69 False 5.4 False 17.83 B
+234 80.b 64.039352 -24.067961 nan True nan True nan True 0.56 False 17.1 False 20.66 B
+235 80.c 64.032013 -24.063265 nan True nan True nan True 2.72 False 2.8 False 0.0 B
+236 81.a 64.032738 -24.081612 nan True 11.299 False 0.544 False 2.56 False 9.2 False 33.32 B
+237 81.b 64.033119 -24.081804 nan True nan True nan True 2.35 False 13.0 False 33.7 B
+238 81.c 64.022079 -24.071712 nan True nan True nan True 0.39 False 3.0 False 0.0 C
+239 82.a 64.027115 -24.078629 nan True 1.98 False 0.041 False 1.91 False nan True 15.26 B
+240 82.b 64.02758 -24.079121 nan True nan True nan True 1.96 False 23.4 False 15.6 B
+241 82.c 64.03653 -24.084009 nan True nan True nan True 2.12 False 3.0 False 0.0 C
+242 83.a 64.02684 -24.075186 nan True 11.669 False 0.004 False nan True 14.9 False 36.46 B
+243 83.b 64.029076 -24.077995 nan True nan True nan True 1.06 False 7.0 False 34.1 B
+244 83.c 64.041054 -24.084436 nan True nan True nan True 7.48 False 3.3 False 0.0 C
+245 84.a 64.036873 -24.071026 nan True 1.114 False 0.052 False nan True 25.6 False 0.06 B
+246 84.b 64.037666 -24.071342 nan True nan True nan True 0.97 False nan True 0.0 B
+247 85.a 64.024178 -24.081656 nan True 1.87 False 0.03 False nan True 9.0 False 0.0 B
+248 85.b 64.030502 -24.085911 nan True nan True nan True 0.6 False 8.4 False 0.85 B
+249 85.c 64.029388 -24.08551 nan True nan True nan True 0.17 False 20.5 False 1.12 C
+250 86.a 64.025436 -24.080927 nan True 1.248 False 0.002 False 0.7 False 7.1 False 0.0 B
+251 86.b 64.026184 -24.081728 nan True nan True nan True 1.53 False 11.7 False 0.55 B
+252 86.c 64.030518 -24.08461 nan True nan True nan True 0.64 False 8.5 False 1.68 C
+253 87.a 64.028076 -24.06727 nan True 2.961 False 0.002 False 2.71 False 4.1 False 0.0 B
+254 87.b 64.036201 -24.073383 nan True nan True nan True nan True 7.1 False 22.48 B
+255 87.c 64.040428 -24.076496 nan True nan True nan True 0.37 False 8.4 False 20.9 B
+256 88.a 64.025635 -24.076721 nan True 3.644 False 0.002 False nan True 7.8 False 20.22 B
+257 88.b 64.028183 -24.079634 nan True nan True nan True 2.71 False 6.2 False 20.26 B
+258 88.c 64.038002 -24.084518 nan True nan True nan True 3.39 False 2.8 False 0.0 C
+259 89.a 64.028015 -24.07089 nan True 2.964 False 0.002 False nan True 6.8 False 13.59 B
+260 89.b 64.033173 -24.074184 nan True nan True nan True 2.72 False 5.4 False 18.48 B
+261 89.c 64.040741 -24.080198 nan True nan True nan True nan True 4.9 False 0.0 B
+262 90.a 64.028214 -24.070808 nan True 2.952 False 0.002 False nan True 7.2 False 15.32 B
+263 90.b 64.033134 -24.07398 nan True nan True nan True 3.06 False 5.7 False 19.51 B
+264 90.c 64.040901 -24.080122 nan True nan True nan True 13.8 False 5.0 False 0.0 B
+265 91.a 64.027756 -24.070908 nan True 2.976 False 0.002 False 2.69 False 6.4 False 10.85 B
+266 91.b 64.033272 -24.074343 nan True nan True nan True 0.52 False 5.1 False 16.94 B
+267 91.c 64.04052 -24.080225 nan True nan True nan True 0.23 False 4.9 False 0.0 B
+268 92.a 64.027428 -24.07086 nan True 3.071 False 0.053 False 1.91 False 5.9 False 8.14 B
+269 92.b 64.040314 -24.080204 nan True nan True nan True 0.15 False 5.0 False 0.0 B
+270 93.a 64.045799 -24.064848 nan True 1.708 False 0.032 False 1.53 False 79.0 False 3.64 B
+271 93.b 64.047104 -24.066744 nan True nan True nan True 0.61 False 96.7 False 4.19 B
+272 93.c 64.041931 -24.061298 nan True nan True nan True 6.76 False 6.6 False 0.0 C
+273 94.a 64.038376 -24.07242 nan True 1.265 False 0.013 False nan True nan True 25.7 B
+274 94.b 64.038704 -24.07259 nan True nan True nan True 1.72 False 22.0 False 25.65 B
+275 94.c 64.031525 -24.066914 nan True nan True nan True 0.18 False 4.0 False 0.0 C
+276 95.a 64.037231 -24.062462 nan True 2.359 False 0.022 False 1.97 False 4.7 False 7.53 B
+277 95.b 64.041443 -24.064547 nan True nan True nan True 1.98 False 4.3 False 10.71 B
+278 95.c 64.046837 -24.071337 nan True nan True nan True 2.34 False 3.3 False 0.0 B
+279 96.a 64.043442 -24.067177 nan True 2.059 False 0.149 False 1.73 False 11.8 False 0.0 B
+280 96.b 64.044884 -24.068945 nan True nan True nan True nan True 16.3 False 0.69 B
+281 97.a 64.03756 -24.061295 nan True 6.731 False 0.002 False 6.0 False 4.4 False 15.15 B
+282 97.b 64.042343 -24.063738 nan True nan True nan True 0.61 False 2.6 False 15.23 B
+283 97.c 64.048927 -24.071964 nan True nan True nan True 2.42 False 3.0 False 0.0 B
+284 98.a 64.033585 -24.071421 nan True 2.318 False 0.029 False 2.34 False 11.5 False 24.27 B
+285 98.b 64.0308 -24.068945 nan True nan True nan True nan True 10.5 False 21.63 B
+286 98.c 64.042534 -24.077715 nan True nan True nan True nan True 5.0 False 0.0 B
+287 99.a 64.040581 -24.075516 nan True 2.255 False 0.002 False 1.99 False 6.9 False 16.18 B
+288 99.b 64.03614 -24.072449 nan True nan True nan True 1.91 False 8.1 False 20.09 B
+289 99.c 64.029343 -24.067066 nan True nan True nan True 2.32 False 4.2 False 0.0 C
+290 100.a 64.041115 -24.078957 nan True 6.674 False 0.222 False 7.4 False 7.3 False 7.39 B
+291 100.b 64.03492 -24.073774 nan True nan True nan True 7.39 False 5.4 False 13.17 C
+292 100.c 64.026932 -24.068048 nan True nan True nan True 7.39 False 5.0 False 0.0 B
+293 101.a 64.037834 -24.073202 nan True 1.262 False 0.016 False 2.05 False 77.4 False 24.11 B
+294 101.b 64.037445 -24.072962 nan True nan True nan True 1.86 False 32.3 False 24.33 B
+295 101.c 64.030815 -24.067913 nan True nan True nan True 0.29 False 4.4 False 0.0 C
+296 102.a 64.033752 -24.066456 nan True 2.623 False 0.002 False 0.45 False 15.8 False 34.5 B
+297 102.b 64.04541 -24.07634 nan True nan True nan True 0.04 False 4.2 False 0.0 B
+298 102.c 64.035576 -24.068159 nan True nan True nan True 0.63 False 17.3 False 35.38 C
+299 103.a 64.029175 -24.06769 nan True 1.851 False 0.003 False 6.27 False 4.1 False 0.0 B
+300 103.b 64.035934 -24.072861 nan True nan True nan True 1.79 False 8.5 False 21.15 B
+301 103.c 64.040009 -24.075634 nan True nan True nan True 0.56 False 7.0 False 17.98 B
+302 104.a 64.043694 -24.067207 nan True 2.003 False 0.002 False nan True 15.2 False 16.98 B
+303 104.b 64.044983 -24.068687 nan True nan True nan True 0.31 False nan True 17.81 B
+304 104.c 64.036156 -24.061491 nan True nan True nan True 0.88 False 2.7 False 0.0 C
+305 105.a 64.03363 -24.066181 nan True 3.207 False 0.052 False 2.71 False 12.7 False 38.98 B
+306 105.b 64.045914 -24.076571 nan True nan True nan True nan True 4.3 False 0.0 B
+307 106.a 64.0336 -24.066488 nan True 2.716 False 0.033 False 2.68 False 14.0 False 35.31 B
+308 106.b 64.035408 -24.068256 nan True nan True nan True 0.43 False 5.2 False 35.82 B
+309 106.c 64.045441 -24.076439 nan True nan True nan True 2.66 False 4.2 False 0.0 B
+310 107.a 64.035553 -24.066431 nan True 0.907 False 0.002 False nan True 5.1 False 0.0 B
+311 107.b 64.039993 -24.070284 nan True nan True nan True 0.75 False 7.2 False 17.48 B
+312 107.c 64.037453 -24.068464 nan True nan True nan True 0.56 False 3.9 False 17.0 C
+313 108.a 64.027473 -24.07744 nan True 4.137 False 2.423 False 0.31 False 48.6 False 0.4 C
+314 108.b 64.027969 -24.077969 nan True nan True nan True 1.74 False 13.7 False 0.0 C
+315 109.a 64.03199 -24.085476 nan True 2.173 False 0.033 False 1.9 False 7.1 False 3.17 C
+316 109.b 64.028961 -24.084475 nan True nan True nan True 2.3 False 8.4 False 4.14 C
+317 109.c 64.023598 -24.079748 nan True nan True nan True 2.21 False 4.7 False 0.0 C
+318 110.a 64.03553 -24.067764 nan True 1.414 False 0.372 False 0.38 False 2.9 False 0.0 C
+319 110.b 64.035255 -24.067951 nan True nan True nan True 0.37 False 4.9 False 0.17 C
+320 111.a 64.03569 -24.067989 nan True 1.46 False 1.112 False 0.56 False 8.4 False 0.07 C
+321 111.b 64.035553 -24.068079 nan True nan True nan True 0.6 False 18.9 False 0.0 C
+322 112.a 64.033035 -24.06411 nan True 1.541 False 0.002 False 1.74 False 3.0 False 0.0 C
+323 112.b 64.041008 -24.070484 nan True nan True nan True 2.36 False 17.8 False 26.88 C
+324 112.c 64.041237 -24.070604 nan True nan True nan True 1.6 False 15.4 False 26.78 C
+325 113.a 64.035179 -24.089832 nan True 10.697 False 6.5 False 2.02 False 1.3 False 2.5 D
+326 113.b 64.03569 -24.089853 nan True nan True nan True 2.04 False 1.4 False 0.0 D
+327 113.c 64.036652 -24.089678 nan True nan True nan True 2.35 False 1.3 False 0.54 D
+328 114.a 64.022339 -24.082636 nan True 16.671 False 1.419 False 0.4 False nan True 0.04 D
+329 114.b 64.022301 -24.082575 nan True nan True nan True 0.45 False nan True 0.1 D
+330 114.c 64.02227 -24.082546 nan True nan True nan True 0.51 False nan True 0.0 D
+331 115.a 64.04493 -24.061071 nan True 2.622 False 0.002 False 2.43 False 31.1 False 1.16 B
+332 115.b 64.045525 -24.061422 nan True nan True nan True 2.27 False 15.1 False 1.2 B
+333 115.c 64.049713 -24.066822 nan True nan True nan True 1.04 False 4.8 False 0.0 C
+334 115.d 64.048317 -24.06452 nan True nan True nan True 0.6 False 16.7 False 0.77 C
+335 116.a 64.036842 -24.077229 nan True 16.694 False 1.858 False 3.11 False 38.2 False 0.0 C
+336 116.b 64.03727 -24.077747 nan True nan True nan True 0.56 False nan True 0.96 C
+337 117.a 64.041512 -24.058384 nan True 10.599 False 0.002 False 0.34 False 3.4 False 0.0 C
+338 117.b 64.049667 -24.064619 nan True nan True nan True 8.26 False 8.6 False 3.31 C
+339 117.c 64.050392 -24.06642 nan True nan True nan True nan True 8.1 False 2.99 C
+340 118.a 64.029228 -24.07589 nan True 2.742 False 2.668 False 4.06 False 84.5 False 0.04 B
+341 118.b 64.029411 -24.076067 nan True nan True nan True 4.06 False 54.0 False 0.0 B
+342 119.a 64.025459 -24.081047 nan True 2.678 False 2.489 False 3.0 False nan True 0.09 B
+343 119.b 64.025673 -24.081308 nan True nan True nan True 6.6 False 49.2 False 0.0 B

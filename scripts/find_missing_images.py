@@ -36,15 +36,15 @@ SYNC = next((p for p in (Path("/Users/isaque.dutra/sync/GalaxyClusterImaging"), 
 CATALOGS = SYNC / "RedshiftCatalogs/M0416"
 # The repository copies, used when the synced catalog folder is not on this machine.  The Rihtarsic tables A1-A3,
 # Bergamini et al. 2023 and Caminha et al. 2017 have no repository copy and are skipped when absent.
-LOCAL_CANUCS = Path("data/CANUCS/M0416_Rihtarsic2025")
+LOCAL_CANUCS = Path("catalogs/m0416/canucs2025")
 PHOT = CATALOGS / "canucs_dr1/hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz"
-if not PHOT.exists():
-    PHOT = LOCAL_CANUCS / "canucs_dr1/hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz"
+if not PHOT.exists():                      # the 31 MB DR1 catalog is not in the repository
+    PHOT = Path("data/CANUCS/M0416_Rihtarsic2025/canucs_dr1/hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz")
 CANUCS_FULL = CATALOGS / "canucs_images_2025/hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
 if not CANUCS_FULL.exists():
-    CANUCS_FULL = LOCAL_CANUCS / "hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
+    CANUCS_FULL = LOCAL_CANUCS / "source/hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
 # Diego et al. 2024 (PEARLS, A&A 690, A114), Table B.1: 343 images of 119 sources, ranks A-D.
-M0416_DIEGO = Path("data/JWST/M0416_Diego2024_PEARLS/images.ecsv")
+M0416_DIEGO = Path("catalogs/m0416/diego2024/images.ecsv")
 # The HST-based catalogs (Bergamini 2023, Caminha 2017) sit in the HST astrometric frame, offset from the JWST (CANUCS)
 # frame of the model by (+0.220" west, -0.084" north) (the CANUCS members are Bergamini's shifted by this; measured on the
 # Bergamini 2022 images against ours: median (-0.214, -0.081)" in model x east, y north).  The CANUCS catalogs, the DR1
@@ -54,7 +54,7 @@ HST_TO_JWST_ARCSEC = (-0.220, -0.084)
 AS1063_CATALOGS = SYNC / "RedshiftCatalogs/AS1063"
 AS1063_PHOT = AS1063_CATALOGS / "dja_v7.5/abells1063-grizli-v7.5-fix_phot_apcorr.fits"
 AS1063_SPECZ = AS1063_CATALOGS / "ned_specz_secure.csv"
-AS1063_DIEGO = Path("data/JWST/AS1063_Diego2026_Beauchesne2025")
+AS1063_DIEGO = Path("catalogs/as1063/diego2026")
 CLUSTER_Z = {"m0416": 0.396, "as1063": 0.348}
 HAS_PHOTOZ = {"m0416": True, "as1063": False}
 COLOUR_BANDS = ["F090W", "F115W", "F200W", "F277W", "F356W", "F410M", "F444W"]      # colours are m_band - m_F150W
@@ -233,8 +233,8 @@ def load_published_as1063(add, rows):
         label = f"{name.get(int(r['family']), 'D' + str(r['family']))}.{r['image']}"
         cls = f"{r['rank']}{r['flag'] if r['flag'] else ''}"
         add("Diego26", label, cls, float(r["ra"]), float(r["dec"]), float(r["z_spec"]) if r["z_spec"] else np.nan)
-    for cat, path in (("Caminha16", "data/Bergamini/A1063_Caminha16/A1063_obs_arcs_v11.dat"),
-                      ("Bergamini19", "data/Bergamini/RXJ2248_Bergamini19/obs_arcs.dat")):
+    for cat, path in (("Caminha16", "catalogs/as1063/caminha2016/source/A1063_obs_arcs_v11.dat"),
+                      ("Bergamini19", "catalogs/as1063/bergamini2019/source/obs_arcs.dat")):
         for line in Path(path).read_text().splitlines():
             if line.startswith("#") or not line.strip():
                 continue

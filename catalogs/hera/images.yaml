@@ -1,0 +1,320 @@
+# Multiple images converted from data/ff_sims/hera/hera_obs_arcs.cat on 2026-11-06 by scripts/convert_lenstool_catalog.py.
+# Positions are RA/Dec (ICRS, degrees); shape is the Lenstool a, b, theta.
+# Band magnitudes from data/ff_sims/hera/hera_obs_arcs_truthmag_band_magnitudes.csv.
+# FF-SIMS hera: simulated cluster, offsets from the model reference (0, 0) as in hera_lenscluster.par; band magnitudes from hera_obs_arcs_truthmag_band_magnitudes.csv
+format: lenscluster-images/1
+defaults: {shape: [0.3734, 0.3734, 90.0], mag_err: 0.00377964}
+systems:
+  '1':
+    z: 0.97
+    images:
+      a: {ra: -0.000692575, dec: -0.004084444444444444, mag: 24.13976873, bands: {hst_f105w: {mag: 24.135068736834572, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.714910207421344, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 23.776633482875045, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.784207972063626, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 24.884376770302364, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.390340562847765, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.29284338844416, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: 0.0018947194444444446, dec: 0.00020666944444444442, mag: 24.50795696, bands: {hst_f105w: {mag: 24.503256960465567, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.08309843105234,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.14482170650604, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.15239619569462, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.25256499393336, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.75852878647876, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.661031612075156, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: 0.0018084777777777777, dec: 0.0013241472222222223, mag: 23.45395331, bands: {hst_f105w: {mag: 23.44925331637105, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.02909478695782,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.090818062411522, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.098392551600103, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.19856134983884, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 23.70452514238424, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.60702796798064, err: 0.01,
+            detected: true, use: true}}}
+  '2':
+    z: 1.23
+    images:
+      a: {ra: -0.005430666666666667, dec: -0.003148111111111111, mag: 24.55506767, bands: {hst_f105w: {mag: 24.402860392995002, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.13916620339695,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.195916786210876, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.239320079070044, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.45918041146182, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.95258651502828, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.49644330376619, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.004281722222222222, dec: 8.67138888888889e-05, mag: 23.97890402, bands: {hst_f105w: {mag: 23.826696744045094, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.56300255444704,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.619753137260965, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.663156430120132, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.883016762511907, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.37642286607837, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.920279654816277, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.00201185, dec: 0.005501527777777777, mag: 27.17455838, bands: {hst_f105w: {mag: 27.022351104286898, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.758656914688846, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 26.815407497502772, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.85881079036194, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 28.078671122753715, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.572077226320175, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 27.115934015058084, err: 0.01, detected: true,
+            use: true}}}
+  '3':
+    z: 1.29
+    images:
+      a: {ra: -0.006700166666666667, dec: -0.002342313888888889, mag: 24.41970534, bands: {hst_f105w: {mag: 24.140678334536556, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.008153096060155,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.176980130788376, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.06629205234216, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.003596440518944, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.879687789655968, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.662549563381475, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.0068334166666666665, dec: 0.0005409, mag: 25.49814399, bands: {hst_f105w: {mag: 25.219116982114947, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.086591743638547, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 25.255418778366767, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.14473069992055, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 26.082035088097335, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.95812643723436, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.740988210959866, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: -0.002802833333333333, dec: 0.006307333333333333, mag: 26.04248166, bands: {hst_f105w: {mag: 25.763454647437943, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.630929408961542,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.799756443689763, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.689068365243546, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.62637275342033, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.502464102557354, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.28532587628286, err: 0.01,
+            detected: true, use: true}}}
+  '4':
+    z: 1.6
+    images:
+      a: {ra: -0.010760222222222223, dec: -0.00011408333333333333, mag: 26.23094675, bands: {hst_f105w: {mag: 25.678743590817895, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.838092691163265,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.94449015868695, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.837043769852567, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.94253281392079, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.883987314685633, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.491736914232312, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.010578, dec: 0.0018535000000000001, mag: 26.35902416, bands: {hst_f105w: {mag: 25.80682099558491, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.96617009593028, err: 0.01, detected: true,
+            use: true}, hst_f140w: {mag: 26.072567563453966, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.965121174619583, err: 0.01, detected: true, use: true}, hst_f435w: {mag: 27.070610218687804,
+            err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.01206471945265, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.619814318999328, err: 0.01, detected: true, use: true}}}
+      c: {ra: -0.007145833333333334, dec: 0.007325861111111111, mag: 26.55611835, bands: {hst_f105w: {mag: 26.003915189993492, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.163264290338862,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.269661757862547, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.162215369028164, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.267704413096386, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.20915891386123, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.81690851340791, err: 0.01,
+            detected: true, use: true}}}
+  '5':
+    z: 1.68
+    images:
+      a: {ra: -0.0010534277777777777, dec: -0.0050048888888888894, mag: 23.97487332, bands: {hst_f105w: {mag: 23.79342499487564, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.63028233718954,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.658624613976034, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.73939890650387, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.844436085706892, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.33456398059133, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.823382331674317, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: 0.0015468083333333334, dec: -0.0030113888888888885, mag: 23.15252441, bands: {hst_f105w: {mag: 22.971076083584865, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 22.807933425898767,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 22.83627570268526, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 22.917049995213095, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.022087174416118, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 23.512215069300556, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.001033420383543, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: 0.0023557694444444445, dec: 0.005656055555555555, mag: 25.85267424, bands: {hst_f105w: {mag: 25.671225910730385, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.508083253044287,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.53642552983078, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.617199822358614, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.722237001561638, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.212364896446076, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.701183247529062, err: 0.01,
+            detected: true, use: true}}}
+  '6':
+    z: 1.63
+    images:
+      a: {ra: -0.0075243888888888895, dec: -0.0018246083333333335, mag: 24.21778204, bands: {hst_f105w: {mag: 23.93981257002447, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.017370977364163,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.858721426339756, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.80160179279991, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.0322340244563, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.599004725244846, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.27572879876859, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.007840694444444445, dec: -0.00016001388888888887, mag: 24.89999086, bands: {hst_f105w: {mag: 24.622021387256478, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.699579794596172,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.540930243571765, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.48381061003192, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.71444284168831, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.281213542476856, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.9579376160006, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.002417997222222222, dec: 0.007925166666666667, mag: 25.40194996, bands: {hst_f105w: {mag: 25.12398048292841, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.201538890268104,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.042889339243697, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.985769705703852, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.216401937360242, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.783172638148788, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.45989671167253, err: 0.01,
+            detected: true, use: true}}}
+  '7':
+    z: 1.7
+    images:
+      a: {ra: -0.0036744166666666665, dec: -0.007436222222222222, mag: 24.48511704, bands: {hst_f105w: {mag: 24.047769266022094, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.18028390875886,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.041695343050097, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.436327124330806, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.370284887168776, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.956125414404216, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.363333311027606, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: 0.0025105972222222222, dec: -2.815e-05, mag: 25.01738056, bands: {hst_f105w: {mag: 24.58003278820029, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.712547430937054, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 24.573958865228292, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.968590646509, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.90254840934697, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.48838893658241, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.8955968332058, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: 0.0011304722222222222, dec: 0.003953694444444445, mag: 23.99506836, bands: {hst_f105w: {mag: 23.557720585152882, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.690235227889648,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.551646662180886, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.946278443461594, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.880236206299564, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.466076733535004, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.873284630158395, err: 0.01,
+            detected: true, use: true}}}
+  '8':
+    z: 2.0
+    images:
+      a: {ra: -0.010046277777777779, dec: -0.002013125, mag: 26.17102428, bands: {hst_f105w: {mag: 25.90508537930616, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.066900538933773, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 25.994810354100146, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.73224278436602, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 27.11023466547352, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.240264783798185, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.147631479631862, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: -0.010164527777777778, dec: 0.001784072222222222, mag: 26.65031737, bands: {hst_f105w: {mag: 26.384378463342244, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.546193622969856,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.47410343813623, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.211535868402102, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.589527749509603, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.71955786783427, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.626924563667945, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.005395361111111111, dec: 0.008222805555555556, mag: 26.86261642, bands: {hst_f105w: {mag: 26.5966775152386, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.75849267486621, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 26.686402490032584, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.423834920298457, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 27.80182680140596, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.931856919730624, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.8392236155643, err: 0.01, detected: true,
+            use: true}}}
+  '9':
+    z: 2.19
+    images:
+      a: {ra: 0.002428822222222222, dec: -0.006414166666666667, mag: 27.06484758, bands: {hst_f105w: {mag: 26.95605097262424, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.76382090166343, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 26.70312557814715, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.474592629791225, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 27.683524819790218, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.521031502181113, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 27.351786683163336, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: 0.0041479444444444446, dec: -0.0048104444444444444, mag: 26.55292435, bands: {hst_f105w: {mag: 26.444127738115924, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.251897667155113,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.191202343638835, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.96266939528291, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.171601585281902, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.009108267672797, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.83986344865502, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: 0.005672999999999999, dec: 0.00344875, mag: 26.202711, bands: {hst_f105w: {mag: 26.093914385136646, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.901684314175835, err: 0.01, detected: true,
+            use: true}, hst_f140w: {mag: 25.840988990659557, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.61245604230363, err: 0.01, detected: true, use: true}, hst_f435w: {mag: 26.821388232302624,
+            err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.65889491469352, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.489650095675742, err: 0.01, detected: true, use: true}}}
+  '10':
+    z: 2.47
+    images:
+      a: {ra: -0.008133416666666667, dec: -0.006849805555555556, mag: 23.64161916, bands: {hst_f105w: {mag: 23.103442303240698, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.648483210849353,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.411646298555315, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.13246368562885, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.581701503824362, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 23.976328786694445, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.637268334881973, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.007527916666666667, dec: 0.0033866666666666667, mag: 26.42519745, bands: {hst_f105w: {mag: 25.887020588531005, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.43206149613966,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.195224583845622, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.916041970919157, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.36527978911467, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.759907071984752, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.42084662017228, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.003554277777777778, dec: 0.006653638888888889, mag: 26.62399407, bands: {hst_f105w: {mag: 26.085817207896522, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.630858115505177,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.39402120321114, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.114838590284673, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.564076408480187, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.95870369135027, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.619643239537798, err: 0.01,
+            detected: true, use: true}}}
+  '11':
+    z: 2.47
+    images:
+      a: {ra: -0.008266277777777779, dec: -0.00313875, mag: 23.98575051, bands: {hst_f105w: {mag: 23.551062331527035, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.725941178657376, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 23.819409400706544, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.787907260607906, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 24.74460777420312, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.525000452711748, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.746325141370658, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: -0.008924277777777778, dec: 0.0005885166666666667, mag: 26.55069031, bands: {hst_f105w: {mag: 26.116002132658277, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.290880979788618,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.384349201837786, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.352847061739148, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.309547575334364, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.08994025384299, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.3112649425019, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.002398861111111111, dec: 0.009023916666666666, mag: 27.1311875, bands: {hst_f105w: {mag: 26.696499322423946, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.87137816955429, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 26.96484639160346, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.93334425150482, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 27.890044765100036, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.670437443608662, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.891762132267573, err: 0.01, detected: true,
+            use: true}}}
+  '12':
+    z: 2.63
+    images:
+      a: {ra: -0.010291444444444443, dec: -0.004051388888888889, mag: 25.62349244, bands: {hst_f105w: {mag: 25.360063119301746, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.991100368612788,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.15038739088122, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.401351519333197, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.735364443440922, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.059244731057362, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.666935508820846, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.009986444444444444, dec: 0.0034584999999999998, mag: 26.34718551, bands: {hst_f105w: {mag: 26.08375618954349, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.71479343885453,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.874080461122965, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.12504458957494, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.459057513682666, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.782937801299106, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.39062857906259, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.005754555555555555, dec: 0.008201555555555556, mag: 26.51739103, bands: {hst_f105w: {mag: 26.25396171272179, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.88499896203283, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 26.044285984301265, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.29525011275324, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 27.629263036860966, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.953143324477406, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.56083410224089, err: 0.01, detected: true,
+            use: true}}}
+  '13':
+    z: 2.92
+    images:
+      a: {ra: -9.50861111111111e-05, dec: -0.008055444444444445, mag: 24.31377297, bands: {hst_f105w: {mag: 23.971466258896225, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.841030699921255,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.10410652642813, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.115665411276026, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.104060454007254, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.61857325409558, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.441508167204304, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: 0.005374805555555555, dec: -0.0035721111111111114, mag: 23.33320454, bands: {hst_f105w: {mag: 22.99089782746335, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 22.860462268488376,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.123538094995254, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.135096979843148, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.123492022574375, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 23.6380048226627, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.460939735771426, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: 0.005515055555555555, dec: 0.003932638888888889, mag: 23.89661278, bands: {hst_f105w: {mag: 23.55430607398622, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.42387051501125, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 23.686946341518123, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.69850522636602, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 24.686900269097247, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.201413069185573, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.024347982294298, err: 0.01, detected: true,
+            use: true}}}
+  '14':
+    z: 3.14
+    images:
+      a: {ra: -0.013642166666666667, dec: 0.00031779999999999997, mag: 26.88389174, bands: {hst_f105w: {mag: 26.61095117018772, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.721070391791425,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.486628555061245, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.470650290370987, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.514340753657276, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.300966451303815, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 27.082634588365828, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.012905694444444445, dec: 0.004098361111111111, mag: 26.99929848, bands: {hst_f105w: {mag: 26.726357906685703, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.836477128289406,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.602035291559226, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.586057026868968, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.629747490155257, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.416373187801796, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 27.19804132486381, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.010166, dec: 0.00884125, mag: 27.11523968, bands: {hst_f105w: {mag: 26.84229910860427, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.952418330207973, err: 0.01, detected: true,
+            use: true}, hst_f140w: {mag: 26.717976493477792, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.701998228787534, err: 0.01, detected: true, use: true}, hst_f435w: {mag: 27.745688692073823,
+            err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.532314389720362, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 27.313982526782375, err: 0.01, detected: true, use: true}}}
+  '15':
+    z: 3.25
+    images:
+      a: {ra: -0.004899111111111111, dec: -0.007925333333333333, mag: 25.32443288, bands: {hst_f105w: {mag: 25.07494809754794, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.029359088063163,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.97593345648587, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.99384876550125, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 26.194819052873036, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.807063409725355, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.19505828908323, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: 0.0031163888888888886, dec: -0.0016586277777777777, mag: 24.64222532, bands: {hst_f105w: {mag: 24.39274053995119, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.34715153046642,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.29372589888912, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.311641207904508, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.51261149527629, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.12485585212861, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.512850731486488, err: 0.01,
+            detected: true, use: true}}}
+      c: {ra: -0.0005981055555555555, dec: -9.194722222222222e-05, mag: 27.05649021, bands: {hst_f105w: {mag: 26.807005425935504, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.76141641645073,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.707990784873434, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 26.725906093888817, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.926876381260602, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.53912073811292, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.927115617470797, err: 0.01,
+            detected: true, use: true}}}
+      d: {ra: -0.002096938888888889, dec: 0.0002695944444444444, mag: 26.06872137, bands: {hst_f105w: {mag: 25.819236583649488, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.773647574164713,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.72022194258742, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.7381372516028, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 26.939107538974586, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.551351895826905, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.93934677518478, err: 0.01, detected: true,
+            use: true}}}
+      e: {ra: 0.0005097277777777778, dec: 0.0070183611111111115, mag: 26.0213419, bands: {hst_f105w: {mag: 25.77185711743301, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.726268107948236,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.672842476370942, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.690757785386324, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.89172807275811, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.503972429610428, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.891967308968304, err: 0.01,
+            detected: true, use: true}}}
+  '16':
+    z: 3.31
+    images:
+      a: {ra: -0.0016255972222222223, dec: -0.008058361111111112, mag: 25.33455301, bands: {hst_f105w: {mag: 24.923688165927224, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.104113229213294,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.844849837493577, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.003402783823017, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.28520086428929, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.751865340591085, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.428750879754023, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: 0.004694694444444444, dec: -0.003446694444444444, mag: 23.92872452, bands: {hst_f105w: {mag: 23.51785967503104, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.69828473831711, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 23.439021346597393, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.597574292926833, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 24.879372373393107, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.3460368496949, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.02292238885784, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: 0.004326, dec: 0.005447222222222222, mag: 24.69154718, bands: {hst_f105w: {mag: 24.280682332238598, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.461107395524667, err: 0.01, detected: true,
+            use: true}, hst_f140w: {mag: 24.20184400380495, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.36039695013439, err: 0.01, detected: true, use: true}, hst_f435w: {mag: 25.642195030600664,
+            err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.10885950690246, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.785745046065397, err: 0.01, detected: true, use: true}}}
+  '17':
+    z: 3.19
+    images:
+      a: {ra: -0.005967666666666666, dec: -0.01042488888888889, mag: 24.33586257, bands: {hst_f105w: {mag: 24.07007850201028, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.20190959381351, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 23.8954878881062, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.146235183956602, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.040413332690992, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.712559956987178, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.2843535294943, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: 0.00015800555555555554, dec: 0.001035525, mag: 24.4762823, bands: {hst_f105w: {mag: 24.210498235343813, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.342329327147045, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 24.035907621439733, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.286654917290136, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.180833066024526, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.852979690320712, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.424773262827834, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: 0.0021130083333333336, dec: 0.0012694111111111112, mag: 23.50083423, bands: {hst_f105w: {mag: 23.235050158270113, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.366881250073348,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 23.060459544366033, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 23.311206840216435, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 24.205384988950826, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 23.877531613247015, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.449325185754134, err: 0.01,
+            detected: true, use: true}}}
+      d: {ra: -0.0027744944444444445, dec: 0.0023219, mag: 21.87265328, bands: {hst_f105w: {mag: 21.606869212313715, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 21.738700304116946, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 21.432278598409635, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 21.683025894260037, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 22.577204042994428, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 22.249350667290614, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 21.821144239797736, err: 0.01, detected: true,
+            use: true}}}
+      e: {ra: -0.0005588277777777778, dec: 0.004193, mag: 23.12804119, bands: {hst_f105w: {mag: 22.862257126828244, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 22.994088218631475, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 22.687666512924164, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 22.938413808774566, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 23.832591957508956, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 23.504738581805142, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 23.076532154312265, err: 0.01, detected: true,
+            use: true}}}
+  '18':
+    z: 3.45
+    images:
+      a: {ra: -0.005457944444444444, dec: -0.007919972222222222, mag: 25.20439222, bands: {hst_f105w: {mag: 25.056780420734043, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.71675525829717,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.81940552425852, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.06991920506732, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.979017643441527, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.504254190257498, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.284613287892828, err: 0.01, detected: true,
+            use: true}}}
+      b: {ra: 0.0026968305555555554, dec: -0.0014675888888888888, mag: 24.78509948, bands: {hst_f105w: {mag: 24.637487686216023, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.29746252377915,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.4001127897405, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.650626470549298, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.559724908923506, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.084961455739478, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.865320553374808, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: -0.0001767527777777778, dec: -0.00022674444444444443, mag: 27.38293968, bands: {hst_f105w: {mag: 27.235327880327997, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 26.895302717891123,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.997952983852475, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 27.248466664661272, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 28.15756510303548, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 27.682801649851452, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 27.463160747486782, err: 0.01,
+            detected: true, use: true}}}
+      d: {ra: -0.0034386666666666667, dec: 0.0005177611111111111, mag: 25.65929742, bands: {hst_f105w: {mag: 25.51168562548345, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.171660463046578,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.27431072900793, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.524824409816727, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.433922848190935, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.959159395006907, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.739518492642237, err: 0.01,
+            detected: true, use: true}}}
+      e: {ra: -0.005380277777777778, dec: 0.0008900166666666667, mag: 24.44211589, bands: {hst_f105w: {mag: 24.294504095880924, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 23.95447893344405,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.057129199405402, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.3076428802142, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.216741318588408, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 24.74197786540438, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.52233696303971, err: 0.01, detected: true,
+            use: true}}}
+      f: {ra: -0.006855888888888889, dec: 0.001634525, mag: 25.13145302, bands: {hst_f105w: {mag: 24.983841217369687, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.643816054932813, err: 0.01,
+            detected: true, use: true}, hst_f140w: {mag: 24.746466320894164, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.996980001702966, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 25.906078440077174, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.431314986893142, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 25.211674084528475, err: 0.01, detected: true,
+            use: true}}}
+      g: {ra: -2.1425000000000002e-05, dec: 0.007342416666666667, mag: 25.95131111, bands: {hst_f105w: {mag: 25.80369931182211, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.463674149385238,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.56632441534659, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.816838096155386, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 26.725936534529595, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.251173081345566, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.031532178980896, err: 0.01,
+            detected: true, use: true}}}
+  '19':
+    z: 3.55
+    images:
+      a: {ra: -0.009616111111111112, dec: -0.0035323888888888887, mag: 24.72925686, bands: {hst_f105w: {mag: 24.44281582591623, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 24.17871247081389,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 24.540818290450385, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 24.312414511953296, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 25.598187275981722, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 25.038523039689256, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 24.993326622232768, err: 0.01,
+            detected: true, use: true}}}
+      b: {ra: -0.010347222222222223, dec: 0.0013542194444444444, mag: 25.90305548, bands: {hst_f105w: {mag: 25.616614444001424, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.35251108889908,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 25.71461690853558, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.48621313003849, err: 0.01, detected: true, use: true}, hst_f435w: {
+            mag: 26.771985894066916, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.21232165777445, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.16712524031796, err: 0.01, detected: true,
+            use: true}}}
+      c: {ra: -0.0035984444444444445, dec: 0.009533972222222221, mag: 26.19339964, bands: {hst_f105w: {mag: 25.906958603367713, err: 0.01, detected: true, use: true}, hst_f125w: {mag: 25.64285524826537,
+            err: 0.01, detected: true, use: true}, hst_f140w: {mag: 26.004961067901867, err: 0.01, detected: true, use: true}, hst_f160w: {mag: 25.776557289404778, err: 0.01, detected: true, use: true},
+          hst_f435w: {mag: 27.062330053433204, err: 0.01, detected: true, use: true}, hst_f606w: {mag: 26.502665817140738, err: 0.01, detected: true, use: true}, hst_f814w: {mag: 26.45746939968425, err: 0.01,
+            detected: true, use: true}}}

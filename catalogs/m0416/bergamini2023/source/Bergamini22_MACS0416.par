@@ -1,0 +1,219 @@
+runmode
+    reference 3 64.0381417 -24.0674722
+    inverse   3 0.05 100000
+    restart   1 1376179
+    end
+    
+image
+    multfile    1 obs_arcs.cat
+    forme       -10
+    end
+    
+    
+cosmology
+    H0 70.0
+    omega 0.3
+    lambda 0.7
+    end
+    
+
+grille
+    nlens 1000
+    nlens_opt 6
+    nombre 256
+    end
+    
+       
+potentiel 1 # NE dark matter halo
+    profil      81
+    x_centre    0.13392
+    y_centre    -0.04501
+    ellipticite 0.8
+    angle_pos   -35.7557
+    core_radius 13.5871
+    cut_radius  2000.000
+    v_disp      650
+    z_lens      0.3960
+    end
+    
+limit 1
+    v_disp      1 350. 1000. 0.1
+    angle_pos   1 100  180 0.1
+    ellipticity 1 0.2 0.9 0.05
+    x_centre    1 -15 15.0 0.1
+    y_centre    1 -15 15 0.1
+    core_radius 1 0 20 0.1
+    end
+    
+    
+potentiel 2 # SW dark matter halo
+    profil       81
+    x_centre     20.29565
+    y_centre     -35.83494
+    ellipticite  0.6417
+    angle_pos    -55.3798
+    core_radius  14.416
+    cut_radius   2000
+    v_disp       805.1496
+    z_lens       0.3960
+    end
+    
+limit 2
+    v_disp      1 350. 1200. 0.1
+    angle_pos   1 90 170     0.1
+    ellipticity 1 0.2 0.9 0.05
+    x_centre    1 15  30 0.1
+    y_centre    1 -45 -30 0.1
+    core_radius 1 0 25 0.1
+    end
+    
+    
+potentiel 3 # 3rd dark matter halo
+    profil      81
+    x_centre    -40.0
+    y_centre    15.0
+    ellipticite 0.0
+    angle_pos   0.0
+    core_radius 13.5871
+    cut_radius  2000.000
+    v_disp      650
+    z_lens      0.3960
+    end
+    
+limit 3
+    v_disp      1 50. 750. 0.1
+    x_centre    1 -55 -25.0 0.1
+    y_centre    1 0 30 0.1
+    core_radius 1 0 35 0.1
+    end
+    
+    
+potentiel 4 # 4rd dark matter halo
+    profil      81
+    x_centre    28.772
+    y_centre    -39.454
+    ellipticite 0.9
+    angle_pos   134.202
+    core_radius 10.671
+    cut_radius  2000.000
+    v_disp      476.784
+    z_lens      0.3960
+    end
+    
+limit 4
+    v_disp      1 100. 1000. 0.1
+    x_centre    1 -10 50 0.1
+    y_centre    1 -75 -15 0.1
+    core_radius 1 0 20 0.1
+    angle_pos   1 0 180 0.1
+    ellipticity 1 0.2 0.9 0.05
+    end
+    
+    
+potentiel 5  #foreground galaxy
+    profil       81
+    x_centre     31.96420
+    y_centre     -65.55168
+    ellipticite  0.0
+    angle_pos    0.0
+    core_radius  0.0001
+    cut_radius   33.6321
+    v_disp       235.2454
+    z_lens       0.3960
+    end
+
+limit 5
+    v_disp      1 50. 350. 0.1
+    cut_radius  1 5. 100. 0.1
+    end
+
+
+potentiel 6  # galaxy scale id: 8971
+    profil       81
+    x_centre     13.33912
+    y_centre     2.62495
+    ellipticite  0.0
+    angle_pos    0.0
+    core_radius  0.0001
+    cut_radius   33.6321
+    v_disp       180.2454
+    z_lens       0.3960
+    end
+
+limit 6
+    v_disp      1 60. 200. 0.1
+    cut_radius  1 0 50 0.1
+    angle_pos   1 -90.0 90.0 0.1
+    ellipticity 1 0.0 0.6 0.05
+    end
+    
+
+potentiel 7   # Gas clump 1
+	profil	81
+	v_disp	433.0248792121149
+	core_radius	149.2054944000091
+	cut_radius	149.82423360000914
+	x_centre	-18.137002925379967
+	y_centre	-12.133967959650562
+	ellipticite	0.11802924806826215
+	angle_pos	-156.7566690854322
+	z_lens	0.396
+	end
+
+potentiel 8   # Gas clump 2
+	profil	81
+	v_disp	248.99144885049094
+	core_radius	34.77330048000212
+	cut_radius	165.77093760001011
+	x_centre	30.787477074623045
+	y_centre	-48.67185595965274
+	ellipticite	0.4166205427409096
+	angle_pos	-71.5005491699657
+	z_lens	0.396
+	end
+
+potentiel 9   # Gas clump 3
+	profil	81
+	v_disp	101.7305750041091
+	core_radius	8.281737600000504
+	cut_radius	37.5947433600023
+	x_centre	-2.3693869253788935
+	y_centre	-1.2627359596498962
+	ellipticite	0.4248370668779292
+	angle_pos	-54.743768197790125
+	z_lens	0.396
+	end
+
+potentiel 10   # Gas clump 4
+	profil	81
+	v_disp	281.8472712670227
+	core_radius	51.67495680000315
+	cut_radius	52.337385600003195
+	x_centre	-20.12861892537998
+	y_centre	14.74104004035109
+	ellipticite	0.4013796817764777
+	angle_pos	-49.32427500520669
+	z_lens	0.396
+	end
+
+   
+potfile
+    filein 3 CM_cat_MACSJ0416.cat 
+    type 81
+    mag0  17.0166
+    core 0.0001
+    z_lens 0.3960
+    sigma 3 248 28.
+    cut   1 1 50
+    vdslope 0 3.33333 0
+    slope 0 3.33333 0
+    end
+    
+    
+champ
+    xmin     -50.000
+    xmax      60.000
+    ymin     -80.000
+    ymax      40.000
+    end
+fini

@@ -43,3 +43,7 @@ docs/
 AGENTS.md
 
 validation_runs/
+
+# Catalogs are tracked whatever their extension (the JSON, TXT and FITS rules above do not apply under catalogs/)
+!catalogs/**
+catalogs/**/*.fits

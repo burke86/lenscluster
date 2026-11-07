@@ -1,0 +1,15 @@
+{
+  "image_positions": 122,
+  "systems": 21,
+  "families": 42,
+  "members": 288,
+  "kinematic_members": 46,
+  "raw_image_rows": 276,
+  "excluded_image_rows": 154,
+  "input_sha256": {
+    "Cluster_member_catalogue_full.fits": "5de3e74f37d35d49675105a053b5f70beeb62d06341e01bdc1a23f723793574e",
+    "F160W_data_masked_header.txt": "f2413305852cd4bef1ddfc69ed4dacbbaeb923a2e10df807fcc0ba57eb20b91e",
+    "diego_2601.11704v2_table1.json": "0701224f75a70250bf8596dbcb7c8d22b1c4772e729b8527294fa0dfba3363fa"
+  },
+  "checks": "Exact loader round-trip agreement for positions, spectroscopic redshifts, member magnitudes and LOSVD; unique labels and positions; >=2 images per family."
+}

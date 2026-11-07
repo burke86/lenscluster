@@ -7,8 +7,8 @@ edit made by hand afterwards).  ``a b theta`` are kept as the image shape; value
 detected_<band>, use_for_catalog_<band>) and the measured astrometry (image_label, sigma_inst_arcsec, parity).
 
 Example:
-    python scripts/convert_lenstool_catalog.py data/Bergamini/M0416_Bergamini22/obs_arcs.cat \\
-        data/Bergamini/M0416_Bergamini22/images.yaml
+    python scripts/convert_lenstool_catalog.py catalogs/m0416/bergamini2023/source/obs_arcs.cat \\
+        catalogs/m0416/bergamini2023/images.yaml
 """
 from __future__ import annotations
 

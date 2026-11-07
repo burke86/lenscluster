@@ -7,8 +7,8 @@ The system takes the shared prefix as its name and each family's last character 
 the solver sees are the Bergamini ids unchanged.  These are guesses: check them with scripts/make_knot_cutouts.py.
 
 Example:
-    python scripts/group_bergamini_knots.py data/Bergamini/M0416_Bergamini22/images.yaml \\
-        data/Bergamini/M0416_Bergamini22/images.yaml
+    python scripts/group_bergamini_knots.py catalogs/m0416/bergamini2023/images.yaml \\
+        catalogs/m0416/bergamini2023/images.yaml
 """
 from __future__ import annotations
 

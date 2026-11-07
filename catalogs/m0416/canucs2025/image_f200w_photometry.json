@@ -1,0 +1,9 @@
+{
+  "source": "CANUCS DR1 hlsp_canucs_jwst-hst_multi_macs0416-clu_multi_v1_photometry-cat.fits.gz",
+  "flux_column": "FLUX_COLOR07_TOTAL_F200W",
+  "magnitude_conversion": "31.4 - 2.5 log10(flux_nJy)",
+  "match_radius_arcsec": 0.5,
+  "coordinates": "Lens catalog positions used for the original photometry match, not photometric centroids",
+  "unmatched": "NaN magnitude; nearest phot_id retained for audit only",
+  "rows": 303
+}

@@ -12,7 +12,7 @@ the knot with the most images (Hungarian matching, within --max-image-offset arc
 (K6e: 1 and 3 swapped) is relabelled and the published label kept in the entry's notes.  Image n becomes letter n (1 -> a).
 
 Example:
-    python scripts/convert_canucs_catalog.py data/CANUCS/M0416_Rihtarsic2025/images.yaml
+    python scripts/convert_canucs_catalog.py catalogs/m0416/canucs2025/images.yaml
 """
 from __future__ import annotations
 
@@ -31,9 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from lenscluster.image_catalog import load_image_catalog, write_image_catalog  # noqa: E402
 from lenscluster.sky import radec_to_offsets_arcsec  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1] / "data/CANUCS/M0416_Rihtarsic2025"
-CATALOG = ROOT / "hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
-LENSTOOL = ROOT / "hlsp_canucs_jwst-hst_multi_macs0416-lenstool-multim_multi_v1_model.txt"
+ROOT = Path(__file__).resolve().parents[1] / "catalogs/m0416/canucs2025"
+CATALOG = ROOT / "source" / "hlsp_canucs_jwst-hst_multi_macs0416-allmultim-cat_multi_v1_model.txt"
+LENSTOOL = ROOT / "source" / "hlsp_canucs_jwst-hst_multi_macs0416-lenstool-multim_multi_v1_model.txt"
 LABEL = re.compile(r"^([A-Z]+[0-9]+)([a-z]?)\.([0-9]+)$")
 
 

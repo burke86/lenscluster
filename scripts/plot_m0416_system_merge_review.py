@@ -47,7 +47,7 @@ def labels(ax,items,fig):
 
 def main():
  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output-dir',type=Path,default=Path('output/m0416_system_merge_review'));args=parser.parse_args()
- table=load_image_catalog(Path('data/CANUCS/M0416_Rihtarsic2025/images.yaml'),sigma_inst_arcsec=1.)
+ table=load_image_catalog(Path('catalogs/m0416/canucs2025/images.yaml'),sigma_inst_arcsec=1.)
  config=artifacts.load_config(Path('results/nov5a_nosigmainst/m0416_canucs2025/w500s250_allblocks/final/artifacts'))
  view=next(v for v in imaging_variants(config,overview_only=True)if v.figure_suffix=='_jwst')
  images,bands,display,_=load_cluster_imaging(view,config.model,config.paths.run_name);ref=images[rgb_reference_band(bands)]
@@ -105,5 +105,5 @@ def main():
    fig.text(.025,.015,textwrap.fill(footer,width=int(51*n)),fontsize=7.5,va='bottom')
    path=out/f'{gid}_{"_".join(systems)}.pdf'
    fig.savefig(path,dpi=300);combined.savefig(fig,dpi=300);plt.close(fig);print(path,flush=True)
- (out/'panel_positions.json').write_text(json.dumps(dict(catalog='data/CANUCS/M0416_Rihtarsic2025/images.yaml',bands=list(bands),panels=records),indent=2))
+ (out/'panel_positions.json').write_text(json.dumps(dict(catalog='catalogs/m0416/canucs2025/images.yaml',bands=list(bands),panels=records),indent=2))
 if __name__=='__main__':main()

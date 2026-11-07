@@ -1,0 +1,1520 @@
+{
+  "groups": [
+    [
+      1,
+      2,
+      3,
+      4
+    ],
+    [
+      5,
+      6,
+      7
+    ],
+    [
+      9,
+      10,
+      11
+    ],
+    [
+      12,
+      13,
+      14,
+      15,
+      16,
+      17
+    ],
+    [
+      19,
+      20,
+      21
+    ],
+    [
+      25,
+      26,
+      27,
+      28,
+      29
+    ],
+    [
+      31,
+      32,
+      33,
+      34
+    ]
+  ],
+  "included": [
+    {
+      "published_label": "1.a",
+      "system": "D1",
+      "knot": "A",
+      "image": "a",
+      "family": "D1A"
+    },
+    {
+      "published_label": "1.b",
+      "system": "D1",
+      "knot": "A",
+      "image": "b",
+      "family": "D1A"
+    },
+    {
+      "published_label": "1.c",
+      "system": "D1",
+      "knot": "A",
+      "image": "c",
+      "family": "D1A"
+    },
+    {
+      "published_label": "2.a",
+      "system": "D1",
+      "knot": "B",
+      "image": "a",
+      "family": "D1B"
+    },
+    {
+      "published_label": "2.b",
+      "system": "D1",
+      "knot": "B",
+      "image": "b",
+      "family": "D1B"
+    },
+    {
+      "published_label": "2.c",
+      "system": "D1",
+      "knot": "B",
+      "image": "c",
+      "family": "D1B"
+    },
+    {
+      "published_label": "3.a",
+      "system": "D1",
+      "knot": "C",
+      "image": "a",
+      "family": "D1C"
+    },
+    {
+      "published_label": "3.b",
+      "system": "D1",
+      "knot": "C",
+      "image": "b",
+      "family": "D1C"
+    },
+    {
+      "published_label": "3.c",
+      "system": "D1",
+      "knot": "C",
+      "image": "c",
+      "family": "D1C"
+    },
+    {
+      "published_label": "4.a",
+      "system": "D1",
+      "knot": "D",
+      "image": "a",
+      "family": "D1D"
+    },
+    {
+      "published_label": "4.b",
+      "system": "D1",
+      "knot": "D",
+      "image": "b",
+      "family": "D1D"
+    },
+    {
+      "published_label": "4.c",
+      "system": "D1",
+      "knot": "D",
+      "image": "c",
+      "family": "D1D"
+    },
+    {
+      "published_label": "5.a",
+      "system": "D5",
+      "knot": "A",
+      "image": "a",
+      "family": "D5A"
+    },
+    {
+      "published_label": "5.b",
+      "system": "D5",
+      "knot": "A",
+      "image": "b",
+      "family": "D5A"
+    },
+    {
+      "published_label": "5.c",
+      "system": "D5",
+      "knot": "A",
+      "image": "c",
+      "family": "D5A"
+    },
+    {
+      "published_label": "6.a",
+      "system": "D5",
+      "knot": "B",
+      "image": "a",
+      "family": "D5B"
+    },
+    {
+      "published_label": "6.b",
+      "system": "D5",
+      "knot": "B",
+      "image": "b",
+      "family": "D5B"
+    },
+    {
+      "published_label": "6.c",
+      "system": "D5",
+      "knot": "B",
+      "image": "c",
+      "family": "D5B"
+    },
+    {
+      "published_label": "7.a",
+      "system": "D5",
+      "knot": "C",
+      "image": "a",
+      "family": "D5C"
+    },
+    {
+      "published_label": "7.b",
+      "system": "D5",
+      "knot": "C",
+      "image": "b",
+      "family": "D5C"
+    },
+    {
+      "published_label": "7.c",
+      "system": "D5",
+      "knot": "C",
+      "image": "c",
+      "family": "D5C"
+    },
+    {
+      "published_label": "8.a",
+      "system": "D8",
+      "knot": "",
+      "image": "a",
+      "family": "D8"
+    },
+    {
+      "published_label": "8.b",
+      "system": "D8",
+      "knot": "",
+      "image": "b",
+      "family": "D8"
+    },
+    {
+      "published_label": "8.c",
+      "system": "D8",
+      "knot": "",
+      "image": "c",
+      "family": "D8"
+    },
+    {
+      "published_label": "9.a",
+      "system": "D9",
+      "knot": "A",
+      "image": "a",
+      "family": "D9A"
+    },
+    {
+      "published_label": "9.b",
+      "system": "D9",
+      "knot": "A",
+      "image": "b",
+      "family": "D9A"
+    },
+    {
+      "published_label": "9.c",
+      "system": "D9",
+      "knot": "A",
+      "image": "c",
+      "family": "D9A"
+    },
+    {
+      "published_label": "10.a",
+      "system": "D9",
+      "knot": "B",
+      "image": "a",
+      "family": "D9B"
+    },
+    {
+      "published_label": "10.b",
+      "system": "D9",
+      "knot": "B",
+      "image": "b",
+      "family": "D9B"
+    },
+    {
+      "published_label": "10.c",
+      "system": "D9",
+      "knot": "B",
+      "image": "c",
+      "family": "D9B"
+    },
+    {
+      "published_label": "11.a",
+      "system": "D9",
+      "knot": "C",
+      "image": "a",
+      "family": "D9C"
+    },
+    {
+      "published_label": "11.b",
+      "system": "D9",
+      "knot": "C",
+      "image": "b",
+      "family": "D9C"
+    },
+    {
+      "published_label": "11.c",
+      "system": "D9",
+      "knot": "C",
+      "image": "c",
+      "family": "D9C"
+    },
+    {
+      "published_label": "12.a",
+      "system": "D12",
+      "knot": "A",
+      "image": "a",
+      "family": "D12A"
+    },
+    {
+      "published_label": "12.b",
+      "system": "D12",
+      "knot": "A",
+      "image": "b",
+      "family": "D12A"
+    },
+    {
+      "published_label": "12.c",
+      "system": "D12",
+      "knot": "A",
+      "image": "c",
+      "family": "D12A"
+    },
+    {
+      "published_label": "13.a",
+      "system": "D12",
+      "knot": "B",
+      "image": "a",
+      "family": "D12B"
+    },
+    {
+      "published_label": "13.b",
+      "system": "D12",
+      "knot": "B",
+      "image": "b",
+      "family": "D12B"
+    },
+    {
+      "published_label": "13.c",
+      "system": "D12",
+      "knot": "B",
+      "image": "c",
+      "family": "D12B"
+    },
+    {
+      "published_label": "14.a",
+      "system": "D12",
+      "knot": "C",
+      "image": "a",
+      "family": "D12C"
+    },
+    {
+      "published_label": "14.b",
+      "system": "D12",
+      "knot": "C",
+      "image": "b",
+      "family": "D12C"
+    },
+    {
+      "published_label": "14.c",
+      "system": "D12",
+      "knot": "C",
+      "image": "c",
+      "family": "D12C"
+    },
+    {
+      "published_label": "15.a",
+      "system": "D12",
+      "knot": "D",
+      "image": "a",
+      "family": "D12D"
+    },
+    {
+      "published_label": "15.b",
+      "system": "D12",
+      "knot": "D",
+      "image": "b",
+      "family": "D12D"
+    },
+    {
+      "published_label": "15.c",
+      "system": "D12",
+      "knot": "D",
+      "image": "c",
+      "family": "D12D"
+    },
+    {
+      "published_label": "16.a",
+      "system": "D12",
+      "knot": "E",
+      "image": "a",
+      "family": "D12E"
+    },
+    {
+      "published_label": "16.b",
+      "system": "D12",
+      "knot": "E",
+      "image": "b",
+      "family": "D12E"
+    },
+    {
+      "published_label": "16.c",
+      "system": "D12",
+      "knot": "E",
+      "image": "c",
+      "family": "D12E"
+    },
+    {
+      "published_label": "17.a",
+      "system": "D12",
+      "knot": "F",
+      "image": "a",
+      "family": "D12F"
+    },
+    {
+      "published_label": "17.b",
+      "system": "D12",
+      "knot": "F",
+      "image": "b",
+      "family": "D12F"
+    },
+    {
+      "published_label": "17.c",
+      "system": "D12",
+      "knot": "F",
+      "image": "c",
+      "family": "D12F"
+    },
+    {
+      "published_label": "18.a",
+      "system": "D18",
+      "knot": "",
+      "image": "a",
+      "family": "D18"
+    },
+    {
+      "published_label": "18.b",
+      "system": "D18",
+      "knot": "",
+      "image": "b",
+      "family": "D18"
+    },
+    {
+      "published_label": "18.c",
+      "system": "D18",
+      "knot": "",
+      "image": "c",
+      "family": "D18"
+    },
+    {
+      "published_label": "19.a",
+      "system": "D19",
+      "knot": "A",
+      "image": "a",
+      "family": "D19A"
+    },
+    {
+      "published_label": "19.b",
+      "system": "D19",
+      "knot": "A",
+      "image": "b",
+      "family": "D19A"
+    },
+    {
+      "published_label": "19.c",
+      "system": "D19",
+      "knot": "A",
+      "image": "c",
+      "family": "D19A"
+    },
+    {
+      "published_label": "20.a",
+      "system": "D19",
+      "knot": "B",
+      "image": "a",
+      "family": "D19B"
+    },
+    {
+      "published_label": "20.b",
+      "system": "D19",
+      "knot": "B",
+      "image": "b",
+      "family": "D19B"
+    },
+    {
+      "published_label": "20.c",
+      "system": "D19",
+      "knot": "B",
+      "image": "c",
+      "family": "D19B"
+    },
+    {
+      "published_label": "21.a",
+      "system": "D19",
+      "knot": "C",
+      "image": "a",
+      "family": "D19C"
+    },
+    {
+      "published_label": "21.b",
+      "system": "D19",
+      "knot": "C",
+      "image": "b",
+      "family": "D19C"
+    },
+    {
+      "published_label": "21.c",
+      "system": "D19",
+      "knot": "C",
+      "image": "c",
+      "family": "D19C"
+    },
+    {
+      "published_label": "22.a",
+      "system": "D22",
+      "knot": "",
+      "image": "a",
+      "family": "D22"
+    },
+    {
+      "published_label": "22.b",
+      "system": "D22",
+      "knot": "",
+      "image": "b",
+      "family": "D22"
+    },
+    {
+      "published_label": "22.c",
+      "system": "D22",
+      "knot": "",
+      "image": "c",
+      "family": "D22"
+    },
+    {
+      "published_label": "23.a",
+      "system": "D23",
+      "knot": "",
+      "image": "a",
+      "family": "D23"
+    },
+    {
+      "published_label": "23.b",
+      "system": "D23",
+      "knot": "",
+      "image": "b",
+      "family": "D23"
+    },
+    {
+      "published_label": "23.c",
+      "system": "D23",
+      "knot": "",
+      "image": "c",
+      "family": "D23"
+    },
+    {
+      "published_label": "23.d",
+      "system": "D23",
+      "knot": "",
+      "image": "d",
+      "family": "D23"
+    },
+    {
+      "published_label": "23.e",
+      "system": "D23",
+      "knot": "",
+      "image": "e",
+      "family": "D23"
+    },
+    {
+      "published_label": "24.a",
+      "system": "D24",
+      "knot": "",
+      "image": "a",
+      "family": "D24"
+    },
+    {
+      "published_label": "24.b",
+      "system": "D24",
+      "knot": "",
+      "image": "b",
+      "family": "D24"
+    },
+    {
+      "published_label": "24.c",
+      "system": "D24",
+      "knot": "",
+      "image": "c",
+      "family": "D24"
+    },
+    {
+      "published_label": "25.a",
+      "system": "D25",
+      "knot": "A",
+      "image": "a",
+      "family": "D25A"
+    },
+    {
+      "published_label": "25.b",
+      "system": "D25",
+      "knot": "A",
+      "image": "b",
+      "family": "D25A"
+    },
+    {
+      "published_label": "25.c",
+      "system": "D25",
+      "knot": "A",
+      "image": "c",
+      "family": "D25A"
+    },
+    {
+      "published_label": "26.a",
+      "system": "D25",
+      "knot": "B",
+      "image": "a",
+      "family": "D25B"
+    },
+    {
+      "published_label": "26.b",
+      "system": "D25",
+      "knot": "B",
+      "image": "b",
+      "family": "D25B"
+    },
+    {
+      "published_label": "26.c",
+      "system": "D25",
+      "knot": "B",
+      "image": "c",
+      "family": "D25B"
+    },
+    {
+      "published_label": "27.a",
+      "system": "D25",
+      "knot": "C",
+      "image": "a",
+      "family": "D25C"
+    },
+    {
+      "published_label": "27.b",
+      "system": "D25",
+      "knot": "C",
+      "image": "b",
+      "family": "D25C"
+    },
+    {
+      "published_label": "27.c",
+      "system": "D25",
+      "knot": "C",
+      "image": "c",
+      "family": "D25C"
+    },
+    {
+      "published_label": "28.a",
+      "system": "D25",
+      "knot": "D",
+      "image": "a",
+      "family": "D25D"
+    },
+    {
+      "published_label": "28.b",
+      "system": "D25",
+      "knot": "D",
+      "image": "b",
+      "family": "D25D"
+    },
+    {
+      "published_label": "28.c",
+      "system": "D25",
+      "knot": "D",
+      "image": "c",
+      "family": "D25D"
+    },
+    {
+      "published_label": "29.a",
+      "system": "D25",
+      "knot": "E",
+      "image": "a",
+      "family": "D25E"
+    },
+    {
+      "published_label": "29.b",
+      "system": "D25",
+      "knot": "E",
+      "image": "b",
+      "family": "D25E"
+    },
+    {
+      "published_label": "29.c",
+      "system": "D25",
+      "knot": "E",
+      "image": "c",
+      "family": "D25E"
+    },
+    {
+      "published_label": "30.a",
+      "system": "D30",
+      "knot": "",
+      "image": "a",
+      "family": "D30"
+    },
+    {
+      "published_label": "30.b",
+      "system": "D30",
+      "knot": "",
+      "image": "b",
+      "family": "D30"
+    },
+    {
+      "published_label": "30.c",
+      "system": "D30",
+      "knot": "",
+      "image": "c",
+      "family": "D30"
+    },
+    {
+      "published_label": "31.a",
+      "system": "D31",
+      "knot": "A",
+      "image": "a",
+      "family": "D31A"
+    },
+    {
+      "published_label": "31.b",
+      "system": "D31",
+      "knot": "A",
+      "image": "b",
+      "family": "D31A"
+    },
+    {
+      "published_label": "31.c",
+      "system": "D31",
+      "knot": "A",
+      "image": "c",
+      "family": "D31A"
+    },
+    {
+      "published_label": "32.a",
+      "system": "D31",
+      "knot": "B",
+      "image": "a",
+      "family": "D31B"
+    },
+    {
+      "published_label": "32.b",
+      "system": "D31",
+      "knot": "B",
+      "image": "c",
+      "family": "D31B"
+    },
+    {
+      "published_label": "33.a",
+      "system": "D31",
+      "knot": "C",
+      "image": "a",
+      "family": "D31C"
+    },
+    {
+      "published_label": "33.b",
+      "system": "D31",
+      "knot": "C",
+      "image": "c",
+      "family": "D31C"
+    },
+    {
+      "published_label": "34.a",
+      "system": "D31",
+      "knot": "D",
+      "image": "a",
+      "family": "D31D"
+    },
+    {
+      "published_label": "34.b",
+      "system": "D31",
+      "knot": "D",
+      "image": "c",
+      "family": "D31D"
+    },
+    {
+      "published_label": "35.a",
+      "system": "D35",
+      "knot": "",
+      "image": "a",
+      "family": "D35"
+    },
+    {
+      "published_label": "35.b",
+      "system": "D35",
+      "knot": "",
+      "image": "b",
+      "family": "D35"
+    },
+    {
+      "published_label": "35.c",
+      "system": "D35",
+      "knot": "",
+      "image": "c",
+      "family": "D35"
+    },
+    {
+      "published_label": "36.a",
+      "system": "D36",
+      "knot": "",
+      "image": "a",
+      "family": "D36"
+    },
+    {
+      "published_label": "36.b",
+      "system": "D36",
+      "knot": "",
+      "image": "b",
+      "family": "D36"
+    },
+    {
+      "published_label": "36.c",
+      "system": "D36",
+      "knot": "",
+      "image": "c",
+      "family": "D36"
+    },
+    {
+      "published_label": "37.a",
+      "system": "D37",
+      "knot": "",
+      "image": "a",
+      "family": "D37"
+    },
+    {
+      "published_label": "37.b",
+      "system": "D37",
+      "knot": "",
+      "image": "b",
+      "family": "D37"
+    },
+    {
+      "published_label": "38.a",
+      "system": "D38",
+      "knot": "",
+      "image": "a",
+      "family": "D38"
+    },
+    {
+      "published_label": "38.b",
+      "system": "D38",
+      "knot": "",
+      "image": "b",
+      "family": "D38"
+    },
+    {
+      "published_label": "38.c",
+      "system": "D38",
+      "knot": "",
+      "image": "c",
+      "family": "D38"
+    },
+    {
+      "published_label": "40.a",
+      "system": "D40",
+      "knot": "",
+      "image": "a",
+      "family": "D40"
+    },
+    {
+      "published_label": "40.b",
+      "system": "D40",
+      "knot": "",
+      "image": "b",
+      "family": "D40"
+    },
+    {
+      "published_label": "41.a",
+      "system": "D41",
+      "knot": "",
+      "image": "a",
+      "family": "D41"
+    },
+    {
+      "published_label": "41.b",
+      "system": "D41",
+      "knot": "",
+      "image": "b",
+      "family": "D41"
+    },
+    {
+      "published_label": "43.a",
+      "system": "D43",
+      "knot": "",
+      "image": "a",
+      "family": "D43"
+    },
+    {
+      "published_label": "43.b",
+      "system": "D43",
+      "knot": "",
+      "image": "b",
+      "family": "D43"
+    },
+    {
+      "published_label": "43.c",
+      "system": "D43",
+      "knot": "",
+      "image": "c",
+      "family": "D43"
+    },
+    {
+      "published_label": "60.a",
+      "system": "D60",
+      "knot": "",
+      "image": "a",
+      "family": "D60"
+    },
+    {
+      "published_label": "60.b",
+      "system": "D60",
+      "knot": "",
+      "image": "b",
+      "family": "D60"
+    },
+    {
+      "published_label": "60.c",
+      "system": "D60",
+      "knot": "",
+      "image": "c",
+      "family": "D60"
+    }
+  ],
+  "excluded": [
+    {
+      "label": "39.a",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "39.b",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "42.a",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "42.b",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "44.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "44.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "44.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "45.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "45.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "45.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "46.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "46.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "46.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "47.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "47.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "47.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "48.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "48.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "48.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "49.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "49.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "49.c",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "50.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "50.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "50.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "50.d",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "50.e",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "51.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "51.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "51.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "51.d",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "51.e",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "51.f",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "52.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "52.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "52.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "53.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "53.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "53.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "54.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "54.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "54.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "55.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "55.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "55.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "56.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "56.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "56.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "57.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "57.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "57.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "58.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "58.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "59.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "59.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "61.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "61.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "61.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "61.d",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "61.e",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "62.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "62.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "62.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "62.d",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "63.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "63.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "63.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "64.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "64.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "64.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "65.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "65.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "65.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "65.d",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "66.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "66.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "66.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "66.d",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "67.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "67.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "67.c",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "68.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "68.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "68.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "69.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "69.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "69.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "70.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "70.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "71.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "71.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "71.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "72.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "72.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "72.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "73.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "73.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "73.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "74.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "74.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "74.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "75.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "75.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "75.c",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "76.a",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "76.b",
+      "reason": "No spectroscopic redshift; geometric redshift retained only in raw table."
+    },
+    {
+      "label": "76.c",
+      "reason": "Position predicted by lens model, not an observed JWST position (flag 3)."
+    },
+    {
+      "label": "77.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "77.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "78.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "78.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "78.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "79.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "79.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "80.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "80.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "80.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "81.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "81.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "81.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "82.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "82.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "82.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "83.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "83.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "83.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "84.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "84.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "84.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "85.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "85.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "85.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "86.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "86.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "87.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "87.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "88.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "88.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "89.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "89.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "89.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "89.d",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "89.e",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "89.f",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "90.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "90.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "90.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "90.d",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "91.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "91.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "91.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "92.a",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "92.b",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    },
+    {
+      "label": "92.c",
+      "reason": "Outside JWST footprint or likely singly imaged arc (flags 4/5/6)."
+    }
+  ]
+}

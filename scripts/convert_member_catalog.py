@@ -7,9 +7,9 @@ arcsec; the match must be one to one (a member hit twice, or a row with no membe
 --allow-unmatched).  Roles and treatments are set by member id on the command line.
 
 Example (the CANUCS M0416 members with the Granata et al. 2026 MUSE dispersions):
-    python scripts/convert_member_catalog.py data/CANUCS/M0416_Rihtarsic2025/members.cat \\
-        data/CANUCS/M0416_Rihtarsic2025/members.yaml --band F160W \\
-        --kinematics data/CANUCS/M0416_Rihtarsic2025/granata2026_m0416_kinematics.txt --source G26 \\
+    python scripts/convert_member_catalog.py catalogs/m0416/canucs2025/source/members.cat \\
+        catalogs/m0416/canucs2025/members.yaml --band F160W \\
+        --kinematics catalogs/m0416/canucs2025/granata2026_m0416_kinematics.txt --source G26 \\
         --source-reference "Granata et al. 2026, A&A (arXiv:2603.26869), Appendix C" --aperture 0.8 \\
         --bcg 2526 --bcg 3158
 """

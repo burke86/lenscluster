@@ -73,7 +73,7 @@ def parse_args():
     p.add_argument("--shapelet-nmax", type=int, default=6)
     p.add_argument("--knots", type=int, default=0, help="number of Gaussian knots (0 = one per catalog knot of image a)")
     p.add_argument("--members", default="auto", help="'auto' (catalog members within the cutout + 1.5\"), 'none', or ids 7764,...")
-    p.add_argument("--member-catalog", default="data/CANUCS/M0416_Rihtarsic2025/members.cat")
+    p.add_argument("--member-catalog", default="catalogs/m0416/canucs2025/source/members.cat")
     p.add_argument("--mask", default="", help="extra circular masks in arcsec of the model frame: 'x,y,r;x,y,r'")
     p.add_argument("--psf-file", default="auto", help="FITS PSF stamp; 'auto' = the CANUCS *_psf.fits(.gz) next to the mosaic, '' = none")
     p.add_argument("--psf-trim", type=float, default=2.0, help="side in arcsec to which the PSF stamp is trimmed")

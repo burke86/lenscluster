@@ -1,7 +1,7 @@
 # Visual check of M0416 CANUCS system merges
 
-Catalog: `data/CANUCS/M0416_Rihtarsic2025/images.yaml` (303 positions, 111 knot families, 83 systems). Nothing has been
-merged yet. Groups come from the Bergamini et al. 2022 release (`data/Bergamini/M0416_Bergamini22/obs_arcs.cat`) and from
+Catalog: `catalogs/m0416/canucs2025/images.yaml` (303 positions, 111 knot families, 83 systems). Nothing has been
+merged yet. Groups come from the Bergamini et al. 2022 release (`catalogs/m0416/bergamini2023/source/obs_arcs.cat`) and from
 a source-plane comparison at the sampled-shape init in basin B. A merge keeps one source per old system, as separate knots
 of one system, so with `gp_blocks = "all"` the likelihood does not change; it changes the `--fast` system blocks and the
 bookkeeping.
