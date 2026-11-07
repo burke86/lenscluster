@@ -323,7 +323,7 @@ def start_parameter_report(state: ModelState, latent: np.ndarray, physical: np.n
         group = _start_group(spec, independent_ids)
         if group is not None:
             rows[group].append((spec, latent[index], physical[index]))
-        elif spec.component_family == "member_scatter_offset":
+        elif spec.component_family in ("member_scatter_offset", "member_shape_offset"):
             offsets.setdefault(spec.field, []).append((spec.name.split(".")[1] if spec.name.count(".") >= 2 else spec.name, float(latent[index])))
         elif spec.component_family == "source_position":
             n_sources += 1
@@ -353,8 +353,8 @@ def start_parameter_report(state: ModelState, latent: np.ndarray, physical: np.n
     lines = [capture.get().rstrip(),
              f"status: {counts['green']} green, {counts['yellow']} yellow, {counts['red']} red (red: within 2% of a prior bound or "
              f"3 prior widths from its centre; the run continues)"]
-    names = {"velocity_offset": "velocity", "radius_offset": "radius"}
-    offset_prior = {s.field: s for s in state.parameter_specs if s.component_family == "member_scatter_offset"}
+    names = {"velocity_offset": "velocity", "radius_offset": "radius", "shape_e1_offset": "shape e1", "shape_e2_offset": "shape e2"}
+    offset_prior = {s.field: s for s in state.parameter_specs if s.component_family in ("member_scatter_offset", "member_shape_offset")}
     for field, values in offsets.items():
         array = np.asarray([v for _, v in values])
         worst = int(np.argmax(np.abs(array)))

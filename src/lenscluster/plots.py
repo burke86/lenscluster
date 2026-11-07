@@ -159,7 +159,7 @@ def plot_corner(samples: np.ndarray, specs: list[ParameterSpec], path: Path, *, 
                 grouped_physical=None, best_index=None) -> Path | None:
     from .corner_plots import plot_parameter_corner
     keep = [(i, spec, spec.name) for i, spec in enumerate(specs)
-            if spec.component_family not in {"source_position", "member_scatter_offset"}]
+            if spec.component_family not in {"source_position", "member_scatter_offset", "member_shape_offset"}]
     if best_index is None and best is not None:
         matches = np.flatnonzero(np.all(np.asarray(samples) == best, axis=1))
         best_index = int(matches[0]) if len(matches) else None

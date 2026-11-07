@@ -17,7 +17,7 @@ from numpyro.infer.util import potential_energy, unconstrain_fn
 from .evaluator import Evaluator
 from .model import ModelState, ParameterSpec, PosteriorResults
 
-LATENT_FAMILIES = frozenset({"source_position", "member_scatter_offset"})
+LATENT_FAMILIES = frozenset({"source_position", "member_scatter_offset", "member_shape_offset"})
 DIAGONAL_SITE_SUFFIX = "_diag"            # member-offset sites split off the dense block (SamplingConfig.dense_offset_members)
 FIXED_SITE_SUFFIX = "_fixed"              # far-field offsets pinned at the relation (SamplingConfig.far_field_offsets)
 FIXED_OFFSET_STD = 1.0e-3

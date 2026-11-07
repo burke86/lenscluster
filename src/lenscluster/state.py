@@ -694,6 +694,22 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 physical_mean=0.0, physical_std=1.0, sample_site_name=site_name, sample_site_index=site_index,
                 centered=False, scale_site_name=specs[int(scale_index[component])].sample_name,
                 dof=dof if heavy_tail else None))
+    # Member shapes: one unit offset per member and component of the ellipticity (ScalingModelConfig.member_shape_scatter).
+    shape_e1_index = np.full(n_components, -1, dtype=np.int32)
+    shape_e2_index = np.full(n_components, -1, dtype=np.int32)
+    shape_scatter = scaling.member_shape_scatter
+    if shape_scatter is not None:
+        for field_name, index_array in (("shape_e1_offset", shape_e1_index), ("shape_e2_offset", shape_e2_index)):
+            for site_index, record in enumerate(records):
+                component = int(record["component_index"])
+                index_array[component] = len(specs)
+                specs.append(ParameterSpec(
+                    name=f"{record['potfile_id']}.{record['catalog_id']}.{field_name}",
+                    sample_name=f"{record['potfile_id']}_{record['catalog_id']}_{field_name}",
+                    potential_id=str(record["potfile_id"]), profile_type=DP_IE_PROFILE, field=field_name,
+                    prior_kind="normal", lower=-math.inf, upper=math.inf, step=0.1, mean=0.0, std=1.0,
+                    component_family="member_shape_offset", transform_kind="identity",
+                    physical_mean=0.0, physical_std=1.0, sample_site_name=f"member_{field_name}", sample_site_index=site_index))
     sigma_def_index = sigma_extra_index = sigma_sel_index = lambda_sel_index = sigma_shared_index = sigma_white_index = gp_ell_index = -1
     gp_sigma_alpha_index = gp_knee_index = gp_knee_gamma_index = -1
     gp_sigma_alpha2_index = gp_knee2_index = gp_knee_beta_low_index = -1
@@ -797,6 +813,10 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
     packed.deviation_mode = deviation_mode
     packed.radius_deviation_members = str(scaling.radius_deviation_members)
     packed.radius_deviation_active = np.ones(n_components, dtype=bool)
+    packed.shape_e1_offset_param_index = shape_e1_index
+    packed.shape_e2_offset_param_index = shape_e2_index
+    packed.shape_scatter = float(shape_scatter or 0.0)
+    packed.shape_active = shape_e1_index >= 0
 
     z_values = sorted({float(family.z_source) for family in families})
     factor_by_z = {float(z): float(dpie_sigma0_factor_from_config(z_lens, float(z), cosmo_config)) for z in z_values}
@@ -925,7 +945,14 @@ def with_member_classes(state: ModelState, exact_positions: np.ndarray, classifi
     if state.packed_lens_spec.radius_deviation_members == "exact" and active.size:
         active[np.asarray(state.members.component_indices)] = False
         active[np.asarray(state.members.component_indices)[exact]] = True
-    packed = replace(state.packed_lens_spec, deviation_centered=packed_centered, radius_deviation_active=active)
+    shape_active = np.asarray(state.packed_lens_spec.shape_active, dtype=bool).copy()
+    if shape_active.size:
+        # Only exact members carry a sampled shape: the far-field series is circular, so a far-field shape would be prior-only.
+        components = np.asarray(state.members.component_indices)
+        has_offset = np.asarray(state.packed_lens_spec.shape_e1_offset_param_index) >= 0
+        shape_active[components] = False
+        shape_active[components[exact]] = has_offset[components[exact]]
+    packed = replace(state.packed_lens_spec, deviation_centered=packed_centered, radius_deviation_active=active, shape_active=shape_active)
     info = dict(classification if classification is not None else state.members.classification)
     info["centered_count"] = int(centered.sum())
     info["centered_members"] = [state.members.member_ids[i] for i in np.flatnonzero(centered)]

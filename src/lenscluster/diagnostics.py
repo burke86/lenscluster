@@ -136,7 +136,7 @@ def fit_summary(state: ModelState, image_df: pd.DataFrame, count_df: pd.DataFram
     lenstool convention, 2 N_images - 2 N_families - N_global, where the global parameters are the halo, relation and
     error-model parameters: the member deviations are prior-dominated and add nothing to the effective count."""
     n_images = int(sum(f.n_images for f in state.family_data))
-    n_global = int(sum(spec.component_family not in {"source_position", "member_scatter_offset"} for spec in state.parameter_specs))
+    n_global = int(sum(spec.component_family not in {"source_position", "member_scatter_offset", "member_shape_offset"} for spec in state.parameter_specs))
     k = n_global + 2 * len(state.family_data)
     out: dict[str, Any] = {"observed_image_count": n_images, "n_effective_parameters": k, "n_global_parameters": n_global}
     if image_df.empty:

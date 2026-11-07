@@ -370,6 +370,11 @@ class ScalingModelConfig:
     # Relation parameters held at their nominal values instead of sampled: any of "sigma", "cutkpc" (the population's values
     # moved to the pivot) and "alpha_sigma", "beta_radius" (the prior means).  For tests against a published relation.
     fixed_relation_fields: tuple[str, ...] = ()
+    # Sampled member shapes: None fixes every member's ellipticity at its catalog (light) shape.  A number s samples, for
+    # every exact member, e1 = e1_light + s u1 and e2 = e2_light + s u2 with u ~ N(0, 1) (e = (1 - q) / (1 + q) times
+    # (cos 2 phi, sin 2 phi), the packed lens convention); far-field members keep the light shape and their offsets are
+    # prior-only, as for the radius deviations.  Round catalog members are centred on e = 0.
+    member_shape_scatter: float | None = None
     # Faber-Jackson slope 0.27-0.28 and beta_cut 0.64-0.66 in three MUSE-calibrated clusters (Bergamini et al. 2019).
     alpha_sigma_prior_mean: float = 0.27
     alpha_sigma_prior_std: float = 0.05
@@ -799,6 +804,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("scaling.member_deviation must be 'sigma', 'mass', 'sigma_rcut' or 'mass_rcut'.")
     if scaling.radius_deviation_members not in {"exact", "all"}:
         raise ValueError("scaling.radius_deviation_members must be 'exact' or 'all'.")
+    if scaling.member_shape_scatter is not None and not (0.0 < float(scaling.member_shape_scatter) < 1.0):
+        raise ValueError("scaling.member_shape_scatter must be None or in (0, 1).")
     if scaling.member_deviation_tail not in {"normal", "student_t"}:
         raise ValueError("scaling.member_deviation_tail must be 'normal' or 'student_t'.")
     if not float(scaling.member_deviation_dof) > 2.0:

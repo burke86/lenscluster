@@ -73,7 +73,7 @@ def plot_modes(state: ModelState, search: dict[str, Any], path: Path, *, margin:
     finite = np.isfinite(potential)
     best_value = np.nanmax(-potential[finite])
     specs = state.parameter_specs
-    global_specs = [(i, s) for i, s in enumerate(specs) if s.component_family not in {"source_position", "member_scatter_offset"}]
+    global_specs = [(i, s) for i, s in enumerate(specs) if s.component_family not in {"source_position", "member_scatter_offset", "member_shape_offset"}]
     global_specs = [(i, s) for i, s in global_specs if np.nanstd(final_theta[finite, i]) > 0][:max_parameters]
     n_panels = 1 + len(global_specs)
     ncols = 4

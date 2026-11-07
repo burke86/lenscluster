@@ -16,6 +16,7 @@ dependencies = [
     "jaxtronomy @ git+https://github.com/dutra/JAXtronomy.git@feat-pseudojaffe-compact-profiles",
     "lenstronomy @ git+https://github.com/dutra/lenstronomy.git@feat-lenscluster-models",
     "matplotlib>=3.7",
+    "cmcrameri>=1.8",
     "photutils>=2.0",
     "PyYAML>=6",
     "rich>=13",

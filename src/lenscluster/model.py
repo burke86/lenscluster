@@ -102,6 +102,12 @@ class PackedLensSpec:
     # radius_deviation_members is "exact" (their offsets are then prior-only).
     radius_deviation_active: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=bool))
     radius_deviation_members: str = "exact"
+    # Sampled member shapes (ScalingModelConfig.member_shape_scatter): unit offsets per component, -1 where absent; the
+    # offsets move e1, e2 by shape_scatter times their value on the components in shape_active (the exact members).
+    shape_e1_offset_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
+    shape_e2_offset_param_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int32))
+    shape_active: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=bool))
+    shape_scatter: float = 0.0
     # Smooth ellipticity cap per component: the modulus |e| above which a smooth penalty -softplus((|e| - cap) / width)
     # takes over from the flat prior (inf: none; DPIEHaloConfig.ellipticity_soft_cap).
     ellipticity_soft_cap: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=float))

@@ -42,7 +42,7 @@ def trace_data(posterior, specs):
         rhat[varying] = np.asarray(split_gelman_rubin(chains[:, :, varying]))
         ess[varying] = np.asarray(effective_sample_size(chains[:, :, varying]))
     global_indices = [i for i, s in enumerate(specs)
-                      if s.component_family not in {"member_scatter_offset", "source_position"}]
+                      if s.component_family not in {"member_scatter_offset", "member_shape_offset", "source_position"}]
     # Ties retain parameter order; undefined R-hat values sort last.
     ranked = np.argsort(-np.nan_to_num(rhat, nan=-np.inf), kind="stable")
     selected = global_indices + [int(i) for i in ranked if i not in global_indices][:12]

@@ -45,6 +45,7 @@ class Evaluator:
         self.transform_scale = jnp.asarray([float(spec.transform_scale) for spec in specs], dtype=jnp.float64)
         packed = state.packed_lens_spec
         self.spec = {name: jnp.asarray(value) for name, value in vars(packed).items() if not isinstance(value, str)}
+        self.member_shapes = bool(np.any(np.asarray(packed.shape_e1_offset_param_index) >= 0))
         self.n_components = int(np.asarray(packed.profile_type).size)
         self.factor_by_z = jnp.asarray([state.dpie_sigma0_factor_by_z[z] for z in state.z_source_values], dtype=jnp.float64)
         self.nfw_rho_crit = float(critical_density_msun_kpc3(state.z_lens, state.cosmo_config))
@@ -166,6 +167,9 @@ class Evaluator:
         profile = np.asarray(packed_spec.profile_type)
         fixed = ((profile == DP_IE_PROFILE) & (np.asarray(packed_spec.e1_param_index) < 0) & (np.asarray(packed_spec.e2_param_index) < 0)
                  & (np.asarray(packed_spec.x_center_param_index) < 0) & (np.asarray(packed_spec.y_center_param_index) < 0))
+        shape_active = np.asarray(packed_spec.shape_active, dtype=bool)
+        if self.member_shapes and shape_active.size:
+            fixed &= ~shape_active                       # members with a sampled shape: their geometry changes with theta
         self.fixed_geometry_components = np.flatnonzero(fixed).astype(np.int32)
         self.fixed_geometry_position = {int(c): i for i, c in enumerate(self.fixed_geometry_components)}
         if len(self.fixed_geometry_components):
@@ -203,6 +207,12 @@ class Evaluator:
         y_center = self._apply(spec["y_center_base"], spec["y_center_param_index"], physical)
         e1 = self._apply(spec["e1_base"], spec["e1_param_index"], physical)
         e2 = self._apply(spec["e2_base"], spec["e2_param_index"], physical)
+        if self.member_shapes:
+            # Exact members: the light shape plus the scatter times the sampled unit offsets (ScalingModelConfig.member_shape_scatter).
+            active, scatter = spec["shape_active"], spec["shape_scatter"]
+            i1, i2 = spec["shape_e1_offset_param_index"], spec["shape_e2_offset_param_index"]
+            e1 = e1 + jnp.where(active & (i1 >= 0), scatter * physical[jnp.maximum(i1, 0)], 0.0)
+            e2 = e2 + jnp.where(active & (i2 >= 0), scatter * physical[jnp.maximum(i2, 0)], 0.0)
         core_radius_kpc = self._apply(spec["core_radius_kpc_base"], spec["core_radius_param_index"], physical)
         cut_radius_kpc = self._apply(spec["cut_radius_kpc_base"], spec["cut_radius_param_index"], physical)
         gamma1 = self._apply(spec["gamma1_base"], spec["gamma1_param_index"], physical)
