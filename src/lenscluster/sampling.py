@@ -326,11 +326,44 @@ def stiffest_direction(potential, x0, whiten, *, iterations: int = 30, seed: int
     return value, direction / max(np.linalg.norm(direction), 1e-300)
 
 
+def lanczos_extremes(potential, x0, whiten, *, steps: int = 40, seed: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ritz values of W^T H W (whitened Hessian of ``potential`` at ``x0``) from ``steps`` Lanczos iterations with full
+    reorthogonalisation, and the flat-coordinate directions (unit norm) of the largest and the smallest one.  The ends of
+    the spectrum converge first, so a few tens of Hessian-vector products give the stiffest and the softest direction."""
+    gradient = jax.grad(potential)
+    hvp = jax.jit(lambda v: jax.jvp(gradient, (x0,), (v,))[1])
+    operator = lambda v: np.asarray(whiten(hvp(whiten(jnp.asarray(v))), transpose=True), dtype=float)
+    n = int(np.size(x0)); m = min(int(steps), n)
+    q = np.array(jax.random.normal(jax.random.PRNGKey(int(seed)), (n,), dtype=jnp.float64)); q = q / np.linalg.norm(q)
+    basis, alpha, beta = [q], [], []
+    for j in range(m):
+        w = operator(basis[j])
+        a = float(w @ basis[j]); alpha.append(a)
+        w = w - a * basis[j] - (beta[-1] * basis[j - 1] if j else 0.0)
+        stacked = np.asarray(basis)
+        w = w - stacked.T @ (stacked @ w)                                  # full reorthogonalisation
+        b = float(np.linalg.norm(w))
+        if not np.isfinite(b) or b < 1e-12 or j == m - 1:
+            break
+        beta.append(b); basis.append(w / b)
+    k = len(alpha)
+    tri = np.diag(alpha) + np.diag(beta[:k - 1], 1) + np.diag(beta[:k - 1], -1)
+    values, vectors = np.linalg.eigh(tri)
+    stacked = np.asarray(basis[:k])
+    directions = []
+    for col in (int(np.argmax(values)), int(np.argmin(values))):
+        d = np.asarray(whiten(jnp.asarray(stacked.T @ vectors[:, col])), dtype=float)
+        directions.append(d / max(np.linalg.norm(d), 1e-300))
+    return values, directions[0], directions[1]
+
+
 def stiffness_diagnostic(model, specs: list[ParameterSpec], mcmc, step_size: np.ndarray, chains: int, *, top: int = 5,
-                         iterations: int = 30) -> list[dict[str, Any]]:
-    """Per chain, at its last state and with the mass matrix it adapted: the largest curvature of the potential in the
-    sampler's coordinates (power iteration with Hessian-vector products), the step size it allows (2 / sqrt(lambda)),
-    the adapted step size against it, and the parameters that make up that stiffest direction."""
+                         iterations: int = 40, max_tree_depth: int = 8) -> list[dict[str, Any]]:
+    """Per chain, at its last state and with the mass matrix it adapted: both ends of the curvature spectrum of the
+    potential in the sampler's coordinates (Lanczos with Hessian-vector products).  The stiffest direction sets the step
+    limit 2 / sqrt(lambda_max); the softest one the trajectory length, pi / (step sqrt(lambda_min)) leapfrog steps for
+    half an orbit, against the 2^depth - 1 the tree-depth cap allows.  Also the condition number and the parameters in
+    both directions.  A negative smallest value means the state is not in a locally convex region."""
     state = mcmc.last_state
     z_all, inverse_all = state.z, state.adapt_state.inverse_mass_matrix
     sites = {site.name: site for site in sample_sites(specs)}
@@ -362,14 +395,91 @@ def stiffness_diagnostic(model, specs: list[ParameterSpec], mcmc, step_size: np.
             return jnp.concatenate(parts)
 
         potential = lambda vector: potential_energy(model, (), {}, unflatten(vector))
-        value, direction = stiffest_direction(potential, x0, whiten, iterations=iterations, seed=c)
+        values, direction, soft = lanczos_extremes(potential, x0, whiten, steps=iterations, seed=c)
+        value, softest = float(values.max()), float(values.min())
         labels = [specs[i].name for name in order for i in sites[name].indices]
         heavy = np.argsort(-np.abs(direction))[:int(top)]
+        heavy_soft = np.argsort(-np.abs(soft))[:int(top)]
         limit = 2.0 / np.sqrt(abs(value)) if value != 0 and np.isfinite(value) else float("nan")
+        positive = values[values > 0]
+        half_orbit = float(np.pi / (step_size[c] * np.sqrt(positive.min()))) if positive.size else float("nan")
         out.append(dict(chain=c, curvature=float(value), step_limit=float(limit), step_size=float(step_size[c]),
                         step_fraction=float(step_size[c] / limit) if np.isfinite(limit) else float("nan"),
-                        direction=[(labels[j], float(direction[j])) for j in heavy]))
+                        direction=[(labels[j], float(direction[j])) for j in heavy],
+                        softest_curvature=softest, n_negative=int((values < 0).sum()), lanczos_steps=int(values.size),
+                        condition=float(value / positive.min()) if positive.size else float("nan"),
+                        half_orbit_steps=half_orbit, tree_cap_steps=int(2 ** int(max_tree_depth) - 1),
+                        soft_direction=[(labels[j], float(soft[j])) for j in heavy_soft]))
     return out
+
+
+def slow_modes(grouped_theta: np.ndarray, specs: list[ParameterSpec], *, modes: int = 2, top: int = 8) -> dict[str, Any]:
+    """Directions along which the chains disagree: each chain's mean minus the grand mean, in units of the pooled
+    within-chain standard deviation, decomposed over chains (SVD).  A singular value of a few or more means the chains
+    sit in different places along that direction.  Loadings are summed in quadrature over parameter groups (all member
+    velocity offsets, all source x, ...) so that hundreds of small contributions show up as one entry."""
+    chains = grouped_theta.shape[0]
+    if chains < 2:
+        return {"singular_values": [], "modes": []}
+    means = grouped_theta.mean(1)
+    within = np.maximum(grouped_theta.std(1).mean(0), 1e-12)
+    z = (means - means.mean(0)) / within
+    u, s, vt = np.linalg.svd(z, full_matrices=False)
+    groups = [parameter_group(spec) for spec in specs]
+    out = []
+    for k in range(min(modes, len(s))):
+        weight: dict[str, float] = {}
+        for g, v in zip(groups, vt[k]):
+            weight[g] = weight.get(g, 0.0) + float(v * v)
+        ranked = sorted(weight.items(), key=lambda kv: -kv[1])[:int(top)]
+        out.append(dict(singular_value=float(s[k]), chain_scores=u[:, k].round(3).tolist(),
+                        groups=[(g, float(np.sqrt(w))) for g, w in ranked]))
+    return {"singular_values": s.round(3).tolist(), "modes": out}
+
+
+def parameter_group(spec: ParameterSpec) -> str:
+    """Group label for diagnostics: latent families pooled, everything else by name."""
+    if spec.component_family in ("member_scatter_offset", "member_shape_offset"):
+        return f"member {spec.field}s"
+    if spec.component_family == "source_position":
+        return f"source {spec.field}"
+    return spec.name
+
+
+def bound_pressure(grouped_theta: np.ndarray, specs: list[ParameterSpec], *, edge: float = 0.02) -> list[dict[str, Any]]:
+    """Bounded parameters whose draws pile against a prior bound: the fraction of draws within ``edge`` of the latent
+    interval width of either bound.  NumPyro maps an interval to the real line with a logit, which stretches without
+    limit at the edges, so a posterior pressed against a bound becomes a long flat tail in the sampler's coordinate."""
+    flat = grouped_theta.reshape(-1, grouped_theta.shape[-1])
+    out = []
+    for i, spec in enumerate(specs):
+        if spec.prior_kind not in ("uniform", "truncated_normal") or not (np.isfinite(spec.lower) and np.isfinite(spec.upper)):
+            continue
+        width = float(spec.upper - spec.lower)
+        if width <= 0:
+            continue
+        low = float(np.mean(flat[:, i] < spec.lower + edge * width)); high = float(np.mean(flat[:, i] > spec.upper - edge * width))
+        if max(low, high) > 0.05:
+            out.append(dict(parameter=spec.name, lower_fraction=low, upper_fraction=high))
+    return out
+
+
+def group_convergence(r_hat: list[float], n_eff: list[float], specs: list[ParameterSpec], far_offsets: set[int] | None = None) -> list[dict[str, Any]]:
+    """Median and worst R-hat and ESS per kind of parameter: globals, sources, member offsets of exact and far-field members."""
+    far_offsets = far_offsets or set()
+    kinds: dict[str, list[int]] = {}
+    for i, spec in enumerate(specs):
+        if spec.component_family == "source_position":
+            kind = "sources"
+        elif spec.component_family in ("member_scatter_offset", "member_shape_offset"):
+            kind = ("far-field " if i in far_offsets else "exact ") + spec.component_family.replace("member_", "").replace("_", " ")
+        else:
+            kind = "globals"
+        kinds.setdefault(kind, []).append(i)
+    r, e = np.asarray(r_hat, float), np.asarray(n_eff, float)
+    return [dict(kind=k, n=len(idx), r_hat_median=float(np.nanmedian(r[idx])), r_hat_max=float(np.nanmax(r[idx])),
+                 ess_min=float(np.nanmin(e[idx])), ess_median=float(np.nanmedian(e[idx])))
+            for k, idx in kinds.items() if np.isfinite(r[idx]).any()]
 
 
 def chain_diagnostics(grouped_theta: np.ndarray) -> dict[str, Any]:
@@ -499,11 +609,15 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
         # What sets the step size: the stiffest direction at each chain's last state, with the mass matrix it adapted.
         try:
             started_stiffness = time.perf_counter()
-            stiff = stiffness_diagnostic(model, specs, mcmc, step_size, int(chains))
+            stiff = stiffness_diagnostic(model, specs, mcmc, step_size, int(chains), max_tree_depth=int(max_tree_depth))
             for row in stiff:
                 parts = ", ".join(f"{name} {weight:+.2f}" for name, weight in row["direction"])
+                soft = ", ".join(f"{name} {weight:+.2f}" for name, weight in row["soft_direction"])
                 log(f"[nuts] chain {row['chain']} stiffness: step limit {row['step_limit']:.3g} (2/sqrt of curvature {row['curvature']:.3g}), "
                     f"adapted step {row['step_size']:.3g} = {row['step_fraction']:.2f} of it; stiffest direction: {parts}")
+                log(f"[nuts] chain {row['chain']} softest: curvature {row['softest_curvature']:.3g} ({row['n_negative']} negative of "
+                    f"{row['lanczos_steps']} Ritz values), condition {row['condition']:.3g}, half an orbit needs {row['half_orbit_steps']:.0f} "
+                    f"leapfrog steps against a cap of {row['tree_cap_steps']}; softest direction: {soft}")
             fractions = [r["step_fraction"] for r in stiff if np.isfinite(r["step_fraction"])]
             if fractions and min(fractions) > 0.3 and adaptation.get("max_tree_depth_saturation", 0.0) > 0.5:
                 log("[nuts] the step size sits near the stability limit of that direction and trajectories hit the tree-depth cap: "
@@ -512,8 +626,33 @@ def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, war
         except Exception as error:                                     # a diagnostic must never fail a run
             log(f"[nuts] WARNING: stiffness diagnostic failed ({type(error).__name__}: {error})")
     best = int(np.nanargmax(np.where(finite, log_prob, -np.inf)))
+    convergence = chain_diagnostics(grouped_theta)
+    geometry: dict[str, Any] = {}
+    try:                                                                # diagnostics must never fail a run
+        geometry["slow_modes"] = slow_modes(grouped_theta, specs)
+        for k, mode in enumerate(geometry["slow_modes"]["modes"]):
+            log(f"[nuts] slow mode {k + 1}: chain means {mode['singular_value']:.1f} within-chain sd apart (scores "
+                f"{mode['chain_scores']}); " + ", ".join(f"{g} {w:.2f}" for g, w in mode["groups"]))
+        geometry["bound_pressure"] = bound_pressure(grouped_theta, specs)
+        for row in geometry["bound_pressure"]:
+            log(f"[nuts] bound pressure: {row['parameter']} has {100 * row['lower_fraction']:.0f}% of draws at the lower and "
+                f"{100 * row['upper_fraction']:.0f}% at the upper bound (within 2% of the prior interval)")
+        far = set()
+        members = getattr(state, "members", None)
+        if members is not None and len(getattr(members, "far_positions", [])):
+            for position in np.asarray(members.far_positions, dtype=int):
+                for array in (members.offset_param_index, members.radius_offset_param_index):
+                    array = np.asarray(array)
+                    if array.size > position and int(array[position]) >= 0:
+                        far.add(int(array[position]))
+        geometry["group_convergence"] = group_convergence(convergence["r_hat"], convergence["n_eff"], specs, far)
+        for row in geometry["group_convergence"]:
+            log(f"[nuts] convergence {row['kind']:28s} n={row['n']:4d}: R-hat median {row['r_hat_median']:.2f} max {row['r_hat_max']:.2f}, "
+                f"ESS min {row['ess_min']:.0f} median {row['ess_median']:.0f}")
+    except Exception as error:
+        log(f"[nuts] WARNING: geometry diagnostics failed ({type(error).__name__}: {error})")
     diagnostics = dict(mass_seed=mass_diagnostics, adaptation=adaptation, elapsed_seconds=float(elapsed), chain_method=chain_method,
-                       n_nonfinite_draws=int((~finite).sum()), stiffness=stiff, **chain_diagnostics(grouped_theta))
+                       n_nonfinite_draws=int((~finite).sum()), stiffness=stiff, geometry=geometry, **convergence)
     return PosteriorResults(samples=flat, physical=physical, log_prob=log_prob, accept_prob=accept, diverging=diverging,
                            num_steps=num_steps, warmup_steps=int(warmup), sample_steps=int(samples), num_chains=int(chains),
                            energy=energy_by_chain.reshape(-1), step_size=step_size,
