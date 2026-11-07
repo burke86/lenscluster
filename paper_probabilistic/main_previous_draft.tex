@@ -1,0 +1,553 @@
+%% Version 7.0.1. Created May 2025.
+%% Version 7. Created January 2025.
+
+\documentclass[twocolumn,twocolappendix,linenumbers]{aastex701}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\cat}{\mathrm{cat}}
+\newcommand{\bg}{\mathrm{bg}}
+\newcommand{\lens}{\mathrm{lens}}
+\newcommand{\logit}{\operatorname{logit}}
+
+\newcommand{\isaque}[1]{\textcolor{teal}{[Isaque: #1]}}
+\newcommand{\priya}[1]{\textcolor{orange}{[Priya: #1]}}
+\newcommand{\colin}[1]{\textcolor{magenta}{[Colin: #1]}}
+
+\newcommand{\todo}[1]{\textcolor{red!65!black}{[To complete: #1]}}
+\newcommand{\rev}[1]{\textcolor{red}{#1}}
+\newcommand{\lenstool}{\textsc{Lenstool}\xspace}
+
+\graphicspath{{./}{figures/}}
+\begin{document}
+\title{Probabilistic Assignment of Multiple Images in Galaxy Cluster Lenses}
+
+\author[0000-0001-9947-6911]{Colin J. Burke}
+\affiliation{Department of Physics, University of North Texas, Denton, TX 76201, USA}
+\affiliation{Department of Astronomy, Yale University, New Haven, CT 06511, USA}
+\email{colin.j.burke@yale.edu}
+
+\author[0000-0001-7040-4930]{Isaque Dutra}
+\affiliation{Department of Physics, Yale University, New Haven, CT 06511, USA}
+\email{isaque.dutra@yale.edu}
+\correspondingauthor{Isaque Dutra}
+
+\author[0000-0002-5554-8896]{Priyamvada Natarajan}
+\affiliation{Department of Physics, Yale University, New Haven, CT 06511, USA}
+\affiliation{Department of Astronomy, Yale University, New Haven, CT 06511, USA}
+\email{priyamvada.natarajan@yale.edu}
+
+\begin{abstract}
+\end{abstract}
+
+\keywords{\uat{Strong gravitational lensing}{1643} --- \uat{Galaxy clusters}{584} --- \uat{Dark matter distribution}{356} --- \uat{Galaxy dark matter halos}{1880} --- \uat{Bayesian statistics}{1900} --- \uat{Astronomy software}{1855}}
+
+\begin{abstract}
+Identifying which images share a background source is part of constructing a cluster strong-lensing model.
+When more than one association is plausible, fixing the image families removes uncertainty that can affect the inferred mass distribution.
+We describe a method that combines catalog measurements and source-plane consistency to weight competing assignments.
+Each assignment is a complete partition of the observed images, so an image belongs to exactly one family in each candidate.
+Catalog scores compare a shared latent property with independent background draws, while the lensing score measures agreement around a fitted source position.
+We normalize the combined scores over a generated set of partitions and obtain pairwise same-family probabilities by summing their weights.
+The resulting distribution preserves consistent assignments but remains conditional on the candidate search, adopted scores, and lens model.
+This draft specifies the implemented method and the validation needed to assess recovery and probability calibration.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+Cluster strong-lensing models use the positions and redshifts of multiple images to constrain the projected mass distribution \citep{Jullo2007}.
+Images assigned to one family must be consistent with a common background source.
+An incorrect association can therefore force the mass model to explain an image configuration that the lens did not produce.
+Similar colors or uncertain redshifts can leave more than one association plausible.
+We ask how catalog information and lensing consistency can retain this ambiguity through probabilities for alternative family assignments.
+
+Comparing a common-source hypothesis with independent-source hypotheses is established in astronomical cross-identification \citep{Budavari2008}.
+Requiring mutually compatible associations also motivates inference over complete catalog assignments \citep{Budavari2016}.
+Here the images can be widely separated on the sky, and their positional consistency is evaluated after applying a lens model.
+We describe the family-level scoring configuration of an implemented partition engine.
+Its output is a weighted set of assignments and the probability, under those weights, that any two images share a source.
+
+\section{Probabilistic Family Assignment}
+\label{sec:method}
+\subsection{Observations and candidate families}
+\label{sec:data}
+An ambiguous image must be allowed to change families without belonging to two families simultaneously.
+We therefore assign the $N$ observed images to a partition $Z=\{F_1,\ldots,F_K\}$, where $K$ is the number of nonempty families and $F_k$ is a set of image indices.
+The sets are disjoint and cover all images; their sizes $n_k=|F_k|$ satisfy $\sum_k n_k=N$.
+A singleton is an image with no assigned counterpart in the catalog, not necessarily a physically singly imaged source.
+
+For image $i$, the inputs are its two-dimensional angular position $\boldsymbol{x}_i$, adopted positional scale $\sigma_i$, redshift estimate $\hat z_i$ with uncertainty $s_{z,i}$, and available catalog measurements.
+Image and source-plane coordinates and their uncertainty scales are in arcseconds.
+The vector $\boldsymbol{\eta}$ specifies a supplied lens model and is held fixed during the primary assignment calculation.
+Each family hypothesis is scored using the available measurements, with missing values omitted.
+
+\subsection{Catalog evidence for a shared source}
+\label{sec:catalog}
+Images of the same source should have consistent redshifts and, under an achromatic magnification approximation, similar spectral shapes.
+For a family $F$ and scalar catalog component $a$, let $y_{ia}$ be its value, $v_{ia}$ its adopted variance, and $\mu_{Fa}$ the unknown common value.
+Conditional independence gives the joint density
+\begin{equation}
+ \mathcal L_{Fa}(\mu_{Fa})=
+ \prod_{i\in F_a}\N(y_{ia}\mid\mu_{Fa},v_{ia}),
+ \label{eq:catalogjoint}
+\end{equation}
+where $F_a\subseteq F$ contains the valid measurements and $\N(y\mid\mu,v)$ is a normalized scalar Gaussian with mean $\mu$ and variance $v$.
+We use a proper prior $\mu_{Fa}\sim\N(m_a,\tau_a^2)$, where $m_a$ and $\tau_a$ specify the population location and prior width.
+Integrating the shared value gives
+\begin{equation}
+ E_{Fa}=\int\dd\mu_{Fa}\,
+ \N(\mu_{Fa}\mid m_a,\tau_a^2)
+ \prod_{i\in F_a}\N(y_{ia}\mid\mu_{Fa},v_{ia}).
+ \label{eq:catalogmarginal}
+\end{equation}
+Appendix~\ref{app:gaussian} evaluates this integral with its normalization intact.
+
+To determine whether agreement exceeds chance similarity, we compare Equation~\ref{eq:catalogmarginal} with independent draws from a background density,
+\begin{equation}
+ B_{Fa}=\prod_{i\in F_a}\N(y_{ia}\mid b_a,t_a^2),
+ \qquad R_{Fa}=E_{Fa}/B_{Fa},
+ \label{eq:catalogratio}
+\end{equation}
+where $b_a$ and $t_a$ are the background mean and width.
+The background width describes the observed catalog population; measurement variances are not added to it in this implementation.
+For fixed hyperparameters, $R_{Fa}$ is a Bayes factor between these scalar models.
+The implementation sets $\log R_{Fa}=0$ when fewer than two valid values remain, including singletons.
+This is a scoring convention, not the general one-observation limit of Equation~\ref{eq:catalogratio}.
+
+The catalog score combines redshift, centered magnitudes, and available morphology components,
+\begin{equation}
+ C_F=w_z\log R_{Fz}
+       +w_c\sum_b\log R_{Fb}
+       +w_m\sum_h\log R_{Fh}.
+ \label{eq:catalogscore}
+\end{equation}
+Here $b$ indexes photometric bands, $h$ indexes size and ellipticity, and $w_z,w_c,w_m$ are fixed dimensionless score weights.
+The centered magnitudes remove an overall brightness offset (Appendix~\ref{app:catalogdetails}).
+They are correlated, although their scalar scores are added separately.
+Observed size and ellipticity also change under lensing, so their agreement is a heuristic contribution rather than a shared intrinsic-property constraint.
+Together with empirical background estimates and adjustable powers, these choices make $C_F$ a composite score.
+
+\subsection{Lensing consistency}
+\label{sec:lensing}
+A lens model supplies an additional test because images of one source should back-project to a common position.
+For trial source redshift $z$, the back-projected position is
+\begin{equation}
+ \widehat{\boldsymbol{\beta}}_i(\boldsymbol{\eta},z)
+ =\boldsymbol{x}_i-
+ \boldsymbol{\alpha}(\boldsymbol{x}_i;\boldsymbol{\eta},z),
+ \label{eq:lens}
+\end{equation}
+where $\boldsymbol{\alpha}$ is the reduced angular deflection.
+Source-plane consistency has also been used in cluster lens optimization \citep{Jullo2007}.
+Here the implemented variance is $u_i=\sigma_i^2+\sigma_{\rm src}^2$, where the fixed scale $\sigma_{\rm src}$ allows additional source-plane scatter.
+The positional input $\sigma_i$ is used directly in this variance.
+This isotropic prescription does not propagate image-plane errors through the lens Jacobian.
+
+With $\boldsymbol{\beta}_F$ the shared source position and $\boldsymbol I_2$ the two-dimensional identity matrix, the conditional density is
+\begin{equation}
+ \mathcal L_F(\boldsymbol{\beta}_F;z)
+ =\prod_{i\in F}\N_2\!\left(
+ \widehat{\boldsymbol{\beta}}_i\mid
+ \boldsymbol{\beta}_F,u_i\boldsymbol{I}_2\right),
+ \label{eq:lensjoint}
+\end{equation}
+where $\N_2$ denotes a normalized bivariate Gaussian.
+The code maximizes this density over the source position instead of marginalizing it.
+The maximizing centroid and evaluated log density are
+\begin{equation}
+ \begin{aligned}
+ \widehat{\boldsymbol{\beta}}_F
+ &=\frac{\sum_{i\in F}u_i^{-1}\widehat{\boldsymbol{\beta}}_i}
+          {\sum_{i\in F}u_i^{-1}},\\
+ \ell_F^{\rm prof}(z)
+ &=-\sum_{i\in F}\left[
+ \frac{\|\widehat{\boldsymbol{\beta}}_i-
+             \widehat{\boldsymbol{\beta}}_F\|^2}{2u_i}
+ +\log(2\pi u_i)\right].
+ \end{aligned}
+ \label{eq:profile}
+\end{equation}
+For equal variances the centroid is the arithmetic mean.
+The density normalization is retained, but profiling does not supply the prior-volume factor required for a marginalized evidence.
+When image reliabilities are used, the mixture in Appendix~\ref{app:optional} replaces this Gaussian log density while retaining the same centroid.
+
+Chance alignments in the source plane are represented by an empirical Gaussian density $p_{\bg}(\boldsymbol{\beta}\mid z)$ fitted to all back-projected catalog positions at $z$.
+The log likelihood-ratio score is
+\begin{equation}
+ L_F(z)=\ell_F^{\rm prof}(z)
+       -\sum_{i\in F}\log p_{\bg}(\widehat{\boldsymbol{\beta}}_i\mid z).
+ \label{eq:lensratio}
+\end{equation}
+The background uses separate coordinate variances, as specified in Appendix~\ref{app:catalogdetails}.
+Equation~\ref{eq:lensratio} is dimensionless but is not a marginalized Bayes factor.
+
+An uncertain redshift changes the deflection, so the cached calculation evaluates a fixed, equally spaced grid $\{z_g\}_{g=1}^{G}$.
+Let $F_z$ contain the family members with valid redshift estimates.
+The normalized grid weights and averaged lens score are
+\begin{equation}
+ \begin{aligned}
+ \pi_{Fg}&=
+ \frac{\exp[-\tfrac12\sum_{i\in F_z}
+           (z_g-\hat z_i)^2/s_{z,i}^2]}
+      {\sum_{r=1}^{G}\exp[-\tfrac12\sum_{i\in F_z}
+           (z_r-\hat z_i)^2/s_{z,i}^2]},\\
+ L_F&=\log\sum_{g=1}^{G}\pi_{Fg}\exp[L_F(z_g)].
+ \end{aligned}
+ \label{eq:redshift}
+\end{equation}
+With no redshift information, $\pi_{Fg}=1/G$.
+This is a weighted average of ratios, not generally a ratio of marginalized evidences.
+The same redshift measurements also enter $C_F$; this use is part of the composite construction, not a demonstrated factorization of a joint generative model.
+Single-image families contribute $L_F=0$.
+
+\subsection{Structural preferences and assignment weights}
+\label{sec:weights}
+Weak evidence can otherwise favor implausible fragmentation or very large families.
+The code therefore uses a partition weight with a Chinese-restaurant-process factor \citep{Pitman1995} and additional size penalties,
+\begin{equation}
+ \begin{aligned}
+ \log\widetilde p_{\rm str}(Z)
+ ={}&K\log a_0+\log\Gamma(a_0)-\log\Gamma(a_0+N)\\
+ &+\sum_{k=1}^{K}\log\Gamma(n_k)
+ -\lambda_1\sum_{k=1}^{K}\ind(n_k=1)\\
+ &-\frac12\sum_{k:n_k\geq2}
+       \left(\frac{n_k-n_0}{s_n}\right)^2.
+ \end{aligned}
+ \label{eq:prior}
+\end{equation}
+Here $\Gamma$ is the gamma function, $a_0>0$ controls the base partition distribution, $\lambda_1$ penalizes singletons, and $n_0,s_n$ set the preferred multi-image size and its tolerance.
+The indicator $\ind(\cdot)$ equals one when its argument holds and zero otherwise.
+The tilde denotes an unnormalized weight after adding the penalties; its normalization cancels for fixed hyperparameters.
+
+Trusted associations and incompatible pairs enter through anchors.
+For anchored pair $(i,j)\in\mathcal A$, let $a_{ij}\in\{0,1\}$ denote the required different- or same-family relation and $r_{ij}>0$ its strength.
+Writing $S_{ij}(Z)=\ind(i,j\text{ belong to the same }F_k)$, the penalty is
+\begin{equation}
+ A(Z)=-\kappa\sum_{(i,j)\in\mathcal A}
+ r_{ij}\ind[S_{ij}(Z)\ne a_{ij}],
+ \label{eq:anchors}
+\end{equation}
+with fixed $\kappa=20$.
+This is a finite penalty, not a hard constraint.
+Anchors derived from the same colors or redshifts used in the scores are additional data-dependent preferences.
+
+We combine the family scores and structural terms as
+\begin{equation}
+ s(Z)=\log\widetilde p_{\rm str}(Z)+A(Z)
+       +\sum_{F\in Z}\left[\omega_c C_F+\omega_\ell L_F\right],
+ \label{eq:score}
+\end{equation}
+where $\omega_c$ and $\omega_\ell$ are fixed dimensionless weights for catalog and lensing information.
+No independent pair-likelihood term is included in this configuration.
+For the distinct generated candidates $\mathcal C=\{Z_1,\ldots,Z_M\}$, their weights are
+\begin{equation}
+ W_m=\frac{\exp[s(Z_m)/T]}{\sum_{q=1}^{M}\exp[s(Z_q)/T]},
+ \qquad T>0,
+ \label{eq:weights}
+\end{equation}
+where $M$ is the candidate count and $T$ is a fixed dimensionless temperature.
+Increasing $T$ flattens the distribution and tempers the structural terms as well as the data scores.
+The weights sum to one over $\mathcal C$; they do not measure omitted probability outside it.
+
+To retain uncertainty without matching arbitrary family labels across candidates, we report
+\begin{equation}
+ P_{ij}=\sum_{m=1}^{M}W_m S_{ij}(Z_m),
+ \qquad Z_\star=Z_{\arg\max_m W_m}.
+ \label{eq:pairprob}
+\end{equation}
+Here $P_{ij}$ is the pairwise same-family probability under the candidate weights, and $Z_\star$ is the highest-weight assignment.
+Each candidate is a consistent partition; thresholding $P_{ij}$ independently need not produce one.
+Also, $\sum_jP_{ij}$ is an expected family size, not a quantity constrained to equal one.
+
+\section{Computational Inference}
+\label{sec:computation}
+Enumerating all partitions becomes impractical as the catalog grows, so we use inexpensive affinities to propose candidates before evaluating Equation~\ref{eq:score}.
+Catalog-based logistic affinities and optional source-plane affinities generate partitions through thresholding, clustering, and seeded family growth.
+All-singleton and all-in-one assignments are included.
+Family labels are canonicalized and duplicate partitions removed, so repeated proposals do not receive extra probability.
+Appendix~\ref{app:proposals} gives the proposal equations.
+
+After scoring, the pair probabilities can serve as soft targets for another logistic fit and candidate search.
+This is iterative proposal refinement, not sampling from a proven posterior transition rule.
+An optional repair pass expands the highest-scoring candidates through a family merge, a single-image reassignment, or splitting an image into a singleton.
+The expanded set is deduplicated, rescored, and renormalized.
+Back-projected positions are cached across families, and repeated family scores are reused.
+The main calculation holds the lens model fixed; Appendix~\ref{app:optional} describes a separate implementation that averages over supplied lens realizations.
+
+\section{Validation}
+\label{sec:validation}
+Assignment recovery and probability calibration require different tests.
+For small catalogs, exhaustive enumeration can establish whether the candidate search finds the largest scores and reproduces the pair probabilities obtained from all partitions under the same scoring rule.
+Mock catalogs with hidden family labels can then measure exact recovery, missed counterparts, and incorrect merges.
+\todo{Insert catalog sizes, mock construction, recovery measurements, and a figure comparing true and inferred assignments.}
+
+Calibration requires repeated mocks that compare reported $P_{ij}$ with the fraction of genuinely associated pairs in each probability bin.
+Uncertainty estimates must account for pairs sharing images or families.
+Tests should vary lens-model errors, redshift uncertainty, missing bands, and unrelated objects, then repeat the analysis with different candidate-search budgets, temperatures, and structural penalties.
+\todo{Insert calibration curves, candidate-completeness measurements, sensitivity results, and runtime measurements.}
+
+\section{Discussion and Conclusions}
+\label{sec:discussion}
+Weighting complete assignments retains competing family interpretations while preventing an image from occupying two families in any one candidate.
+The derived pair probabilities make this ambiguity visible without requiring family labels to agree across candidates.
+The method provides a way to rank alternative image catalogs for subsequent lens modeling.
+
+Its current scores combine marginalized catalog components with a profiled lensing term and empirical preferences.
+An inaccurate lens model can favor the wrong association, and a restricted candidate set can hide alternatives.
+Correlated colors, lens-dependent morphology, and repeated use of catalog evidence also limit a posterior interpretation.
+Replacing these approximations with a joint generative model would be a further development.
+For the implemented method, the next scientific step is to establish recovery and calibration under controlled departures from its assumptions.
+
+\section*{Data and Code Availability}
+\todo{Specify the public software release, input catalogs, validation products, and persistent links.}
+
+\begin{acknowledgments}
+I.D. acknowledges support from NASA under award No. 80NSSC25K0311 under the NASA FINESST program.
+P.N. gratefully acknowledges funding from the Department of Energy grant DE-SC0017660; support from the John Templeton Foundation via grant 126613 and from the NASA GLIMPSE JWST GO-03293.026 for this work.
+\end{acknowledgments}
+
+\appendix
+\section{Gaussian Catalog Integral}
+\label{app:gaussian}
+The shared-value integral can be evaluated without sampling a separate latent parameter for each family.
+Suppress the component index $a$, write $n=|F_a|$, and define $d_i=y_i-m$ and
+\begin{equation}
+ \begin{aligned}
+ Q&=\tau^{-2}+\sum_i v_i^{-1},\\
+ h&=\sum_i d_i/v_i,\qquad J=\sum_i d_i^2/v_i.
+ \end{aligned}
+ \label{eq:gaussstats}
+\end{equation}
+Here $Q$ is the total precision, $h$ the weighted offset, and $J$ the weighted squared offset; sums run over valid measurements.
+For $\delta=\mu-m$, the exponent in Equation~\ref{eq:catalogmarginal} follows from
+\begin{equation}
+ \frac{\delta^2}{\tau^2}+\sum_i\frac{(d_i-\delta)^2}{v_i}
+ =Q(\delta-h/Q)^2+J-h^2/Q.
+ \label{eq:complete}
+\end{equation}
+Integrating the square yields the normalized density
+\begin{equation}
+ E=(2\pi)^{-n/2}
+       \left(\tau^2Q\prod_i v_i\right)^{-1/2}
+       \exp\!\left[-\frac12(J-h^2/Q)\right].
+ \label{eq:closed}
+\end{equation}
+Thus $E$ and $B$ have the same units and their ratio is dimensionless.
+The conditions $v_i>0$ and $\tau^2>0$ make the integral finite.
+Equations~\ref{eq:gaussstats}--\ref{eq:closed} describe the analytic calculation; the fewer-than-two convention is applied separately.
+
+The lensing calculation instead optimizes the shared position.
+Differentiating the logarithm of Equation~\ref{eq:lensjoint} gives
+\begin{equation}
+ \boldsymbol{\nabla}_{\boldsymbol\beta_F}\log\mathcal L_F
+ =\sum_{i\in F}\frac{\widehat{\boldsymbol\beta}_i
+                         -\boldsymbol\beta_F}{u_i}.
+ \label{eq:centroidderivative}
+\end{equation}
+Its zero is the centroid in Equation~\ref{eq:profile}; its Hessian is $-(\sum_i u_i^{-1})\boldsymbol I_2$, which is negative definite for positive variances.
+No integral over the source position is performed.
+
+\section{Catalog Inputs and Background Densities}
+\label{app:catalogdetails}
+To remove a common magnitude offset, the code centers each image over its available band set $\mathcal B_i$,
+\begin{equation}
+ c_{ib}=m_{ib}-\frac{1}{|\mathcal B_i|}
+                   \sum_{r\in\mathcal B_i}m_{ir},
+ \label{eq:colors}
+\end{equation}
+where $m_{ib}$ is the measured magnitude in band $b$.
+At least two bands are required.
+Different band sets imply different centering offsets, and even a common set produces correlated $c_{ib}$.
+The implemented variances are $s_{z,i}^2$ for redshift, a fixed $s_c^2$ for each centered magnitude, and fixed $s_h^2$ for each morphology component.
+The historical morphology option uses the same numerical width for size in arcseconds and dimensionless ellipticity.
+These are separate dimensional quantities, not a common physical scatter.
+
+Population parameters are estimated from the full input catalog.
+Let $\overline y_a$ and $S_a$ be the finite-sample mean and population-form standard deviation (divisor equal to the sample size) for component $a$.
+For redshift, $m_z=b_z$ is the median positive redshift and $\tau_z=t_z=\max(3,S_z)$.
+With no valid redshift the location is 2; a single value has $S_z=0$.
+For colors and morphology, $m_a=b_a=\overline y_a$, $\tau_a=\max(5s_a,1)$, and $t_a=\max(S_a,s_a)$ in that component's catalog units.
+Missing means are replaced by zero; a missing or zero $S_a$ uses $\tau_a$ before applying the width floor.
+These data-dependent choices are empirical hyperparameters, not external population measurements.
+
+The lens background describes the spread of the entire back-projected catalog rather than a proposed family.
+For coordinate $d\in\{1,2\}$ at grid point $g$, let $\overline\beta_{gd}$ and $S_{gd}^2$ be its finite-catalog mean and variance.
+The cached background is
+\begin{equation}
+ \begin{aligned}
+ p_{\bg}(\boldsymbol{\beta}\mid z_g)
+ &=\prod_{d=1}^{2}\N(\beta_d\mid\overline\beta_{gd},V_{gd}),\\
+ V_{gd}&=\max(S_{gd}^2,\sigma_{\rm pos}^2,
+                          10^{-8}\,\mathrm{arcsec}^2),
+ \end{aligned}
+ \label{eq:lensbackground}
+\end{equation}
+where $\sigma_{\rm pos}$ is the fixed default positional scale supplied when constructing the cache.
+It neglects covariance between the coordinates and uses the same catalog being assigned.
+Nonfinite positions are omitted; a family with fewer than two valid source positions receives a nonfinite lens score unless it is a singleton.
+
+\section{Proposal Probabilities and Search}
+\label{app:proposals}
+\subsection{Catalog affinities and iterative fitting}
+Fast pair comparisons guide the search without adding a pair likelihood to the final score.
+Let $\boldsymbol f_{ij}$ be a dimensionless feature vector and $\boldsymbol\theta$ its logistic coefficients.
+The proposal affinity is
+\begin{equation}
+ q_{ij}=\{1+\exp[-\boldsymbol f_{ij}^{\mathsf T}
+                              \boldsymbol\theta]\}^{-1}.
+ \label{eq:logistic}
+\end{equation}
+The feature vector contains an intercept, proximity, radial similarity, opposite-side geometry, redshift and color similarity, size and ellipticity similarity, mean reliability, and a shared-provenance indicator.
+For angular separation $d_{ij}$, radii $R_i=\|\boldsymbol x_i\|$, polar angles $\phi_i$ in radians, and $R_0=\max[\operatorname{median}(R_i),1\,\mathrm{arcsec}]$, the geometric features are
+\begin{equation}
+ \begin{gathered}
+ \frac{1}{1+d_{ij}/(10\,\mathrm{arcsec})},\qquad
+ e^{-|R_i-R_j|/R_0},\\
+ \frac{1-\cos(\phi_i-\phi_j)}{2}.
+ \end{gathered}
+ \label{eq:geofeatures}
+\end{equation}
+They refer to the adopted coordinate origin, not an inferred lens center.
+The remaining similarities are
+\begin{equation}
+ \begin{aligned}
+ &\exp\!\left[-\frac{(\hat z_i-\hat z_j)^2}
+                         {2(s_{z,i}^2+s_{z,j}^2)}\right],\quad
+   e^{-D_{c,ij}/(1\,\mathrm{mag})},\\
+ &e^{-|r_i-r_j|/(1\,\mathrm{arcsec})},\qquad
+   e^{-|e_i-e_j|},
+ \end{aligned}
+ \label{eq:similarities}
+\end{equation}
+where $r_i$ is image size, $e_i$ is ellipticity, and
+\begin{equation}
+ D_{c,ij}^2=\frac{1}{|\mathcal B_{ij}|}
+       \sum_{b\in\mathcal B_{ij}}(c_{ib}-c_{jb})^2
+ \label{eq:colordistance}
+\end{equation}
+uses the common valid band set $\mathcal B_{ij}$, with at least two bands.
+Missing similarities default to 0.5, except missing separation uses $100\,\mathrm{arcsec}$.
+The reliability feature is $(\rho_i+\rho_j)/2$, where $\rho_i\in[0,1]$ is the supplied image reliability (default 1); the provenance indicator is one for equal, nonempty catalog-source labels.
+
+For targets $t_{ij}\in[0,1]$ and fitting weights $v_{ij}^{\rm fit}$, the conditional Bernoulli objective and Gaussian coefficient penalty are
+\begin{equation}
+ \begin{aligned}
+ \mathcal L_{\rm fit}&=\prod_{i<j}
+   \left[q_{ij}^{t_{ij}}(1-q_{ij})^{1-t_{ij}}\right]^{v_{ij}^{\rm fit}},\\
+ \boldsymbol\theta_\star
+ &=\arg\min_{\boldsymbol\theta}
+   \left[-\log\mathcal L_{\rm fit}
+         +\frac{\|\boldsymbol\theta\|^2}{2s_\theta^2}\right].
+ \end{aligned}
+ \label{eq:fit}
+\end{equation}
+The fixed $s_\theta$ is the coefficient prior width.
+For fractional targets this is a weighted cross-entropy objective, not independent observations of all pair labels.
+After a scoring iteration, unanchored pairs use $t_{ij}=P_{ij}$ and $v_{ij}^{\rm fit}=1$; anchors use $t_{ij}=a_{ij}$ and $v_{ij}^{\rm fit}=\max(r_{ij},1)$.
+In proposal matrices, anchor affinities are overwritten by $1-\epsilon$ or $\epsilon$, with $\epsilon=10^{-6}$.
+
+Known equal family labels create positive anchors of strength 8.
+Redshift differences of at least 0.8 and at least three combined standard deviations create negative anchors of strength 12, overriding a positive anchor.
+Otherwise-unanchored pairs with at least three common bands and $D_{c,ij}\geq1\,\mathrm{mag}$ receive negative anchors of strength 5.
+These finite penalties may disagree; they do not guarantee compatibility of all anchors.
+
+\subsection{Lens affinities and candidate construction}
+Images that nearly meet in the source plane can suggest candidates missed by catalog similarities.
+Using the pair redshift weights from Equation~\ref{eq:redshift}, the lens affinity is
+\begin{equation}
+ H_{ij}=\sum_g\pi_{\{i,j\}g}
+ \exp\!\left[-\frac{\|\widehat{\boldsymbol\beta}_i(z_g)
+                    -\widehat{\boldsymbol\beta}_j(z_g)\|^2}
+ {2(\sigma_i^2+\sigma_j^2+\sigma_{\rm src}^2)}\right].
+ \label{eq:lensaffinity}
+\end{equation}
+The single scatter term in this proposal denominator follows the implementation; it is not the variance of a difference of the two independent Gaussians in Equation~\ref{eq:lensjoint}.
+An optional combined affinity satisfies
+\begin{equation}
+ \logit q_{ij}^{\rm comb}=\logit q_{ij}
+                          +w_H\logit H_{ij},
+ \label{eq:combinedaffinity}
+\end{equation}
+where $\logit p=\log[p/(1-p)]$ and $w_H$ is a fixed proposal weight.
+Affinities are clipped to $[\epsilon,1-\epsilon]$ before taking logits.
+
+Thresholds between 0.05 and 0.95 generate connected components, sequential complete-link groups, and agglomerative groups using minimum or mean cross-group affinity.
+Anchor-seeded growth merges the highest-mean-affinity compatible groups.
+Pivot proposals attach unassigned images when their affinity logit to the current pivot exceeds a threshold, using several image orderings.
+Randomized proposals use entries
+\begin{equation}
+ \widetilde q_{ij}\sim\operatorname{Beta}
+ \left(\max(20q_{ij},10^{-3}),
+       \max[20(1-q_{ij}),10^{-3}]\right)
+ \label{eq:noisy}
+\end{equation}
+and thresholds drawn uniformly between 0.25 and 0.75.
+Here $\operatorname{Beta}$ is the beta distribution with the two stated shape parameters.
+Initial candidates also undergo single-image splits, moves, and family merges.
+
+Optional source-plane proposals link images within an angular radius at a grid redshift, retaining images whose individual grid weights exceed a chosen threshold.
+For a resulting group $F$, the proposal ranking is
+\begin{equation}
+ h(F)=\log\sum_g\pi_{Fg}e^{U_F(z_g)}
+      +w_B\sum_{\substack{i<j\\i,j\in F}}\logit q_{ij}
+      +\log|F|,
+ \label{eq:beamscore}
+\end{equation}
+where $U_F$ is the unnormalized source score defined in Appendix~\ref{app:optional} and $w_B$ weights catalog affinities for this search only.
+A bounded search combines nonoverlapping groups by adding $h(F)$, retaining only the best state for a given set of used images; unassigned images become singletons.
+All retained partitions are evaluated with Equation~\ref{eq:score} afterward.
+
+\section{Optional Source Scoring Components}
+\label{app:optional}
+\subsection{Reliability mixture}
+A broad residual component can reduce the influence of an unreliable image.
+At the centroid from Equation~\ref{eq:profile}, let $d_i^2=\|\widehat{\boldsymbol\beta}_i-\widehat{\boldsymbol\beta}_F\|^2$ and let $u_{\rm out}=\sigma_{\rm out}^2$ be a fixed broad variance.
+The optional product is
+\begin{equation}
+ \begin{aligned}
+ \mathcal L_F^{\rm mix}=\prod_{i\in F}\Big[&
+ \rho_i\N_2(\widehat{\boldsymbol\beta}_i\mid
+               \widehat{\boldsymbol\beta}_F,u_i\boldsymbol I_2)\\
+ {}+&(1-\rho_i)\N_2(\widehat{\boldsymbol\beta}_i\mid
+               \widehat{\boldsymbol\beta}_F,u_{\rm out}\boldsymbol I_2)
+ \Big].
+ \end{aligned}
+ \label{eq:mixture}
+\end{equation}
+Both components share the fitted centroid; the code does not reoptimize it for the mixture.
+The cached likelihood-ratio path retains the Gaussian prefactors, whereas the raw path evaluates
+\begin{equation}
+ U_F(z)=\sum_{i\in F}\log\left[
+ \rho_i e^{-d_i^2/(2u_i)}
+ +(1-\rho_i)e^{-d_i^2/(2u_{\rm out})}\right].
+ \label{eq:raw}
+\end{equation}
+This raw score is not a normalized density.
+Numerically, each mixture coefficient is clipped separately to $[10^{-6},1]$ without renormalization, so Equation~\ref{eq:mixture} describes its interior-weight form.
+The main-text Gaussian derivation corresponds to omitting this optional mixture.
+
+\subsection{Averaging over supplied lens realizations}
+Lens uncertainty can change family rankings, so a separate callback accepts multiple ray-shooting models.
+For each family it uses the inverse-variance mean redshift $\bar z_F=(\sum_{i\in F_z}s_{z,i}^{-2})^{-1}\sum_{i\in F_z}\hat z_i s_{z,i}^{-2}$.
+This callback evaluates the raw score rather than the cached redshift-grid likelihood ratio.
+For realization $r$, let $u_r(Z)=\sum_{F\in Z}U_F(\bar z_F;\boldsymbol\eta_r)$ and let $\mathcal R_Z$ contain its finite values.
+The implemented average is
+\begin{equation}
+ U_{\rm avg}(Z)=\log\left[
+ \frac{1}{|\mathcal R_Z|}\sum_{r\in\mathcal R_Z}e^{u_r(Z)}\right].
+ \label{eq:lensaverage}
+\end{equation}
+An empty $\mathcal R_Z$ gives $-\infty$.
+This averages scores over the supplied models, with a partition-dependent denominator if some fail.
+It does not automatically marginalize the main-text composite score or establish joint inference of partitions and lens parameters.
+
+
+\bibliography{refs}{}
+\bibliographystyle{aasjournalv7}
+
+\end{document}
+

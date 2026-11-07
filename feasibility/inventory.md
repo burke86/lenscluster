@@ -1,0 +1,58 @@
+# File inventory
+
+- `README.md`: Workflow documentation or generated report.
+- `REPORT.md`: Workflow documentation or generated report.
+- `__init__.py`: Unexecuted-at-authoring workflow source or validation check.
+- `area.py`: Unexecuted-at-authoring workflow source or validation check.
+- `baseline_best_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_hessian.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_map.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_nuts.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_optimization.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `baseline_polishing_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_start_0_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_start_1_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `baseline_start_2_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `benchmarks.py`: Unexecuted-at-authoring workflow source or validation check.
+- `catalog_audit.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `catalogs.py`: Unexecuted-at-authoring workflow source or validation check.
+- `checks.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `common.py`: Unexecuted-at-authoring workflow source or validation check.
+- `cosmography/README.md`: Workflow documentation or generated report.
+- `cosmography/fisher.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `cosmography/fisher.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `cosmography.py`: Unexecuted-at-authoring workflow source or validation check.
+- `distances.py`: Unexecuted-at-authoring workflow source or validation check.
+- `failures/nuts.txt`: Exception traceback from an unavailable step.
+- `failures/ratios-nuts.txt`: Exception traceback from an unavailable step.
+- `fitting.py`: Unexecuted-at-authoring workflow source or validation check.
+- `images.csv`: Numerical table with named columns and physical units defined in README.
+- `inventory.md`: Workflow documentation or generated report.
+- `laplace.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `laplace.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `manifest.json`: Fingerprints, configuration, dependency versions and step status/timings.
+- `member_selection.csv`: Numerical table with named columns and physical units defined in README.
+- `members_selected.cat`: Separate selected-member catalog; original catalog remains untouched.
+- `model.py`: Unexecuted-at-authoring workflow source or validation check.
+- `model_config.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `parameter_definitions.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `plot_status.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `posterior_corner.pdf`: Diagnostic figure; see filename and plot_status.json.
+- `ratios_best_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `ratios_map.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `ratios_nuts.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `ratios_optimization.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `ratios_start_0_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `ratios_start_1_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `ratios_start_2_endpoint.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `reporting.py`: Unexecuted-at-authoring workflow source or validation check.
+- `residuals.json`: Configuration, numerical diagnostics, timing or status metadata.
+- `residuals.npz`: Numerical checkpoint; named arrays loaded without pickle.
+- `residuals.pdf`: Diagnostic figure; see filename and plot_status.json.
+- `results.npz`: Principal joint posterior, Laplace, ratio, Fisher and area arrays; prefixed keys.
+- `run.log`: Console transcript.
+- `run.py`: Unexecuted-at-authoring workflow source or validation check.
+- `runtime.py`: Unexecuted-at-authoring workflow source or validation check.
+- `summary.md`: Workflow documentation or generated report.
+- `test_validation.py`: Unexecuted-at-authoring workflow source or validation check.
+- `validation.py`: Unexecuted-at-authoring workflow source or validation check.
