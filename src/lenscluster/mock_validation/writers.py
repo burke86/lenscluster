@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ..image_catalog import systems_from_offsets, write_image_catalog
+from ..sky import offsets_to_radec
 from .truth import MockTruth
 
 IMAGE_CATALOG = "images.yaml"
@@ -42,13 +43,26 @@ def write_mock(root: Path, truth: MockTruth, sources: list[dict[str, Any]], imag
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     paths = MockPaths(root)
-    # Image catalog (lenscluster.image_catalog): one system per family, observed positions and magnitudes.
-    rows = []
+    # Image catalog (lenscluster.image_catalog): one system per source galaxy, observed positions and magnitudes; a
+    # galaxy with knots is one system whose images list their knots (one family per knot).
+    rows, knotted = [], []
     for r in images.itertuples(index=False):
         family, image = str(r.image_label).split(".")
-        rows.append((family, image, r.x_obs_arcsec, r.y_obs_arcsec, r.z_source,
-                     {"mag": float(r.image_magnitude_obs), "mag_err": float(r.image_magnitude_err)}))
-    write_image_catalog(paths.image_catalog, systems_from_offsets(rows, reference),
+        knot = str(getattr(r, "knot_id", "") or "")
+        extra = {"mag": float(r.image_magnitude_obs), "mag_err": float(r.image_magnitude_err)}
+        if knot:
+            knotted.append((str(r.system_id), knot, image, r.x_obs_arcsec, r.y_obs_arcsec, r.z_source, extra))
+        else:
+            rows.append((family, image, r.x_obs_arcsec, r.y_obs_arcsec, r.z_source, extra))
+    systems = systems_from_offsets(rows, reference)
+    for system, knot, image, x, y, z, extra in knotted:
+        ra, dec = offsets_to_radec(float(x), float(y), float(reference[0]), float(reference[1]))
+        entry = systems.setdefault(system, {"z": float(z), "knots": [], "images": {}})
+        if knot not in entry["knots"]:
+            entry["knots"].append(knot)
+        entry["images"].setdefault(image, {"knots": {}})["knots"][knot] = {"ra": float(ra), "dec": float(dec), **extra}
+    systems = dict(sorted(systems.items(), key=lambda item: int(item[0]) if item[0].isdigit() else item[0]))
+    write_image_catalog(paths.image_catalog, systems,
                         header=f"Mock realization, seed {config_json.get('seed')}: observed image positions and magnitudes.")
     # Member catalog, potfile format: id x y a b theta magnitude luminosity colour; only the modelled members.
     modelled = truth.modelled_members

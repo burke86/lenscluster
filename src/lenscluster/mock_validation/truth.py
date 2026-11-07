@@ -13,6 +13,7 @@ from ..inputs import lenstool_shape_to_e1e2
 from ..jax_cosmology import kpc_per_arcsec_from_config
 from ..utils import DPIE_MASS_GRAVITATIONAL_CONSTANT_KPC_KMS2_PER_MSUN as G_KPC, log10_dpie_mass_msun
 from .config import MockConfig
+from .field import draw_image_plane_error, draw_mass_field
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,8 @@ class MockTruth:
     bcg: DPIEComponent
     relation: dict[str, float]                 # pivot_magnitude, sigma_star_kms, cut_star_kpc, core_star_kpc, alpha_sigma, beta_radius, scatters
     members: tuple[MemberTruth, ...]
+    field: dict[str, Any] | None                    # the injected mass field (mock_validation.field.draw_mass_field) or None
+    image_plane_error: dict[str, float] | None      # the injected image-plane displacement's sigma and ell, or None
 
     @property
     def components(self) -> list[DPIEComponent]:
@@ -74,7 +77,8 @@ def truth_from_json(payload: dict[str, Any]) -> MockTruth:
     return MockTruth(seed=int(payload["seed"]), z_lens=float(payload["z_lens"]), cosmology=dict(payload["cosmology"]),
                      kpc_per_arcsec=float(payload["kpc_per_arcsec"]), halo=component(payload["halo"]), bcg=component(payload["bcg"]),
                      relation=dict(payload["relation"]),
-                     members=tuple(MemberTruth(**{k: m[k] for k in fields(MemberTruth) if k in m}) for m in payload["members"]))
+                     members=tuple(MemberTruth(**{k: m[k] for k in fields(MemberTruth) if k in m}) for m in payload["members"]),
+                     field=payload["field"], image_plane_error=payload["image_plane_error"])
 
 
 def dpie_v_disp_from_mass(mass_msun: float, cut_radius_kpc: float) -> float:
@@ -130,7 +134,10 @@ def draw_truth(config: MockConfig, seed: int | None = None) -> MockTruth:
                          float(halo_core), float(halo_cut), dpie_v_disp_from_mass(halo_mass, halo_cut))
     bcg_core = config.bcg_core_pivot_kpc * (bcg_mass / config.bcg_mass_pivot_msun) ** slope * _lognormal_factor(rng, config.bcg_radius_scatter_dex)
     bcg_cut = config.bcg_cut_pivot_kpc * (bcg_mass / config.bcg_mass_pivot_msun) ** slope * _lognormal_factor(rng, config.bcg_radius_scatter_dex)
-    offset_r, offset_phi = config.bcg_offset_arcsec * math.sqrt(rng.random()), rng.uniform(0.0, 2.0 * math.pi)
+    offset_r = -1.0
+    while not 0.0 <= offset_r <= config.bcg_offset_max_arcsec:          # truncated normal by rejection
+        offset_r = float(rng.normal(config.bcg_offset_arcsec, config.bcg_offset_width_arcsec))
+    offset_phi = rng.uniform(0.0, 2.0 * math.pi)
     bcg = DPIEComponent("bcg", halo.x_centre + offset_r * math.cos(offset_phi), halo.y_centre + offset_r * math.sin(offset_phi),
                         float(rng.uniform(*config.bcg_ellipticity_range)), float(rng.uniform(-90.0, 90.0)),
                         float(bcg_core), float(bcg_cut), dpie_v_disp_from_mass(bcg_mass, bcg_cut))
@@ -165,7 +172,12 @@ def draw_truth(config: MockConfig, seed: int | None = None) -> MockTruth:
                                        float(core[i]), float(cut[i]), float(sigma[i]),
                                        magnitude=float(config.pivot_magnitude - 2.5 * math.log10(luminosity[i])),
                                        luminosity_ratio=float(luminosity[i]), modelled=bool(modelled[i])))
-    return MockTruth(seed=seed, z_lens=z_lens, cosmology=cosmo, kpc_per_arcsec=kpc, halo=halo, bcg=bcg, relation=relation, members=tuple(members))
+    # Correlated errors from their own stream, so turning them on leaves the rest of the realization unchanged.
+    error_rng = np.random.default_rng([seed, 7])
+    field = draw_mass_field(error_rng, config)
+    image_plane_error = draw_image_plane_error(error_rng, config)
+    return MockTruth(seed=seed, z_lens=z_lens, cosmology=cosmo, kpc_per_arcsec=kpc, halo=halo, bcg=bcg, relation=relation, members=tuple(members),
+                     field=field, image_plane_error=image_plane_error)
 
 
 # ----------------------------------------------------------------------------- what the solver samples, in truth units
@@ -189,7 +201,19 @@ def parameter_truth(truth: dict[str, Any], *, solver_pivot_magnitude: float | No
                    "potfile.gamma_ml": 2.0 * float(r["alpha_sigma"]) + float(r["beta_radius"]) - 1.0,
                    "potfile.log10_mass_msun": float(log10_dpie_mass_msun(sigma, cut)),
                    "potfile.velocity_log_scatter": float(r["sigma_scatter_ln"]), "potfile.radius_log_scatter": float(r["cut_scatter_ln"]),
-                   "images.sigma_def": float(truth.get("sigma_def_arcsec", 0.0)), "images.sigma_extra": 0.0})
+                   "images.sigma_def": float(truth.get("sigma_def_arcsec", 0.0)),
+                   # The injected astrometric noise is the truth of the white image-plane scatter (sigma_white under the GP
+                   # likelihoods, sigma_extra under the smoothed one): the solver's own floor is 1 mas (solver_sigma_inst_arcsec).
+                   "images.sigma_white": float(truth.get("config", {}).get("sigma_inst_arcsec", 0.0)),
+                   "images.sigma_extra": float(truth.get("config", {}).get("sigma_inst_arcsec", 0.0))})
+    # The injected correlated errors, in the solver's own definitions (gp_knee: sigma_alpha at the reference redshift,
+    # knee wavelength, slope; image-plane GP: sigma_shared, ell); zero when not injected (reported, not scored).
+    field, image_plane = truth["field"], truth["image_plane_error"]
+    values.update({"images.gp_sigma_alpha": float(field["sigma_alpha_arcsec"]) if field else 0.0,
+                   "images.gp_knee": float(field["knee_arcsec"]) if field else np.nan,
+                   "images.gp_knee_gamma": float(field["gamma"]) if field else np.nan,
+                   "images.sigma_shared": float(image_plane["sigma_arcsec"]) if image_plane else 0.0,
+                   "images.gp_ell": float(image_plane["ell_arcsec"]) if image_plane else np.nan})
     for source in truth.get("sources", []):
         values[f"source.{source['family_id']}.beta_x"] = float(source["beta_x"])
         values[f"source.{source['family_id']}.beta_y"] = float(source["beta_y"])

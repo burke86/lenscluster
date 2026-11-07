@@ -24,8 +24,8 @@ from .truth import draw_truth, parameter_truth, truth_from_json
 from .writers import MockPaths, write_mock
 
 RECOVERY_FILE = "recovery.json"
-CONVERGENCE_RHAT = 1.01          # a realization enters the aggregates only if max R-hat < this ...
-CONVERGENCE_MIN_NEFF = 50.0      # ... and the smallest effective sample size is at least this
+CONVERGENCE_RHAT = 1.01          # diagnostic threshold; automatic aggregates include every completed realization
+CONVERGENCE_MIN_NEFF = 50.0      # optional converged-only selection also requires this minimum effective size
 
 
 def convergence_verdict(diagnostics: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -50,6 +50,12 @@ def seed_dir(root: Path, seed: int) -> Path:
 
 def generate_mock(root: Path, config, seed: int, *, log=None) -> MockPaths:
     """Draw the truth for ``seed``, lens it, and write the realization under ``root``."""
+    if config.sigma_inst_range_arcsec is not None:
+        # The astrometric noise of this realization, from its own stream (the other draws are unchanged).
+        lo, hi = (math.log(float(v)) for v in config.sigma_inst_range_arcsec)
+        config = config.with_updates(sigma_inst_arcsec=float(math.exp(np.random.default_rng([int(seed), 13]).uniform(lo, hi))))
+        if log:
+            log(f"[mock] injected astrometric noise {config.sigma_inst_arcsec:.4f}\" per axis (the truth of sigma_white)")
     truth = draw_truth(config, seed)
     sources, images = generate_images(truth, config, np.random.default_rng(int(seed) + 1_000_003), log=log)
     return write_mock(root, truth, sources, images, config.with_updates(seed=int(seed)).to_json_dict(),
@@ -211,12 +217,13 @@ def m2d_recovery(state: ModelState, config_model, posterior: PosteriorResults, t
     rows = []
     for group, profiles in per_group.items():
         stacked = np.stack(profiles)
-        q16, q50, q84 = np.percentile(stacked, [16, 50, 84], axis=0)
+        q025, q16, q50, q84, q975 = np.percentile(stacked, [2.5, 16, 50, 84, 97.5], axis=0)
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.where(truth_profiles[group] > 0, stacked / truth_profiles[group], np.nan)
         r16, r50, r84 = np.nanpercentile(ratio, [16, 50, 84], axis=0)
         for k, radius in enumerate(radii):
             rows.append({"component": group, "radius_kpc": float(radius), "truth_m2d_msun": float(truth_profiles[group][k]),
+                         "model_q025": float(q025[k]), "model_q975": float(q975[k]),
                          "model_q16": float(q16[k]), "model_q50": float(q50[k]), "model_q84": float(q84[k]),
                          "ratio_q16": float(r16[k]), "ratio_q50": float(r50[k]), "ratio_q84": float(r84[k]),
                          "outer_image_radius_kpc": outer, "within_images": bool(radius <= outer)})
@@ -313,7 +320,82 @@ def rescore_mock_validation(config: MockValidationConfig, *, log=print) -> list[
     return outputs
 
 
+# ----------------------------------------------------------------------------- Fisher pre-check
+FISHER_FILE = "fisher.json"
+
+
+def _fisher_for_seed(config: MockValidationConfig, paths: MockPaths, seed: int, directory: Path, *, log=print) -> dict[str, Any] | None:
+    """The hyperparameter Fisher forecast of one realization (mock_validation.fisher), logged and written next to the
+    mock; None (logged) when the solver's likelihood has no knee GP."""
+    from .fisher import hyperparameter_fisher, write_fisher
+    truth = json.loads(paths.truth.read_text())
+    solver_config = solver_config_for_mock(config, truth, image_catalog=paths.image_catalog,
+                                           member_catalog=paths.member_catalog if paths.member_catalog.is_file() else None, seed=seed, output_dir=directory)
+    try:
+        result = hyperparameter_fisher(solver_config, truth)
+    except ValueError as error:
+        log(f"[fisher] seed={seed} skipped: {error}")
+        return None
+    write_fisher(paths.root / FISHER_FILE, result)
+    table = result["table"]
+    log(f"[fisher] seed={seed} {result['n_images']} images, {result['n_families']} families in {result['n_systems']} systems, "
+        f"{result['n_blocks']} blocks; forecast sigma (prior sigma, contraction): "
+        + "; ".join(f"{r.parameter.split('.', 1)[1]} {r.forecast_sigma:.2f} ({r.prior_sigma:.2f}, {r.prior_contraction:.0%})" for r in table.itertuples()))
+    return result
+
+
+def fisher_precheck(config: MockValidationConfig, *, log=print) -> pd.DataFrame:
+    """Generate (or reuse) every realization's mock and forecast how well the GP hyperparameters are constrained, without
+    running the solver.  Writes fisher.json per mock and fisher_precheck.csv (one row per seed and hyperparameter) in the
+    campaign directory; returns that table."""
+    config = config.validate()
+    root = campaign_root(config)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "campaign_config.json").write_text(json.dumps(config.to_json_dict(), indent=2, default=_json_default))
+    frames = []
+    for realization in range(int(config.runtime.realizations)):
+        seed = int(config.runtime.seed) + realization
+        directory = seed_dir(root, seed)
+        paths = MockPaths(directory / "mock")
+        if not (config.runtime.resume and paths.complete()):
+            paths = generate_mock(paths.root, config.mock, seed, log=lambda m: log(f"[fisher] seed={seed} {m}"))
+        result = _fisher_for_seed(config, paths, seed, directory, log=log)
+        if result is not None:
+            frame = result["table"].assign(seed=seed, n_images=result["n_images"], n_families=result["n_families"],
+                                           **{f"pairs {k}": v for k, v in result["separations"].items()})
+            frames.append(frame)
+    table = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if not table.empty:
+        table.to_csv(root / "fisher_precheck.csv", index=False)
+        summary = table.groupby("parameter")[["truth", "prior_sigma", "fisher_sigma", "forecast_sigma", "prior_contraction"]].median()
+        log("[fisher] campaign medians over seeds:\n" + summary.round(3).to_string())
+    return table
+
+
 # ----------------------------------------------------------------------------- campaign
+def _refresh_aggregate_plots(root: Path, *, log=print) -> None:
+    """Refresh completed-mock figures without stopping subsequent sampling on a plot error."""
+    from .aggregate_plots import write_aggregate_plots
+    started = time.perf_counter()
+    log(f"[aggregate] refreshing completed mocks under {root}")
+    try:
+        paths = write_aggregate_plots(root)
+    except Exception as error:
+        log(f"[aggregate] FAILED: {type(error).__name__}: {error}; recovery is saved; continuing campaign")
+        return
+    selection_path = root / "aggregate_plots/campaign_selection.json"
+    if selection_path.is_file():
+        selection = json.loads(selection_path.read_text())
+        log(f"[aggregate] included {selection['included']}/{selection['realizations']} completed realizations; "
+            f"{selection['converged']} pass {selection['rule']}")
+        for failed in selection.get('failed_convergence', []):
+            if selection.get('all_realizations_used'):
+                log(f"[aggregate] included despite failed convergence seed={failed['seed']}: {failed['reasons']}")
+        for excluded in selection.get('excluded', []):
+            log(f"[aggregate] excluded seed={excluded['seed']}: {excluded['reasons']}")
+    log(f"[aggregate] wrote {len(paths)} plots in {time.perf_counter() - started:.1f}s")
+
+
 def run_mock_validation(config: MockValidationConfig, *, log=print) -> list[Path]:
     """Run every realization of the campaign; returns the recovery directories."""
     config = config.validate()
@@ -321,6 +403,7 @@ def run_mock_validation(config: MockValidationConfig, *, log=print) -> list[Path
     root.mkdir(parents=True, exist_ok=True)
     (root / "campaign_config.json").write_text(json.dumps(config.to_json_dict(), indent=2, default=_json_default))
     outputs = []
+    refreshed = False
     for realization in range(int(config.runtime.realizations)):
         seed = int(config.runtime.seed) + realization
         directory = seed_dir(root, seed)
@@ -341,8 +424,14 @@ def run_mock_validation(config: MockValidationConfig, *, log=print) -> list[Path
             f"{len(truth.get('sources', []))} families, {len(truth.get('images', []))} images; solver mode {config.mock.mode}")
         solver_config = solver_config_for_mock(config, truth, image_catalog=paths.image_catalog,
                                                member_catalog=paths.member_catalog if paths.member_catalog.is_file() else None, seed=seed, output_dir=directory)
+        if not (paths.root / FISHER_FILE).is_file():
+            _fisher_for_seed(config, paths, seed, directory, log=log)
         result = pipeline.run(solver_config)
         write_recovery(recovery_dir, result, solver_config, truth, seed, log=log)
         log(f"[campaign] seed={seed} done in {time.perf_counter() - started:.0f}s")
         outputs.append(recovery_dir)
+        _refresh_aggregate_plots(root, log=log)
+        refreshed = True
+    if outputs and not refreshed:
+        _refresh_aggregate_plots(root, log=log)
     return outputs

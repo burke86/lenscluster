@@ -47,7 +47,11 @@ class MockConfig:
     bcg_cut_pivot_kpc: float = 187.0
     bcg_radius_scatter_dex: float = 0.10
     bcg_ellipticity_range: tuple[float, float] = (0.0, 0.30)
-    bcg_offset_arcsec: float = 2.0
+    # BCG offset from the halo centre: the distance a normal centred at bcg_offset_arcsec with width
+    # bcg_offset_width_arcsec, truncated to 0 - bcg_offset_max_arcsec, in a uniform direction (1" is 4.5-6 kpc at z 0.3-0.5).
+    bcg_offset_arcsec: float = 1.0
+    bcg_offset_width_arcsec: float = 0.5
+    bcg_offset_max_arcsec: float = 2.0
     # Member population: a truncated Schechter luminosity function, a relation at L* like the real clusters, scatter.
     n_members: int = 50
     schechter_alpha: float = -0.7
@@ -75,10 +79,35 @@ class MockConfig:
     source_placement: str = "image_plane"        # "image_plane": a primary source is the back-projection of a point drawn uniformly inside
                                                  # the tangential critical curve, so images spread over radii; "caustic": uniform inside the caustic
     source_redshift_range: tuple[float, float] = (1.5, 9.0)
+    # Sources with knots: this many of the primary families are galaxies with knots_per_family knots (the main source and
+    # the rest at a source-plane distance log-uniform in knot_offset_range_arcsec, uniform direction).  Each knot is its own
+    # family of one system in the catalog (system 3, knots A, B -> families 3A, 3B), so every image becomes a tight group of
+    # images whose separations scale with the magnification: the scales of the image-plane GP and the mass field's knee.
+    # A knot that would cross a caustic (different image count) is redrawn.  Each knot adds as many images as its family.
+    n_knotted_families: int = 0
+    knots_per_family: tuple[int, int] = (2, 3)
+    knot_offset_range_arcsec: tuple[float, float] = (0.05, 0.4)
+    knot_magnitude_offset_range: tuple[float, float] = (0.5, 1.5)   # knots fainter than the main source by this many magnitudes
     min_images_per_family: int = 3
     max_source_attempts: int = 400
-    sigma_inst_arcsec: float = 0.10              # astrometric noise injected and assumed by the solver (sigma_inst)
+    sigma_inst_arcsec: float = 0.10              # astrometric noise injected in the image plane (the truth of the white scatter sigma_white)
+    solver_sigma_inst_arcsec: float = 0.001      # the solver's instrumental floor, 1 mas as in run.xsh: the white scatter is inferred, not assumed
+    # The injected astrometric noise drawn per realization, log-uniform in this range (None keeps sigma_inst_arcsec); the
+    # drawn value is the realization's sigma_inst_arcsec in truth.json and the truth of sigma_white.
+    sigma_inst_range_arcsec: tuple[float, float] | None = None
     sigma_def_arcsec: float = 0.0                # injected source-plane scatter per image (the truth of sigma_def)
+    # Correlated errors (mock_validation.field), drawn per realization; None leaves each out.  The mass field of unmodelled
+    # mass: rms deflection sigma_alpha per component at field_reference_redshift and the knee log-uniform, the slope gamma
+    # uniform, between the solver's band field_scales_arcsec, from field_n_modes plane waves.  The image-plane displacement:
+    # sigma and ell log-uniform, the solver's Gaussian image-plane kernel.
+    field_sigma_alpha_range_arcsec: tuple[float, float] | None = None
+    field_knee_range_arcsec: tuple[float, float] = (3.0, 12.0)
+    field_gamma_range: tuple[float, float] = (3.0, 5.0)
+    field_scales_arcsec: tuple[float, float] = (0.2, 100.0)
+    field_n_modes: int = 4000
+    field_reference_redshift: float = 2.0
+    image_plane_sigma_range_arcsec: tuple[float, float] | None = None
+    image_plane_ell_range_arcsec: tuple[float, float] = (0.5, 2.0)
     source_magnitude_range: tuple[float, float] = (24.0, 27.0)
     image_magnitude_sigma: float = 0.10
     # Image finding on the exact truth model.
@@ -100,7 +129,7 @@ class MockConfig:
             raise ValueError(f"mock.mode must be one of {VALID_MODES}.")
         for name in ("z_lens_range", "total_mass_range_msun", "halo_ellipticity_range", "bcg_mass_fraction_range", "bcg_ellipticity_range",
                      "luminosity_range", "sigma_star_range_kms", "cut_star_range_kpc", "alpha_sigma_range", "beta_radius_range",
-                     "member_ellipticity_range", "source_redshift_range", "source_magnitude_range"):
+                     "member_ellipticity_range", "source_redshift_range", "source_magnitude_range", "knot_magnitude_offset_range"):
             lo, hi = getattr(self, name)
             if not (math.isfinite(lo) and math.isfinite(hi) and lo <= hi):
                 raise ValueError(f"mock.{name} must be an ordered finite range.")
@@ -110,14 +139,35 @@ class MockConfig:
             raise ValueError("source_placement must be 'image_plane' or 'caustic'")
         if self.n_central_families < 0 or self.central_radius_arcsec <= 0:
             raise ValueError("n_central_families must be >= 0 and central_radius_arcsec > 0")
+        if self.sigma_inst_range_arcsec is not None:
+            lo, hi = self.sigma_inst_range_arcsec
+            if not (0.0 < lo <= hi and math.isfinite(hi)):
+                raise ValueError("mock.sigma_inst_range_arcsec must be an ordered positive range.")
+        if not 0 <= self.n_knotted_families <= self.n_primary_families:
+            raise ValueError("mock.n_knotted_families must lie between 0 and n_primary_families.")
+        lo, hi = self.knots_per_family
+        if not (2 <= int(lo) <= int(hi) <= 26):
+            raise ValueError("mock.knots_per_family must be an ordered range within 2-26.")
+        lo, hi = self.knot_offset_range_arcsec
+        if not (0.0 < lo <= hi and math.isfinite(hi)):
+            raise ValueError("mock.knot_offset_range_arcsec must be an ordered positive range.")
         if self.n_member_families > 0 and self.n_members == 0:
             raise ValueError("mock.n_member_families needs members.")
-        for name in ("sigma_inst_arcsec", "caustic_window_arcsec", "caustic_grid_arcsec", "seed_grid_pixel_arcsec", "search_window_arcsec", "image_precision_arcsec"):
+        for name in ("sigma_inst_arcsec", "solver_sigma_inst_arcsec", "caustic_window_arcsec", "caustic_grid_arcsec", "seed_grid_pixel_arcsec", "search_window_arcsec", "image_precision_arcsec"):
             if not (math.isfinite(getattr(self, name)) and getattr(self, name) > 0.0):
                 raise ValueError(f"mock.{name} must be positive.")
-        for name in ("sigma_def_arcsec", "sigma_scatter_ln", "cut_scatter_ln"):
+        for name in ("sigma_def_arcsec", "sigma_scatter_ln", "cut_scatter_ln", "bcg_offset_arcsec"):
             if not (math.isfinite(getattr(self, name)) and getattr(self, name) >= 0.0):
                 raise ValueError(f"mock.{name} must be nonnegative.")
+        if not (self.bcg_offset_width_arcsec > 0.0 and 0.0 < self.bcg_offset_max_arcsec and self.bcg_offset_arcsec <= self.bcg_offset_max_arcsec):
+            raise ValueError("mock.bcg_offset_width_arcsec must be positive and bcg_offset_arcsec at most bcg_offset_max_arcsec.")
+        for name in ("field_sigma_alpha_range_arcsec", "field_knee_range_arcsec", "field_gamma_range", "field_scales_arcsec",
+                     "image_plane_sigma_range_arcsec", "image_plane_ell_range_arcsec"):
+            bounds = getattr(self, name)
+            if bounds is not None and not (len(bounds) == 2 and 0.0 < float(bounds[0]) <= float(bounds[1]) and math.isfinite(float(bounds[1]))):
+                raise ValueError(f"mock.{name} must be None or a positive ordered (min, max).")
+        if self.field_n_modes < 100 or not self.field_reference_redshift > 0.0:
+            raise ValueError("mock.field_n_modes must be at least 100 and field_reference_redshift positive.")
         if self.min_images_per_family < 2:
             raise ValueError("mock.min_images_per_family must be at least 2.")
         return self
@@ -231,7 +281,7 @@ def mock_lens_model_config(config: MockConfig, truth: dict[str, Any], *, image_c
     return LensModelConfig(
         reference=ReferenceFrameConfig(reference=3, ra0_deg=float(config.reference_ra_deg), dec0_deg=float(config.reference_dec_deg)),
         cosmology=config.cosmology, large_halos=halos, member_populations=members,
-        image_constraints=ImageConstraintsConfig(catalog_path=image_catalog, sigma_inst_arcsec=float(config.sigma_inst_arcsec)))
+        image_constraints=ImageConstraintsConfig(catalog_path=image_catalog, sigma_inst_arcsec=float(config.solver_sigma_inst_arcsec)))
 
 
 def solver_config_for_mock(config: MockValidationConfig, truth: dict[str, Any], *, image_catalog: Path, member_catalog: Path | None,
@@ -244,7 +294,7 @@ def solver_config_for_mock(config: MockValidationConfig, truth: dict[str, Any], 
         relation = truth["relation"]
         scaling = replace(scaling, alpha_sigma_prior_mean=float(relation["alpha_sigma"]), alpha_sigma_prior_std=0.03,
                           beta_radius_prior_mean=float(relation["beta_radius"]), beta_radius_prior_std=0.08)
-    likelihood = replace(template.likelihood, sigma_inst_arcsec=float(config.mock.sigma_inst_arcsec))
+    likelihood = replace(template.likelihood, sigma_inst_arcsec=float(config.mock.solver_sigma_inst_arcsec))
     return replace(template, model=model, scaling=scaling, likelihood=likelihood,
                    paths=RunPathsConfig(output_dir=output_dir, run_name="solver"),
                    runtime=replace(template.runtime, seed=int(seed), resume=bool(config.runtime.resume), quiet=bool(config.runtime.quiet)))

@@ -77,6 +77,10 @@ def test_solver_model_from_truth_contains_the_truth(tmp_path, mode):
     profiles = aperture_profiles(np.asarray(APERTURE_RADII_KPC), truth_groups(truth), centre_kpc=(truth["halo"]["x_centre"] * truth["kpc_per_arcsec"], truth["halo"]["y_centre"] * truth["kpc_per_arcsec"]))
     np.testing.assert_allclose(profiles["total"], profiles["halo"] + profiles["bcg"] + profiles["members"], rtol=1e-10)
     assert values["images.sigma_def"] == pytest.approx(0.03) and values["potfile.velocity_log_scatter"] == pytest.approx(0.10)
+    # The solver assumes only the 1 mas floor; the injected astrometric noise is the truth of the white image-plane scatter.
+    assert solver.model.image_constraints.sigma_inst_arcsec == pytest.approx(config.solver_sigma_inst_arcsec) == pytest.approx(0.001)
+    assert solver.likelihood.sigma_inst_arcsec == pytest.approx(0.001)
+    assert values["images.sigma_white"] == values["images.sigma_extra"] == pytest.approx(config.sigma_inst_arcsec)
 
 
 def test_campaign_end_to_end_scores_only_parameters_with_a_truth(tmp_path):
@@ -93,7 +97,9 @@ def test_campaign_end_to_end_scores_only_parameters_with_a_truth(tmp_path):
     rows = payload["parameters"]
     scored = [r for r in rows if r["scored"]]
     assert scored and all(np.isfinite(r["truth"]) for r in scored)
-    assert not any(r["scored"] for r in rows if r["parameter"] in {"images.sigma_extra", "potfile.radius_log_scatter"})   # injected as zero
+    assert not any(r["scored"] for r in rows if r["parameter"] == "potfile.radius_log_scatter")   # injected as zero
+    # The injected astrometric noise is the truth of the white image-plane scatter above the solver's 1 mas floor.
+    assert all(r["scored"] and r["truth"] == pytest.approx(0.10) for r in rows if r["parameter"] in {"images.sigma_extra", "images.sigma_white"})
     assert 0.0 <= payload["coverage_68"] <= 1.0 and payload["scored_parameters"] == len(scored)
     assert isinstance(payload["converged"], bool) and isinstance(payload["convergence_reasons"], list)
     magnification = pd.DataFrame(payload["magnification"])
@@ -108,3 +114,69 @@ def test_campaign_end_to_end_scores_only_parameters_with_a_truth(tmp_path):
     outputs = write_aggregate_plots(recovery_dirs[0].parent.parent)
     assert any(p.name == "mock_calibration.pdf" for p in outputs) and (recovery_dirs[0].parent.parent / "aggregate_plots" / "mock_coverage_table.csv").is_file()
     assert set(payload["relation"]["draws"]) == {"sigma", "cutkpc", "alpha_sigma", "beta_radius"} and payload["relation"]["pivot_luminosity_ratio"] > 0
+
+
+def test_knotted_families_are_systems_whose_knots_follow_the_main_images(tmp_path):
+    """A knotted galaxy is one system with one family per knot; every knot has the same images (in order) and solves the
+    lens equation for its own source; the solver reads the knots back as families of that system; a mock without knots
+    draws the same images as before (the knot draws come after every draw of the main family)."""
+    config = replace(SMALL, sigma_def_arcsec=0.0, n_knotted_families=2, knots_per_family=(3, 3))
+    truth = draw_truth(config)
+    sources, images = generate_images(truth, config, np.random.default_rng(1))
+    knotted = [s for s in sources if s["knot_id"]]
+    assert knotted and {s["system_id"] for s in knotted} and all(s["family_id"] == s["system_id"] + s["knot_id"] for s in sources)
+    for system in {s["system_id"] for s in knotted}:
+        members = [s for s in sources if s["system_id"] == system]
+        assert [s["knot_id"] for s in members] == ["A", "B", "C"][:len(members)] and len(members) >= 2
+        main = members[0]
+        for knot in members:
+            rows = images[images.family_id == knot["family_id"]]
+            assert len(rows) == main["n_images"]
+            assert [label.split(".")[1] for label in rows.image_label] == [chr(ord("a") + k) for k in range(len(rows))]
+            beta, _, _ = jacobian(lens_state(truth, knot["z_source"]), rows.x_true_arcsec.to_numpy(), rows.y_true_arcsec.to_numpy())
+            np.testing.assert_allclose(beta, [[knot["beta_x"], knot["beta_y"]]] * len(rows), atol=1e-6)
+            offset = np.hypot(knot["beta_x"] - main["beta_x"], knot["beta_y"] - main["beta_y"])
+            assert knot is main or config.knot_offset_range_arcsec[0] <= offset <= config.knot_offset_range_arcsec[1] + 1e-9
+    paths = generate_mock(tmp_path / "mock", config, 7)
+    truth_json = json.loads(paths.truth.read_text())
+    solver = solver_config_for_mock(MockValidationConfig(mock=config, solver=LensClusterSolverConfig()), truth_json, image_catalog=paths.image_catalog,
+                                    member_catalog=paths.member_catalog, seed=7, output_dir=tmp_path / "run").validate()
+    state = build_state(solver)
+    assert set(state.images.image_labels) == {r["image_label"] for r in truth_json["images"]}
+    assert len(set(state.images.system_ids)) < len(state.images.family_ids)
+    plain = replace(config, n_knotted_families=0)
+    _, plain_images = generate_images(truth, plain, np.random.default_rng(1))
+    _, reference = generate_images(truth, plain, np.random.default_rng(1))
+    pd.testing.assert_frame_equal(plain_images, reference)
+    assert set(plain_images.knot_id) == {""}
+
+
+def test_injected_noise_is_drawn_per_realization_and_is_the_white_scatter_truth(tmp_path):
+    config = replace(SMALL, sigma_def_arcsec=0.0, sigma_inst_range_arcsec=(0.005, 0.045))
+    drawn = []
+    for seed in (7, 8):
+        truth = json.loads(generate_mock(tmp_path / f"mock{seed}", config, seed).truth.read_text())
+        value = truth["config"]["sigma_inst_arcsec"]
+        assert 0.005 <= value <= 0.045
+        assert {r["sigma_inst_arcsec"] for r in truth["images"]} == {value}
+        assert parameter_truth(truth)["images.sigma_white"] == pytest.approx(value)
+        drawn.append(value)
+    assert drawn[0] != drawn[1]
+
+
+def test_fisher_precheck_matches_the_white_noise_closed_form(tmp_path):
+    """With white noise alone, the restricted Fisher information on ln sigma_white is about 2 per degree of freedom left
+    after the source positions (I = 2 (n - p), up to the 1 mas and 1.5 mas floors)."""
+    from lenscluster.config import LikelihoodConfig
+    from lenscluster.mock_validation.fisher import hyperparameter_fisher
+    config = replace(SMALL, sigma_def_arcsec=0.0, n_knotted_families=1, sigma_inst_arcsec=0.1)
+    paths = generate_mock(tmp_path / "mock", config, 7)
+    truth = json.loads(paths.truth.read_text())
+    template = LensClusterSolverConfig(likelihood=LikelihoodConfig(likelihood_mode="gp_image_plane", gp_kernel="knee", gp_blocks="system", sigma_sel_prior=None))
+    solver = solver_config_for_mock(MockValidationConfig(mock=config, solver=template), truth, image_catalog=paths.image_catalog,
+                                    member_catalog=paths.member_catalog, seed=7, output_dir=tmp_path / "run")
+    result = hyperparameter_fisher(solver, truth)
+    row = result["table"].set_index("parameter").loc["images.sigma_white"]
+    assert result["names"] == ["sigma_white"] and result["dof"] == 2 * result["n_images"] - 2 * result["n_families"]
+    assert row["fisher_sigma"] == pytest.approx(1.0 / np.sqrt(2.0 * result["dof"]), rel=0.03)
+    assert 0.0 < row["prior_contraction"] < 1.0
