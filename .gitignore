@@ -76,3 +76,4 @@ catalogs/**/*.sqlite
 catalogs/**/bayes.dat
 catalogs/**/index.html*
 *.bbl
+!docs/requirements.txt
