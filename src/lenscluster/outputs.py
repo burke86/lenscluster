@@ -142,6 +142,9 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
                 from .image_position_contours import load_or_compute_contours
                 position_contours = load_or_compute_contours(replace(config, image_catalog=image_config), state, evaluator,
                     posterior, recovery['image_recovery_extra_images'], tables, log=log)
+                from .small_lambda_jwst import write_small_lambda_jwst
+                write_small_lambda_jwst(replace(config, image_catalog=image_config), state, evaluator,
+                    posterior, paths, imaging, position_contours, log=log)
             render_cluster_mass_figure(evaluator, best, image_df, recovery["image_recovery_extra_images"], imaging,
                                        z_source=z_crit, kappa_true_fits=config.truth.kappa_true_fits,
                                        figure_path=plots.figure_path(figures, f"image_catalog_family_cluster_mass{image_config.figure_suffix}.pdf", prefix),
@@ -164,6 +167,15 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
                     source_cache=tables/'fold_pairs_source_caustics.npz')
                 if output is not None:
                     log(f'[outputs] ApJ fold cutouts: {output}')
+            simulated_hst = imaging[3].lower() in {'hera', 'ares'} and image_config.figure_suffix != '_jwst'
+            if simulated_hst or (image_config.figure_suffix == '_jwst' and imaging[3].lower() == 'm0416'):
+                from .jwst_rgb_figure import render_rgb_critical
+                critical_name = 'hst_rgb_critical_z9.pdf' if simulated_hst else 'jwst_rgb_critical_z9.pdf'
+                render_rgb_critical(config, state, evaluator, best, image_df,
+                    recovery['image_recovery_extra_images'], imaging,
+                    plots.figure_path(figures, critical_name, prefix), tables,
+                    best_index=int(np.nanargmax(log_prob)) if np.isfinite(log_prob).any() else None,
+                    posterior=posterior, log=log)
     (tables / "run_summary.json").write_text(json.dumps(summary, indent=2, default=float))
     write_run_results(paths.root, name=prefix)
     return summary

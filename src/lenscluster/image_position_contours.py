@@ -153,7 +153,10 @@ def load_or_compute_contours(config, state, evaluator, posterior, extra, tables,
         stored=selected
     rows=np.array([np.flatnonzero(stored==index)[0] for index in selected])
     selected_data={k:(v[rows] if k in ('recovered','extra') else v) for k,v in data.items()}
+    selected_data['draw_indices']=selected
     contours=prepare_contours(selected_data,log=log)
+    contours['position_data']=selected_data
+    contours['fingerprint']=key
     meta.write_text(json.dumps(dict(fingerprint=key,draws=len(selected),selected_draw_indices=selected.tolist(),
         posterior_draws_available=len(posterior.samples),cached_draws=len(data['recovered']),
         solver='standard local LM, exact kernels, no fallback',

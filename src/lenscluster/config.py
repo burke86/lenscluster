@@ -569,6 +569,7 @@ class RGBDisplayConfig:
 @dataclass(frozen=True)
 class ImageCatalogCutoutConfig:
     image_dir: str | Path | None = None
+    candidate_catalog_path: str | Path | None = None  # optional display-only proposed associations
     image_scale: str = "60mas"
     bands: tuple[str, ...] | None = None
     figure_suffix: str = ""                  # appended to the cluster mass figure name, e.g. "_jwst"

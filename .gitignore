@@ -11,6 +11,9 @@ plots/
 *.par
 *.json
 !scripts/m0416_redshift_sources.json
+!src/lenscluster/data/m0416_image_f200w_photometry.csv
+!src/lenscluster/data/m0416_image_f200w_photometry.json
+!src/lenscluster/data/m0416_candidates.json
 *.html
 *.log
 *.txt

@@ -111,13 +111,23 @@ def _fits_like(path: Path) -> bool:
     return name.endswith((".fits", ".fit", ".fits.gz"))
 
 
+ANCILLARY_PRODUCT_TOKENS = ("_rms", "_wht", "_err", "_psf.", "_psf_", "convkernel", "bcgmodel", "psfconv", "segmentation", "detection")
+
+
+def _ancillary_product(path: Path) -> bool:
+    """Error, weight, PSF, model and catalogue products that sit next to the science mosaics (CANUCS ships them in one
+    folder); never a band image."""
+    name = path.name.lower()
+    return any(token in name for token in ANCILLARY_PRODUCT_TOKENS)
+
+
 def find_rgb_band_paths(image_dir: Path, *, cluster: str, bands: Sequence[str], image_scale: str = "auto") -> dict[str, Path]:
     if image_scale not in IMAGE_SCALE_CHOICES:
         raise ValueError(f"Unsupported image scale {image_scale!r}. Valid choices: {IMAGE_SCALE_CHOICES}.")
     root = Path(image_dir)
     tokens = tuple(t.lower() for t in CLUSTER_IMAGE_TOKENS.get(cluster, (cluster,)))
     root_has_token = any(t in str(root).lower() for t in tokens)
-    files = [p for p in root.rglob("*") if p.is_file() and _fits_like(p)] if root.exists() else []
+    files = [p for p in root.rglob("*") if p.is_file() and _fits_like(p) and not _ancillary_product(p)] if root.exists() else []
     result, missing = {}, []
     for band in bands:
         token = str(band).lower()

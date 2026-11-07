@@ -86,6 +86,8 @@ def test_overview_draw_selection_and_cache_subset(tmp_path,monkeypatch):
     assert seen==[256] and sizes==[256,256]
     # Older full-draw caches are reused and retained, while only 256 enter contours.
     np.savez_compressed(tmp_path/'posterior_overview_positions.npz',recovered=np.zeros((4000,1,2)),extra=np.zeros((4000,0,2)))
-    ipc.load_or_compute_contours(config,state,None,posterior,pd.DataFrame(),tmp_path,log=lambda _:None)
+    result=ipc.load_or_compute_contours(config,state,None,posterior,pd.DataFrame(),tmp_path,log=lambda _:None)
+    np.testing.assert_array_equal(result["position_data"]["draw_indices"],ipc.overview_draw_indices(4000,3999))
+    assert len(result["position_data"]["recovered"])==256 and result["fingerprint"]
     assert seen==[256] and sizes[-1]==256
     with np.load(tmp_path/'posterior_overview_positions.npz') as saved:assert len(saved['recovered'])==4000

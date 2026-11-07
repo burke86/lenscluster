@@ -30,7 +30,7 @@ dependencies = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-lenscluster = ["style.mplstyle"]
+lenscluster = ["style.mplstyle", "data/*.csv", "data/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
