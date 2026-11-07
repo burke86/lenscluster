@@ -152,6 +152,12 @@ are SEM across mocks. In the compact figure, horizontal intervals show the centr
 68% and 95% of residuals across mocks; the right panel shows empirical coverage
 of the posterior intervals. Source coordinates are omitted from the compact figure.
 
+Automatic aggregate refreshes include every completed realization. Convergence failures
+remain recorded in `aggregate_plots/campaign_selection.json` and `seed_summary.csv`
+and are reported in the terminal. For a filtered comparison, run the aggregate-plots
+module with `--converged-only --output-dir <separate directory>`; this requires
+max R-hat < 1.01 and min ESS >= 50 and never falls back to unfiltered realizations.
+
 Hera and Ares outputs also write `<prefix>_all_vs_image_footprint_histogram.pdf`.
 This compares exact parametric and truth-map projected masses in circular apertures
 of radius twice `Re = 8 * 10**(-0.24*(m_F160W-20))` kpc. The normalization is fixed

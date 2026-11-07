@@ -26,21 +26,42 @@ if STYLE.exists():
 
 COLOR = "tab:blue"
 TRUTH_COLOR = "0.2"
-COMPONENT_COLORS = {"halo": "tab:blue", "bcg": "tab:orange", "members": "tab:green"}
+COMPONENT_COLORS = {"halo": "tab:blue", "bcg": "tab:orange", "members": "tab:green", "grf": "tab:purple", "gp": "tab:red", "images": "tab:gray"}
 COMPONENT_LABELS = {"halo": "Main halo", "bcg": "BCG", "members": "Members"}
 PAPER_PARAMETERS = (
-    "halo.log10_mass_msun", "halo.x_centre", "halo.y_centre", "halo.v_disp", "halo.core_radius_kpc", "halo.cut_radius_kpc",
+    "halo.log10_mass_msun", "halo.log10_aperture_mass_msun", "halo.x_centre", "halo.y_centre", "halo.v_disp", "halo.core_radius_kpc", "halo.cut_radius_kpc",
     "bcg.log10_mass_msun", "bcg.x_centre", "bcg.y_centre", "bcg.v_disp", "bcg.core_radius_kpc", "bcg.cut_radius_kpc",
+    "images.gp_sigma_alpha", "images.gp_knee", "images.gp_knee_gamma",
+    "images.gp_sigma_alpha2", "images.gp_knee2", "images.gp_knee_beta_low",
+    "images.sigma_shared", "images.gp_ell", "images.sigma_white",
     "potfile.log10_mass_msun", "potfile.sigma", "potfile.cutkpc", "potfile.alpha_sigma", "potfile.beta_radius", "potfile.gamma_ml",
 )
 PARAMETER_LABELS = {
-    "log10_mass_msun": r"$\log_{10} M$", "x_centre": r"$x$", "y_centre": r"$y$", "v_disp": r"$\sigma$", "core_radius_kpc": r"$r_{\rm core}$",
+    "gp_sigma_alpha": r"$\sigma_\alpha$", "gp_knee": r"$\ell_{\rm knee}$",
+    "gp_knee_gamma": r"$\gamma_{\rm GRF}$", "gp_sigma_alpha2": r"$\sigma_{\alpha,2}$",
+    "gp_knee2": r"$\ell_{\rm knee,2}$", "gp_knee_beta_low": r"$\beta_{\rm low}$",
+    "sigma_shared": r"$\sigma_{\rm shared}$", "gp_ell": r"$\ell$",
+    "sigma_white": r"$\sigma_{\rm white}$",
+    "log10_aperture_mass_msun": r"$\log_{10} M_{\rm ap}$",
+    "log10_mass_msun": r"$\log_{10} M_{\rm tot}$", "x_centre": r"$x$", "y_centre": r"$y$", "v_disp": r"$\sigma$", "core_radius_kpc": r"$r_{\rm core}$",
     "cut_radius_kpc": r"$r_{\rm cut}$", "sigma": r"$\sigma^\star$", "cutkpc": r"$r_{\rm cut}^\star$", "alpha_sigma": r"$\alpha$",
     "beta_radius": r"$\beta$", "gamma_ml": r"$\gamma_{M/L}$",
 }
 PARAMETER_UNITS = {"x_centre": "arcsec", "y_centre": "arcsec", "v_disp": "km/s", "core_radius_kpc": "kpc", "cut_radius_kpc": "kpc",
                    "sigma": "km/s", "cutkpc": "kpc", "log10_mass_msun": r"$M_\odot$"}
-COMPONENT_NAMES = {"halo": "Halo", "bcg": "BCG", "potfile": "Members"}
+PARAMETER_UNITS.update({field: "arcsec" for field in (
+    "gp_sigma_alpha", "gp_knee", "gp_sigma_alpha2", "gp_knee2", "sigma_shared", "gp_ell", "sigma_white")})
+COMPONENT_NAMES = {"halo": "Halo", "bcg": "BCG", "potfile": "Members",
+                   "grf": "GRF", "gp": "Image-plane GP", "images": "Independent scatter"}
+
+
+def _parameter_component(parameter):
+    if parameter.startswith("images.gp_") and parameter != "images.gp_ell":
+        return "grf"
+    if parameter in ("images.sigma_shared", "images.gp_ell"):
+        return "gp"
+    return parameter.split(".")[0]
+
 
 
 
@@ -67,8 +88,8 @@ class Campaign:
     relation: list[dict[str, Any]]
 
 
-def load_campaign(root: str | Path, *, converged_only: bool = True) -> Campaign:
-    """The campaign's recovery tables.  With ``converged_only`` (the default) realizations whose sampler did not converge
+def load_campaign(root: str | Path, *, converged_only: bool = False) -> Campaign:
+    """All completed recovery tables by default, with convergence flags retained. With ``converged_only`` realizations whose sampler did not converge
     (max R-hat >= 1.01 or min n_eff < 50, recomputed from saved diagnostics) are left out of every table except the
     summary, which keeps all of them with their ``converged`` flag and reasons."""
     root = Path(root)
@@ -94,8 +115,45 @@ def load_campaign(root: str | Path, *, converged_only: bool = True) -> Campaign:
             relation.append({"seed": seed, **payload["relation"]})
     if not seeds:
         raise ValueError(f"No converged realization under {root}")
-    return Campaign(root, seeds, pd.concat(parameters, ignore_index=True), pd.concat(magnification, ignore_index=True),
+    parameter_table = pd.concat(parameters, ignore_index=True)
+    aperture_table = halo_aperture_parameters(pd.concat(m2d, ignore_index=True))
+    if not aperture_table.empty:
+        parameter_table = pd.concat([parameter_table, aperture_table], ignore_index=True)
+    return Campaign(root, seeds, parameter_table, pd.concat(magnification, ignore_index=True),
                     pd.concat(draws, ignore_index=True), subhalos, pd.concat(m2d, ignore_index=True), pd.DataFrame(summary), relation)
+
+
+
+def halo_aperture_parameters(m2d: pd.DataFrame) -> pd.DataFrame:
+    """Use the largest saved aperture inside each mock's outermost true image.
+
+    Radii and centres are fixed by truth, not fitted. Transform saved mass
+    quantiles monotonically to log mass; never invent missing 95% intervals.
+    """
+    if m2d.empty or "outer_image_radius_kpc" not in m2d:
+        return pd.DataFrame()
+    rows = []
+    for seed, group in m2d[m2d.component == "halo"].groupby("seed"):
+        inside = group[(group.radius_kpc > 0) & (group.radius_kpc <= group.outer_image_radius_kpc)]
+        if inside.empty:
+            continue
+        aperture = inside.sort_values("radius_kpc").iloc[-1]
+        values = [aperture.get(k, np.nan) for k in
+                  ("truth_m2d_msun", "model_q16", "model_q50", "model_q84")]
+        if not np.all(np.isfinite(values)) or np.min(values) <= 0:
+            continue
+        truth, lo, median, hi = np.log10(values)
+        q025, q975 = [np.log10(aperture[k]) if k in aperture and aperture[k] > 0 else np.nan
+                      for k in ("model_q025", "model_q975")]
+        rows.append(dict(seed=seed, parameter="halo.log10_aperture_mass_msun",
+                         truth=truth, median=median, q16=lo, q84=hi,
+                         q025=q025, q975=q975, bias=median-truth,
+                         covered_68=bool(lo <= truth <= hi),
+                         covered_95=bool(q025 <= truth <= q975) if np.isfinite(q025+q975) else np.nan,
+                         scored=True, aperture_radius_kpc=float(aperture.radius_kpc),
+                         outer_image_radius_kpc=float(aperture.outer_image_radius_kpc),
+                         aperture_definition="Largest saved radius inside outermost true image; true halo centre"))
+    return pd.DataFrame(rows)
 
 
 def representative_seed(campaign: Campaign) -> int:
@@ -111,14 +169,17 @@ def _axis_label(parameter: str, role: str) -> str:
     component, field = parameter.split(".", 1)
     label = PARAMETER_LABELS.get(field, field)
     if field == "log10_mass_msun":
-        label = r"$\log_{10}(M/M_\odot)$"
+        label = r"$\log_{10}(M_{\rm tot}/M_\odot)$"
+    if field == "log10_aperture_mass_msun":
+        label = r"$\log_{10}(M_{\rm ap}/M_\odot)$"
     unit = PARAMETER_UNITS.get(field)
     unit = None if field == "log10_mass_msun" else unit
     prefix = "True" if role == "truth" else "Fit"
     return f"{prefix} {label} ({unit})" if unit else f"{prefix} {label}"
 
 
-def _draw_parameter_axis(ax, panel: pd.DataFrame, parameter: str) -> None:
+def _draw_parameter_axis(ax, panel: pd.DataFrame, parameter: str, *, show_component: bool = True,
+                         binned_color: str = "tab:orange", binned_size: float = 3.4) -> None:
     truth, median = panel["truth"].to_numpy(float), panel["median"].to_numpy(float)
     q16, q84 = panel["q16"].to_numpy(float), panel["q84"].to_numpy(float)
     ax.errorbar(truth, median, yerr=[np.maximum(0, median - q16), np.maximum(0, q84 - median)], fmt="o", color=COLOR, markersize=2.7,
@@ -126,7 +187,7 @@ def _draw_parameter_axis(ax, panel: pd.DataFrame, parameter: str) -> None:
     binned = parameter_recovery_bins(panel)
     if not binned.empty:
         ax.errorbar(binned.truth_mean, binned.recovered_mean, yerr=binned.recovered_sem,
-                    fmt="o", color="tab:orange", markersize=3.4, elinewidth=.8,
+                    fmt="o", color=binned_color, markersize=binned_size, elinewidth=.8,
                     capsize=1.5, zorder=4)
     values = np.concatenate([truth, median, q16, q84])
     values = values[np.isfinite(values)]
@@ -141,8 +202,9 @@ def _draw_parameter_axis(ax, panel: pd.DataFrame, parameter: str) -> None:
     ax.tick_params(labelsize=7)
     ax.xaxis.set_major_locator(MaxNLocator(3))
     ax.yaxis.set_major_locator(MaxNLocator(3))
-    ax.text(.04, .96, COMPONENT_NAMES.get(parameter.split('.')[0], 'Sources'), transform=ax.transAxes,
-            ha="left", va="top", fontsize=8, color=".25")
+    if show_component:
+        ax.text(.04, .96, COMPONENT_NAMES.get(_parameter_component(parameter), 'Sources'), transform=ax.transAxes,
+                ha="left", va="top", fontsize=8, color=".25")
     _polish(ax)
 
 
@@ -196,6 +258,97 @@ def plot_parameter_recovery(campaign: Campaign, path: Path, *, ncols: int = 4) -
     fig.legend(handles, ["Mocks", "Binned mocks"][:len(handles)], loc="upper center",
                ncol=2, frameon=False, fontsize=8, bbox_to_anchor=(.5, 1.0))
     fig.tight_layout(pad=.4, w_pad=.6, h_pad=1.1, rect=(0, 0, 1, .97))
+    return _save(fig, path)
+
+
+@plt.rc_context(fname=STYLE, rc=PAPER_STYLE)
+def plot_parameter_recovery_grouped(campaign: Campaign, path: Path) -> Path | None:
+    """The paper recovery panels grouped by physical component, with shared styling."""
+    df = campaign.parameters
+    if df.empty:
+        return None
+    df = df[np.isfinite(df["truth"]) & np.isfinite(df["median"])]
+    definitions = (("Halo", "halo.", "tab:blue"), ("BCG", "bcg.", "tab:orange"),
+                   ("GRF + image-plane GP", "images.", "tab:purple"),
+                   ("Member scaling relation", "potfile.", "tab:green"),
+                   ("Source positions", "source.", "tab:red"))
+    groups = []
+    for label, prefix, color in definitions:
+        panels = [(name, df[df.parameter == name]) for name in PAPER_PARAMETERS
+                  if name.startswith(prefix) and (df.parameter == name).any()]
+        if prefix in ("halo.", "bcg."):
+            coordinate_names = {prefix+"x_centre", prefix+"y_centre"}
+            pooled = df[df.parameter.isin(coordinate_names)]
+            if not pooled.empty:
+                combined = []
+                inserted = False
+                for name, rows in panels:
+                    if name in coordinate_names:
+                        if not inserted:
+                            combined.append((prefix+"position_xy", pooled))
+                            inserted = True
+                    else:
+                        combined.append((name, rows))
+                panels = combined
+        if prefix == "source.":
+            rows = df[df.parameter.str.startswith(prefix) &
+                      df.parameter.str.endswith((".beta_x", ".beta_y"))]
+            if not rows.empty:
+                panels.append(("source.position_xy", rows))
+        if panels:
+            groups.append((label, color, panels))
+    if not groups:
+        return None
+    from matplotlib.patches import Rectangle
+    # Four component blocks, each two columns wide. Sources occupy the last
+    # BCG slot with their own label and color, rather than adding a seventh row.
+    grouped = {label: (color, panels) for label, color, panels in groups}
+    source_panels = grouped.pop("Source positions", ("tab:red", []))[1]
+    locations = {"Halo": (0, 0), "BCG": (0, 1),
+                 "GRF + image-plane GP": (1, 0), "Member scaling relation": (1, 1)}
+    if source_panels and "BCG" not in grouped:
+        grouped["BCG"] = ("tab:orange", [])
+    fig = plt.figure(figsize=(8.5, 12.0))
+    outer = fig.add_gridspec(2, 2, left=.085, right=.985, bottom=.045,
+                            top=.995, hspace=.085, wspace=.27)
+    for label, (color, panels) in grouped.items():
+        row, col = locations[label]
+        entries = [(name, data, color, False) for name, data in panels]
+        if label == "BCG":
+            entries.extend((name, data, "tab:red", True) for name, data in source_panels)
+        nrows = max(3, math.ceil(len(entries)/2))
+        section = outer[row, col].subgridspec(2, 1, height_ratios=[.20, nrows*1.55], hspace=.025)
+        band = fig.add_subplot(section[0]); band.set_axis_off()
+        if panels:
+            band.add_patch(Rectangle((0,0),1,1,transform=band.transAxes,
+                                     facecolor=color,alpha=.09,edgecolor="none"))
+            band.add_patch(Rectangle((0,0),.012,1,transform=band.transAxes,
+                                     facecolor=color,edgecolor="none"))
+            band.text(.035,.5,label, color=color, fontsize=9, weight="semibold",
+                      va="center",transform=band.transAxes)
+        inner = section[1].subgridspec(nrows, 2, wspace=.42, hspace=.38)
+        for j, (name, rows, point_color, is_source) in enumerate(entries):
+            ax = fig.add_subplot(inner[j//2, j%2])
+            _draw_parameter_axis(ax, rows, name, show_component=False,
+                                 binned_color=point_color, binned_size=5.2)
+            ax.set_xlabel(ax.get_xlabel().replace(r"\log_{10}", r"\log"))
+            ax.set_ylabel(ax.get_ylabel().replace(r"\log_{10}", r"\log"))
+            ax.set_box_aspect(1)
+            ax.tick_params(labelsize=7, length=2.5, width=.65)
+            for spine in ax.spines.values():
+                spine.set_linewidth(.65)
+                spine.set_color(".3")
+            if name.endswith(".position_xy"):
+                symbol = r"$\beta_x,\beta_y$" if is_source else r"$x,y$"
+                ax.set_xlabel(f"True {symbol} (arcsec)", fontsize=8.5, labelpad=2)
+                ax.set_ylabel(f"Fit {symbol} (arcsec)", fontsize=8.5, labelpad=2)
+            if is_source:
+                ax.add_patch(Rectangle((0, .865), 1, .135, transform=ax.transAxes,
+                                       facecolor="tab:red", alpha=.09, edgecolor="none", zorder=5))
+                ax.add_patch(Rectangle((0, .865), .012, .135, transform=ax.transAxes,
+                                       facecolor="tab:red", edgecolor="none", zorder=6))
+                ax.text(.04,.96,"Source positions",transform=ax.transAxes,va="top",
+                        fontsize=8,color="tab:red",weight="semibold", zorder=7)
     return _save(fig, path)
 
 
@@ -392,7 +545,8 @@ def plot_m2d_components(campaign: Campaign, path: Path, *, seed: int | None = No
     if rows.empty:
         return None
     outer = float(np.nanmedian(pd.to_numeric(m2d["outer_image_radius_kpc"], errors="coerce"))) if "outer_image_radius_kpc" in m2d else np.inf
-    fig, (top, bottom) = plt.subplots(2, 1, figsize=(3.5, 4.0), sharex=True, gridspec_kw={"height_ratios": [2.3, 1], "hspace": 0.08})
+    fig, (top, bottom) = plt.subplots(2, 1, figsize=(3.5, 4.0), sharex=True,
+                                    gridspec_kw={"height_ratios": [2.3, 1], "hspace": 0.08})
     for group in groups:
         sel = rows[rows["component"] == group].sort_values("radius_kpc")
         if sel.empty:
@@ -412,8 +566,34 @@ def plot_m2d_components(campaign: Campaign, path: Path, *, seed: int | None = No
     top.plot([], [], color="0.3", linestyle="--", linewidth=1.0, label="Truth")
     top.set_xscale("log")
     top.set_yscale("log")
+    # Pool every image, using each mock's own aperture centre and physical scale.
+    image_radii = []
+    for image_seed in campaign.seeds:
+        truth_path = campaign.root / f"seed_{image_seed:08d}" / "mock" / "truth.json"
+        if not truth_path.is_file():
+            continue
+        truth = json.loads(truth_path.read_text())
+        images = truth.get("images", [])
+        image_radii.extend([
+            np.hypot(im["x_true_arcsec"] - truth["halo"]["x_centre"],
+                     im["y_true_arcsec"] - truth["halo"]["y_centre"])
+            * truth["kpc_per_arcsec"] for im in images])
+    image_radii = np.asarray(image_radii)
+    image_radii = image_radii[np.isfinite(image_radii) & (image_radii > 0)]
+    if image_radii.size:
+        limits = top.get_xlim()
+        limits = (min(limits[0], image_radii.min()*.95), max(limits[1], image_radii.max()*1.05))
+        edges = np.geomspace(*limits, 26)
+        counts, _ = np.histogram(image_radii, bins=edges)
+        # Histogram height is relative abundance, independent of the mass axis.
+        height = .16 * counts / counts.max()
+        top.stairs(height, edges, baseline=0, fill=True, color=".65", alpha=.35,
+                   transform=top.get_xaxis_transform(), zorder=0)
+        top.stairs(height, edges, baseline=0, color=".35", linewidth=1.0,
+                   transform=top.get_xaxis_transform(), zorder=1)
+        top.set_xlim(limits)
     top.set_ylabel(r"$M_{\rm 2D}(<R)$ ($M_\odot$)")
-    top.legend(loc="lower right", frameon=False, fontsize=8)
+    top.legend(loc="upper left", frameon=False, fontsize=7)
     bottom.axhline(0.0, color="0.2", linestyle="--", linewidth=1.0)
     bottom.set_ylim(-0.3, 0.3)
     bottom.set_xlabel(r"$R$ (kpc)")
@@ -505,10 +685,10 @@ def coverage_table(campaign: Campaign) -> pd.DataFrame:
     for group, part in df.groupby("group", sort=False):
         n = len(part)
         for level in ("68", "95"):
-            part[f"c{level}"] = part[f"covered_{level}"].astype(bool) if f"covered_{level}" in part else np.nan
+            part[f"c{level}"] = pd.to_numeric(part[f"covered_{level}"], errors="coerce") if f"covered_{level}" in part else np.nan
         c68, c95 = float(part["c68"].mean()), float(part["c95"].mean()) if "covered_95" in part else np.nan
         rows.append({"parameter": group, "n": n, "coverage_68": c68, "coverage_68_err": math.sqrt(max(c68 * (1 - c68), 0.0) / n),
-                     "coverage_95": c95, "coverage_95_err": math.sqrt(max(c95 * (1 - c95), 0.0) / n) if np.isfinite(c95) else np.nan,
+                     "coverage_95": c95, "coverage_95_err": math.sqrt(max(c95 * (1 - c95), 0.0) / part["c95"].count()) if np.isfinite(c95) else np.nan,
                      "median_bias": float(np.nanmedian(part["bias"])), "median_fractional_bias": float(np.nanmedian(part["fractional_bias"])) if "fractional_bias" in part else np.nan,
                      "median_truth_percentile": float(np.nanmedian(part["truth_percentile"]))})
     return pd.DataFrame(rows)
@@ -516,9 +696,8 @@ def coverage_table(campaign: Campaign) -> pd.DataFrame:
 
 @plt.rc_context(fname=STYLE, rc=PAPER_STYLE)
 def plot_calibration(campaign: Campaign, path: Path) -> Path | None:
-    """Probability-integral-transform check: the truth's percentile rank in the posterior, pooled over all scored
-    parameters and realizations, should be uniform; the cumulative curve should follow the diagonal."""
-    df = campaign.parameters
+    """Truth's posterior percentile pooled over scored non-source parameters and realizations."""
+    df = campaign.parameters.loc[~campaign.parameters["parameter"].str.startswith("source.")]
     scored = df["scored"].astype(bool) if "scored" in df else np.isfinite(df["truth"].to_numpy(float))
     ranks = pd.to_numeric(df.loc[scored, "truth_percentile"], errors="coerce").dropna().to_numpy(float)
     if ranks.size == 0:
@@ -586,7 +765,7 @@ def plot_standardized_residuals(campaign: Campaign, path: Path, *, ncols: int = 
             label = _axis_label(parameter, "truth")
         ax.set_xlabel(label, fontsize=9)
         ax.set_ylabel(r"$(\mathrm{median}-\mathrm{truth})/s_{68}$", fontsize=9)
-        ax.text(.04, .96, COMPONENT_NAMES.get(parameter.split(".")[0], "Sources"), transform=ax.transAxes,
+        ax.text(.04, .96, COMPONENT_NAMES.get(_parameter_component(parameter), "Sources"), transform=ax.transAxes,
                 va="top", fontsize=8)
         ax.xaxis.set_major_locator(MaxNLocator(3))
         ax.yaxis.set_major_locator(MaxNLocator(4))
@@ -617,6 +796,7 @@ def plot_bias_and_coverage(campaign: Campaign, path: Path) -> Path | None:
     for i, (parameter, data) in enumerate(panels):
         q = np.quantile(data.residual, [.025, .16, .5, .84, .975])
         component, field = parameter.split(".", 1)
+        component = _parameter_component(parameter)
         color = COMPONENT_COLORS["members" if component == "potfile" else component]
         ax.plot(q[[0, 4]], [i, i], color=color, linewidth=1, alpha=.55)
         ax.plot(q[[1, 3]], [i, i], color=color, linewidth=4, solid_capstyle="butt")
@@ -651,24 +831,27 @@ def plot_bias_and_coverage(campaign: Campaign, path: Path) -> Path | None:
 
 
 # ----------------------------------------------------------------------------- driver
-def write_aggregate_plots(campaign_root: str | Path, output_dir: str | Path | None = None) -> list[Path]:
-    try:
-        campaign, fallback = load_campaign(campaign_root), False
-    except ValueError:                      # nothing converged (a smoke campaign): aggregate everything and say so
-        campaign, fallback = load_campaign(campaign_root, converged_only=False), True
+def write_aggregate_plots(campaign_root: str | Path, output_dir: str | Path | None = None, *, converged_only: bool = False) -> list[Path]:
+    campaign = load_campaign(campaign_root, converged_only=converged_only)
     output = Path(output_dir) if output_dir is not None else campaign.root / "aggregate_plots"
     output.mkdir(parents=True, exist_ok=True)
     campaign.parameters.to_csv(output / "parameter_recovery_table.csv", index=False)
     campaign.summary.to_csv(output / "seed_summary.csv", index=False)
     excluded = campaign.summary[~campaign.summary["converged"].astype(bool)]
     (output / "campaign_selection.json").write_text(json.dumps({
-        "realizations": int(len(campaign.summary)), "converged": int(len(campaign.seeds)),
-        "rule": f"max R-hat < {CONVERGENCE_RHAT} and min n_eff >= {CONVERGENCE_MIN_NEFF:.0f}", "all_realizations_used": fallback,
-        "excluded": [{"seed": int(r.seed), "reasons": r.convergence_reasons} for r in excluded.itertuples()]}, indent=2) + "\n")
+        "realizations": int(len(campaign.summary)), "converged": int(campaign.summary["converged"].astype(bool).sum()),
+        "included": int(len(campaign.seeds)),
+        "rule": f"max R-hat < {CONVERGENCE_RHAT} and min n_eff >= {CONVERGENCE_MIN_NEFF:.0f}",
+        "selection_policy": "converged_only" if converged_only else "all_completed",
+        "included_seeds": campaign.seeds,
+        "all_realizations_used": not converged_only,
+        "failed_convergence": [{"seed": int(r.seed), "reasons": r.convergence_reasons} for r in excluded.itertuples()],
+        "excluded": [{"seed": int(r.seed), "reasons": r.convergence_reasons} for r in excluded.itertuples()] if converged_only else []}, indent=2) + "\n")
     coverage_table(campaign).to_csv(output / "mock_coverage_table.csv", index=False)
     from ..results_tex import write_mock_results
     write_mock_results(campaign, output, rhat_cut=CONVERGENCE_RHAT, min_ess=CONVERGENCE_MIN_NEFF)
     plots = [plot_parameter_recovery(campaign, output / "mock_parameter_recovery_paper.pdf"),
+             plot_parameter_recovery_grouped(campaign, output / "mock_parameter_recovery_grouped.pdf"),
              plot_standardized_residuals(campaign, output / "mock_standardized_residuals.pdf"),
              plot_bias_and_coverage(campaign, output / "mock_bias_and_coverage.pdf"),
              plot_subhalo_mass_function(campaign, output / "mock_aggregate_subhalo_recovery_shmf.pdf"),
@@ -677,6 +860,13 @@ def write_aggregate_plots(campaign_root: str | Path, output_dir: str | Path | No
              plot_image_residual_distribution(campaign, output / "mock_aggregate_image_residual_distribution.pdf"),
              plot_calibration(campaign, output / "mock_calibration.pdf"),
              plot_relation_recovery(campaign, output / "mock_relation_recovery.pdf")]
+    from .field_recovery_plots import plot_field_recovery
+    plots.append(plot_field_recovery(campaign, output))
+    from .deviation_corners import write_deviation_corners, write_combined_deviation_corner
+    plots.extend(write_deviation_corners(campaign, output))
+    plots.append(write_combined_deviation_corner(campaign, output))
+    from .aggregate_chains import write_aggregate_chains
+    plots.append(write_aggregate_chains(campaign, output))
     return [p for p in plots if p is not None]
 
 
@@ -684,8 +874,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Create the paper figures of a mock-validation campaign.")
     parser.add_argument("campaign_root", help="Directory holding the seed_* folders (validation_runs/<campaign>/<run_name>).")
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--converged-only", action="store_true", help="Exclude failed convergence checks; default includes all completed realizations.")
     args = parser.parse_args(argv)
-    for path in write_aggregate_plots(args.campaign_root, args.output_dir):
+    for path in write_aggregate_plots(args.campaign_root, args.output_dir, converged_only=args.converged_only):
         print(f"Wrote plot: {path}")
 
 
