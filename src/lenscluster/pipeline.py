@@ -120,7 +120,13 @@ def _scaling_value(state: ModelState, physical: np.ndarray, field: str) -> float
     for index, spec in enumerate(state.parameter_specs):
         if spec.component_family == "scaling" and spec.field == field:
             return float(physical[index])
-    raise KeyError(field)
+    # Held fixed (scaling.fixed_relation_fields): the base value carried by the packed spec, the same for every component.
+    base = {"sigma": "sigma_ref_base", "cutkpc": "cut_ref_base", "corekpc": "core_ref_base",
+            "alpha_sigma": "alpha_sigma_base", "beta_radius": "beta_radius_base"}[field]
+    members = np.asarray(state.members.component_indices, dtype=int)
+    if members.size == 0:
+        raise KeyError(field)
+    return float(np.asarray(getattr(state.packed_lens_spec, base), dtype=float)[members[0]])
 
 
 def classify(state: ModelState, evaluator: Evaluator, theta: np.ndarray, config: LensClusterSolverConfig, *,

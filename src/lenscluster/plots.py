@@ -177,11 +177,13 @@ def member_scaling_table(state: ModelState, posterior: PosteriorResults) -> pd.D
     for position, record in enumerate(state.scaling_component_records):
         c = int(record["component_index"])
         pop = record["potfile_id"]
-        sigma_ref = physical[:, int(spec_packed.sigma_ref_param_index[c])]
-        cut_ref = physical[:, int(spec_packed.cut_ref_param_index[c])]
-        core_ref = physical[:, int(spec_packed.core_ref_param_index[c])]
-        alpha = physical[:, int(spec_packed.alpha_sigma_param_index[c])]
-        beta = physical[:, int(spec_packed.beta_radius_param_index[c])]
+        def value(index, base):                                    # a fixed relation parameter has index -1
+            return physical[:, int(index[c])] if int(index[c]) >= 0 else np.full(len(physical), float(base[c]))
+        sigma_ref = value(spec_packed.sigma_ref_param_index, spec_packed.sigma_ref_base)
+        cut_ref = value(spec_packed.cut_ref_param_index, spec_packed.cut_ref_base)
+        core_ref = value(spec_packed.core_ref_param_index, spec_packed.core_ref_base)
+        alpha = value(spec_packed.alpha_sigma_param_index, spec_packed.alpha_sigma_base)
+        beta = value(spec_packed.beta_radius_param_index, spec_packed.beta_radius_base)
         lum = float(spec_packed.luminosity_ratio[c])
         v_disp = sigma_ref * lum ** alpha * np.exp(dev_v[:, c])
         v_scaling = sigma_ref * lum ** alpha

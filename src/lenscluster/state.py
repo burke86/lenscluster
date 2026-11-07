@@ -378,6 +378,7 @@ def build_scaling_parameter_specs(potfiles: list[dict[str, Any]], scaling: Any, 
             priors[field_name].update(override)
         field_index: dict[str, int] = {}
         fields = ("sigma", "cutkpc", "corekpc", "alpha_sigma", "beta_radius") if getattr(scaling, "fit_corekpc", True) else ("sigma", "cutkpc", "alpha_sigma", "beta_radius")
+        fields = tuple(f for f in fields if f not in set(getattr(scaling, "fixed_relation_fields", ())))   # held at the nominal / prior mean
         for field_name in fields:
             prior = priors[field_name]
             physical_lower, physical_upper = float(prior["lower"]), float(prior["upper"])

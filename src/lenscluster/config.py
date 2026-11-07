@@ -367,6 +367,9 @@ class ScalingModelConfig:
                                             # the relation radius, so they cannot cross the far-field guard) or "all"
     fit_corekpc: bool = True                # sample the member core radius at the pivot; False fixes it at the population's corekpc
                                             # moved to the pivot (a 0.1 kpc member core is not a lensing observable)
+    # Relation parameters held at their nominal values instead of sampled: any of "sigma", "cutkpc" (the population's values
+    # moved to the pivot) and "alpha_sigma", "beta_radius" (the prior means).  For tests against a published relation.
+    fixed_relation_fields: tuple[str, ...] = ()
     # Faber-Jackson slope 0.27-0.28 and beta_cut 0.64-0.66 in three MUSE-calibrated clusters (Bergamini et al. 2019).
     alpha_sigma_prior_mean: float = 0.27
     alpha_sigma_prior_std: float = 0.05
@@ -665,6 +668,9 @@ def validate_config(config: LensClusterSolverConfig) -> None:
         raise ValueError("sampling.dense_offset_members must be 'all', 'centered', 'exact' or 'none'.")
     if sampling.far_field_offsets not in {"sample", "fixed"}:
         raise ValueError("sampling.far_field_offsets must be 'sample' or 'fixed'.")
+    bad = set(getattr(config.scaling, "fixed_relation_fields", ())) - {"sigma", "cutkpc", "alpha_sigma", "beta_radius"}
+    if bad:
+        raise ValueError(f"scaling.fixed_relation_fields: unknown fields {sorted(bad)}; allowed: sigma, cutkpc, alpha_sigma, beta_radius.")
     members = config.members
     _positive("members.far_field_cut_radii", members.far_field_cut_radii)
     if members.cut_radius_inflation < 1.0 or not math.isfinite(members.cut_radius_inflation):

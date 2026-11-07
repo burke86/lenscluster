@@ -162,8 +162,10 @@ def plot_scaling_at_start(state: ModelState, evaluator: Evaluator, theta: np.nda
     for position, record in enumerate(state.scaling_component_records):
         c = int(record["component_index"])
         lum = float(spec.luminosity_ratio[c])
-        sigma_ref, cut_ref = physical[int(spec.sigma_ref_param_index[c])], physical[int(spec.cut_ref_param_index[c])]
-        alpha, beta = physical[int(spec.alpha_sigma_param_index[c])], physical[int(spec.beta_radius_param_index[c])]
+        def value(index, base):                                    # a fixed relation parameter has index -1
+            return physical[int(index[c])] if int(index[c]) >= 0 else float(base[c])
+        sigma_ref, cut_ref = value(spec.sigma_ref_param_index, spec.sigma_ref_base), value(spec.cut_ref_param_index, spec.cut_ref_base)
+        alpha, beta = value(spec.alpha_sigma_param_index, spec.alpha_sigma_base), value(spec.beta_radius_param_index, spec.beta_radius_base)
         scatter = physical[int(spec.velocity_scatter_param_index[c])]
         offset = dev_v[c] / scatter if spec.deviation_mode != "mass" else dev_v[c] * (2 * alpha + beta) / alpha / scatter   # unit offset
         rows.append(dict(mag=float(record["catalog_mag"]), lum=lum, v=sigma_ref * lum ** alpha * np.exp(dev_v[c]),

@@ -85,6 +85,10 @@ def scaling_values(state: ModelState, physical: np.ndarray) -> dict[str, float]:
     for spec in state.parameter_specs:
         if spec.component_family == "scaling" and spec.field in {"cutkpc", "beta_radius"}:
             values[spec.field] = float(physical[state.parameter_specs.index(spec)])
+    members = np.asarray(state.members.component_indices, dtype=int)
+    if members.size:                                   # held fixed (scaling.fixed_relation_fields): the packed base values
+        values.setdefault("cutkpc", float(np.asarray(state.packed_lens_spec.cut_ref_base, dtype=float)[members[0]]))
+        values.setdefault("beta_radius", float(np.asarray(state.packed_lens_spec.beta_radius_base, dtype=float)[members[0]]))
     return values
 
 
