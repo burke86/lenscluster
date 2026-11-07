@@ -60,7 +60,9 @@ def _prior_width(likelihood, name: str, prior_field: str, log_units: bool) -> fl
     prior = getattr(likelihood, prior_field, None)
     if prior is None:
         return math.nan
-    if name == "gp_knee_gamma":                               # uniform (lo, hi): the standard deviation of the uniform
+    if name == "gp_knee_gamma":                               # normal of width gp_knee_gamma_sigma, or the uniform's sd
+        if getattr(likelihood, "gp_knee_gamma_sigma", None) is not None:
+            return float(likelihood.gp_knee_gamma_sigma)
         lo, hi = prior
         return (float(hi) - float(lo)) / math.sqrt(12.0)
     return float(prior.log_sigma) if log_units else math.nan

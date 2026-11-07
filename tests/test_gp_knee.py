@@ -150,6 +150,21 @@ def test_sampled_slope_at_four_matches_the_fixed_slope(synthetic_config):
     np.testing.assert_allclose(a, b, rtol=1e-9)
 
 
+def test_sampled_slope_normal_prior_is_truncated_to_the_table_bounds(synthetic_config):
+    """gp_knee_gamma_sigma: a normal about gp_knee_gamma on the gp_knee_gamma_prior bounds; the likelihood does not change."""
+    uniform = build_state(knee_config(synthetic_config, "all"))
+    normal = build_state(knee_config(synthetic_config, "all", gp_knee_gamma_sigma=0.5))
+    names = [p.name for p in normal.parameter_specs]
+    assert names == [p.name for p in uniform.parameter_specs]
+    spec = normal.parameter_specs[names.index("images.gp_knee_gamma")]
+    assert (spec.prior_kind, spec.mean, spec.std, spec.lower, spec.upper) == ("truncated_normal", 4.0, 0.5, 2.0, 6.0)
+    theta = np.asarray(normal.initial_theta, dtype=float)
+    np.testing.assert_allclose(float(Evaluator(normal, "gp_image_plane").loglike(jnp.asarray(theta))),
+                               float(Evaluator(uniform, "gp_image_plane").loglike(jnp.asarray(theta))), rtol=1e-12)
+    with pytest.raises(ValueError):
+        knee_config(synthetic_config, "all", gp_knee_gamma_sigma=-0.5).validate()
+
+
 # ----------------------------------------------------------------------------- 2. limits and layouts
 def test_without_the_mass_field_the_knee_path_is_the_image_plane_gp(synthetic_config):
     state_ip = build_state(replace(synthetic_config, likelihood=replace(synthetic_config.likelihood, likelihood_mode="gp_image_plane")).validate())

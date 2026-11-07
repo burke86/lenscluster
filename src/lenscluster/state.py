@@ -738,8 +738,11 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
             if likelihood.gp_knee_gamma_prior is not None:
                 g_lo, g_hi = (float(v) for v in likelihood.gp_knee_gamma_prior)
                 gp_knee_gamma_index = len(specs)
+                g_sigma = likelihood.gp_knee_gamma_sigma
+                prior = (dict(prior_kind="uniform") if g_sigma is None
+                         else dict(prior_kind="truncated_normal", mean=float(likelihood.gp_knee_gamma), std=float(g_sigma)))
                 specs.append(ParameterSpec(name="images.gp_knee_gamma", sample_name="images_gp_knee_gamma", potential_id="images",
-                                           profile_type=0, field="gp_knee_gamma", prior_kind="uniform", lower=g_lo, upper=g_hi,
+                                           profile_type=0, field="gp_knee_gamma", lower=g_lo, upper=g_hi, **prior,
                                            step=0.01 * (g_hi - g_lo), component_family="error_scale", transform_kind="identity"))
         sigma_shared_index = len(specs)
         specs.append(_error_scale_spec("images.sigma_shared", "images_sigma_shared", "images", "sigma_shared", likelihood.gp_knee_sigma_shared_prior))

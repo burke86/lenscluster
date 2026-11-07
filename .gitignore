@@ -24,6 +24,7 @@ plots/
 *.egg-info/
 *.xsh
 !run_mock.xsh
+!run.xsh
 *.par
 data/*
 results/*
@@ -73,3 +74,4 @@ catalogs/**/*.feather
 catalogs/**/*.sqlite
 catalogs/**/bayes.dat
 catalogs/**/index.html*
+*.bbl

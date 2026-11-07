@@ -105,7 +105,8 @@ def _usage() -> str:
         "          samples at 0.1; --fast always fixes them)\n"
         "  --fix-relation k=v,...: hold member-relation parameters at these values (sigma km/s and cutkpc at the population's\n"
         "          prior magnitude; alpha_sigma, beta_radius), e.g. sigma=129,cutkpc=33,alpha_sigma=0.30,beta_radius=0.60 (R25)\n"
-        "  --gp-knee-gamma G|free: grf_gp only: the fixed high-k slope (or sampled, uniform 2-6) of the mass field's spectrum, P ~ 1 / (1 + (k/k_t)^G) (default 4;\n"
+        "  --gp-knee-gamma G|free|flat: grf_gp only: the high-k slope of the mass field's spectrum, P ~ 1 / (1 + (k/k_t)^G): fixed at G (default 4),\n"
+        "          sampled with a normal prior of width 0.5 about 4 on 2-6 (free), or uniform on 2-6 (flat);\n"
         "          2 truncated isothermal lumps, 4 NFW-like cusps, 6 cored)\n"
         "  --start-max-iter N, --start-tolerance TOL: the init's last optimization (the best mode on the NUTS target, every chain\n"
         "          starts there; on by default): it stops when the log posterior gains less than TOL over 50 iterations (default\n"
@@ -681,17 +682,20 @@ def build_config(
                                                            else ()),
                                     # The GRF slope fixed at 4 (a population of NFW-cusped lumps): sampled, it drifted to 5.3 in
                                     # w250s100_fast_gpblocksall without the data pinning it.
-                                    gp_knee_gamma_prior=(2.0, 6.0) if str(gp_knee_gamma) == "free" else None,
-                                    gp_knee_gamma=4.0 if gp_knee_gamma in (None, "free") else float(gp_knee_gamma),
+                                    # Sampled slope: "free" is a normal of width 0.5 about 4 (the NFW-cusp value) truncated to 2-6;
+                                    # "flat" the uniform on 2-6 (nov5a, nov6: 4.6-4.7 +- 0.8, pressing the knee onto its cap).
+                                    gp_knee_gamma_prior=(2.0, 6.0) if str(gp_knee_gamma) in ("free", "flat") else None,
+                                    gp_knee_gamma_sigma=0.5 if str(gp_knee_gamma) == "free" else None,
+                                    gp_knee_gamma=4.0 if gp_knee_gamma in (None, "free", "flat") else float(gp_knee_gamma),
                                     # The field's wavelengths from 0.2" to 100", as in the good fast run of 2026-11-02
                                     # (nov1a w250s100_fast: knee 6.6", GP ell 1.4"); the knee prior keeps it near the galaxy scale.
                                     gp_knee_scales_arcsec=(0.2, 100.0),
                                     # The knee near the galaxy scale: 6" is the knee of truncated isothermal halos with r_t = 5 kpc
-                                    # (lambda_t = 6.4 r_t), 2.5-15" spans r_t = 2-12 kpc.  Left free it goes to 14-25" and carries
-                                    # the halo-scale misfit (compare_grf_spectra, 2026-11-02).  The upper bound is back at 15"
-                                    # (2026-11-04): with 40" NUTS chains split between knees near 10" and 20-24", a second basin
-                                    # that couples to the lens model and mixes slowly; ln-width 0.6 kept.
-                                    gp_knee_prior=LogNormalPriorConfig(median=6.0, log_sigma=0.6, lower=2.5, upper=15.0),
+                                    # (lambda_t = 6.4 r_t), 2.5-8" spans r_t = 2-6 kpc.  Left free it goes to 14-25" and carries
+                                    # the halo-scale misfit (compare_grf_spectra, 2026-11-02); with the cap at 15" every all-block
+                                    # run sat on it (nov4b, nov5a, nov6: 14-15", 2026-11-07).  Capped at 8" (2026-11-07) so the
+                                    # field stays at the galaxy scale and the large-scale misfit has to go elsewhere; ln-width 0.6 kept.
+                                    gp_knee_prior=LogNormalPriorConfig(median=6.0, log_sigma=0.6, lower=2.5, upper=8.0),
                                     gp_knee_start_arcsec=6.0,
                                     # The rms deflection error of that substructure at z_ref: 0.08" median, 0.05-0.13" at 1 sigma,
                                     # truncated at 0.2" (galaxy-scale fits on 2026-11-02: 0.07-0.11"; at 0.2-0.3" it was carrying

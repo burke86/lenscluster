@@ -439,13 +439,16 @@ class LikelihoodConfig:
     # spectrum P_kappa = P0 / (1 + (k/k_t)^gamma) between gp_knee_scales, plus the image-plane GP, on blocks given by gp_blocks:
     # "all" (one covariance over every image), "system" (all knots of a galaxy; run.xsh --fast) or "family" (regression).
     # Sites: images.gp_sigma_alpha (rms deflection error per component at z_ref; None drops the mass field), images.gp_knee
-    # (lambda_t = 2 pi / k_t), images.gp_knee_gamma (the slope gamma, uniform on gp_knee_gamma_prior; None fixes it at
-    # gp_knee_gamma), images.sigma_shared, images.gp_ell (image-plane GP), images.sigma_white.  sigma_fl fixed.
+    # (lambda_t = 2 pi / k_t), images.gp_knee_gamma (the slope gamma on gp_knee_gamma_prior, uniform or normal of width
+    # gp_knee_gamma_sigma about gp_knee_gamma; None fixes it at gp_knee_gamma), images.sigma_shared, images.gp_ell (image-plane GP), images.sigma_white.  sigma_fl fixed.
     # The uniform bounds 2-6 are the slopes of P_kappa below the truncation of a random population of halos with
     # rho ~ r^-n for n = 2 (isothermal) to 0 (cored); n = 1 (NFW cusp) gives 4, the start.
     gp_blocks: str = "all"
     gp_knee_gamma: float = 4.0                                        # fixed slope, or the start when it is sampled
-    gp_knee_gamma_prior: tuple[float, float] | None = (2.0, 6.0)      # uniform bounds on the sampled slope; None fixes it
+    gp_knee_gamma_prior: tuple[float, float] | None = (2.0, 6.0)      # bounds of the sampled slope (and of its tables); None fixes it
+    # Width of a normal prior on the sampled slope, centred on gp_knee_gamma and truncated to gp_knee_gamma_prior; None
+    # leaves the slope uniform on the bounds.  run.xsh uses 0.5: the slope of an NFW-like cusp, within a quarter of n.
+    gp_knee_gamma_sigma: float | None = None
     gp_knee_gamma_step: float = 0.25                                  # spacing of the tabulated slopes (cubic spline between)
     # Wavelength range of the GRF (arcsec): from the smallest image separation resolved to the scale of the cluster halos.
     # With the long end at 100" and the halos free (all-image blocks), the field took the halo-scale misfit: sigma_alpha
@@ -715,6 +718,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
             raise ValueError("likelihood.gp_knee_gamma_prior must be (min, max) with 0 < min < max, holding gp_knee_gamma (the start).")
         if step <= 0.0 or abs((g_hi - g_lo) / step - round((g_hi - g_lo) / step)) > 1e-9 or round((g_hi - g_lo) / step) < 2:
             raise ValueError("likelihood.gp_knee_gamma_step must divide the gp_knee_gamma_prior range into at least 2 intervals.")
+        if config.likelihood.gp_knee_gamma_sigma is not None:
+            _positive("likelihood.gp_knee_gamma_sigma", config.likelihood.gp_knee_gamma_sigma)
     modes = tuple(config.likelihood.gp_knee_project_modes)
     if any(m not in {"translation", "convergence", "shear"} for m in modes) or len(set(modes)) != len(modes):
         raise ValueError("likelihood.gp_knee_project_modes takes distinct names among 'translation', 'convergence', 'shear'.")
