@@ -223,9 +223,9 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class SearchConfig:
-    """The init search, in two stages: the large-scale model without the member population from ``n_starts`` prior
-    starts (``halo_method``); then, from each carried mode, the members with the large family frozen, started from
-    ``member_starts`` prior draws of the member block (``member_method``); then a full-dimension L-BFGS polish of the
+    """The init search, in two stages: the large-scale model with the members on their scaling relation (the relation
+    drawn from its prior per start) from ``n_starts`` prior starts (``halo_method``); then, from each carried mode, the
+    members with the large family frozen, started from ``member_starts`` prior draws of the relation (``member_method``); then a full-dimension L-BFGS polish of the
     modes that can seed chains.  Methods: "lbfgs" (scipy L-BFGS-B per start), "optax-lbfgs" (vmapped optax L-BFGS,
     for GPUs), "adam" (vmapped Adam) or "svi" (vmapped mean-field Gaussian guide, the guide mean as the estimate)."""
     n_starts: int = 32
@@ -238,15 +238,15 @@ class SearchConfig:
     # reaches the same best stage-A mode as running all starts (log posterior equal to 1e-4) in 54 s instead of 201 s.
     screen_iterations: int | None = 50
     screen_keep: int = 16
-    # Converged chain start: after the final classification, the best kept mode on the NUTS target (one evaluation per mode)
-    # is optimized by the batched optax L-BFGS on the posterior NUTS samples (all parameters free, source-transport volume
-    # included) for at most this many iterations; every chain starts there and the other modes are dropped.  0 skips it
+    # Converged chain start: after the final classification, every kept mode is optimized on the NUTS target (all parameters
+    # free, source-transport volume included) for at most this many iterations, and the modes within mode_margin of the best
+    # on the target seed the chains (since 2026-11-04; before, only the search's best by one evaluation was optimized).  0 skips it
     # and the init only checks the start's conditioning (pipeline.chain_start_conditioning) and warns.  Even with the
     # search and the target on the same blocks, the search's optimum (no transport volume, scatters pinned, provisional
     # classes) was 47-162 in Newton decrement off the target's mode, and a start there cost a short NUTS check 11
     # divergences in 60 iterations; converged (1700 iterations, 145 s) it ran clean (2026-11-03).  It stops once the
     # start gains less than nuts_start_tolerance in log posterior over 50 iterations, or at the cap.
-    nuts_start_max_iter: int = 2000
+    nuts_start_max_iter: int = 4000
     nuts_start_tolerance: float = 0.1
     # Pin the member scatters at polish_scatter and polish_radius_scatter (the search's values) in the chain-start step;
     # NUTS frees them.  Free, the
@@ -256,12 +256,24 @@ class SearchConfig:
     # Warm start: a previous run directory (or its init/artifacts); its saved start, mapped by parameter name, replaces
     # stages A and B, and the polish runs from it.  Parameters it lacks start at the configured model.
     warm_start: str | None = None
+    # Stage B keeps the large halos' v_disp, core and cut radii active next to the members (centres, shapes and shear
+    # frozen); False (the default) freezes the whole large family.  It made no difference on AS1063 or M0416 (2026-11-05).
+    stage_b_free_amplitudes: bool = False
+    # Diverse carry: besides the best stage-A modes within mode_margin, up to this many more stage-A modes go to stage B,
+    # picked by farthest-point sampling in the large family's coordinates among the non-degenerate modes within
+    # diverse_carry_margin of the best.  Each gets its own stage B and polish, and its best mode is passed to the chain-start
+    # step, which keeps it only if it lands within mode_margin of the best on the NUTS target.  A mode that is poor with
+    # the members on their relation can be the best once the members deviate (M0416's southern halo, 2026-11-05).  0 turns it off.
+    diverse_carry: int = 8
+    diverse_carry_margin: float = 500.0
     adam_steps: int = 2000
     adam_learning_rate: float = 0.05
     svi_steps: int = 2000
     svi_learning_rate: float = 0.05
-    polish_max_iter: int = 2000             # the only full-dimension optimization: AS1063 needs 400 iterations to reach the joint
-                                            # optimum, M0416 passes the one-stage multistart after 2000 (400 left it 27 short)
+    polish_max_iter: int = 6000             # the only full-dimension optimization: AS1063 needs 400 iterations to reach the joint
+                                            # optimum, M0416 passes the one-stage multistart after 2000 (400 left it 27 short) and
+                                            # was still 10-13 short of its basin's optimum at 2000 (nov5_reltest, 2026-11-04);
+                                            # the tolerance rule stops a converged polish early
     # The member scatters (ln sigma, ln r_cut) are pinned at these values while optimizing (search, polish, chain start);
     # NUTS frees them.  0.2 for the velocity: the MUSE dispersions of Granata et al. 2026 scatter by 0.22 in ln sigma about
     # the relation, and 25-31 km/s is typical of MUSE-calibrated clusters.  0.3 for the radius: its prior median.  None

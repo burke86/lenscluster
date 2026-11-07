@@ -275,14 +275,29 @@ def kinematics_table(state: ModelState, evaluator: Evaluator, theta: np.ndarray)
                          "sigma_model_ap": model, "sigma_model_lt": sigma, "ln_ratio": ln_ratio, "z": ln_ratio / k["log_err"]})
 
 
+def same_large_scale_model(state: ModelState, theta_a, theta_b) -> bool:
+    """Whether two latent vectors hold the same large-scale lens: every large-family parameter within 0.05 in its log
+    (dispersions, radii), 1" (centres) or 0.05 (ellipticity and shear components)."""
+    a, b = np.asarray(theta_a, dtype=float), np.asarray(theta_b, dtype=float)
+    for i, spec in enumerate(state.parameter_specs):
+        if spec.component_family != "large":
+            continue
+        tolerance = 1.0 if spec.field in ("x_centre", "y_centre") else 0.05
+        if abs(a[i] - b[i]) > tolerance:
+            return False
+    return True
+
+
 def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[str, Any], config: LensClusterSolverConfig, *, log) -> dict[str, Any]:
-    """Move the best chain-start mode to a mode of the posterior NUTS samples; every chain starts there.  The search
-    optimizes the density without the source-transport volume, with the provisional member classes and the member scatter
-    pinned in its search stages, so its modes are not modes of the final target.  The kept modes are ranked by their log
-    posterior on the NUTS target (one evaluation each) and only the best is optimized, by scipy L-BFGS-B, every parameter
-    free except the member scatters, which stay pinned at the search's value (search.nuts_start_pin_scatter; free, an
-    optimizer drives them to zero).  It is replaced only by a finite, better, non-degenerate point.  The other modes are dropped
-    (within_margin False, dropped_for_nuts).  Logs the global-block Hessian negative eigenvalues of the start."""
+    """Move the kept chain-start modes to modes of the posterior NUTS samples and choose among them there.  The search
+    optimizes the density without the source-transport volume, on system blocks, with the provisional member classes and
+    the member scatter pinned, so its modes are not modes of the final target and it ranks them differently (M0416, 2026-11-04:
+    the search's best three modes were 300 below its fourth on the target).  Every kept mode is therefore optimized on the
+    NUTS target by scipy L-BFGS-B, every parameter free except the member scatters, which stay pinned at the search's value
+    (search.nuts_start_pin_scatter; free, an optimizer drives them to zero); a mode is replaced only by a finite, better,
+    non-degenerate point.  The modes are then ranked on the target: those within search.mode_margin of the best seed chains,
+    the others are dropped (within_margin False, dropped_for_nuts).  Logs the global-block Hessian negative eigenvalues of
+    the start."""
     from .sampling import block_mass_seed, posterior_model
     from . import search as search_module
     from .search import Objective
@@ -302,18 +317,15 @@ def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[
     objective = Objective(state, evaluator, reference, include_latent=True, log_likelihood=evaluator.log_likelihood, pinned=pinned)
     index = np.asarray(objective.global_index)
     out = dict(search, modes=[dict(m) for m in search["modes"]])
-    kept_modes = [m for m in out["modes"] if m["within_margin"]][:int(config.search.max_chain_modes)]
+    # The search's own modes within its margin, plus every diverse-carry mode (search.diverse_carry): those are judged
+    # on the NUTS target only.
+    kept_modes = ([m for m in out["modes"] if m["within_margin"] and not m.get("diverse_origin")][:int(config.search.max_chain_modes)]
+                  + [m for m in out["modes"] if m.get("diverse_origin")])
     if not kept_modes:
         return out
     started = time.perf_counter()
-    # Only the best kept mode on the NUTS target (one evaluation each) is optimized; the others are dropped below and every
-    # chain starts at the optimized one.  The search's ranking can differ from the target's, so it is not used here.
-    target_value = [-float(objective.reduced(jnp.asarray(objective.flatten(np.asarray(m["theta"], dtype=float))[index]))) for m in kept_modes]
-    candidates = [kept_modes[int(np.argmax(target_value))]]
-    for mode, value in zip(kept_modes, target_value):
-        if not any(mode is c for c in candidates):
-            mode.update(nuts_target_log_posterior=float(value), converged_iterations=0, nuts_start_converged=False)
-            log(f"[init] chain start: mode at {value:.2f} on the NUTS target not optimized (best {max(target_value):.2f}); its chains start at the best")
+    # Every kept mode is optimized on the NUTS target; the choice among them is made after, on the target's values.
+    candidates = list(kept_modes)
     thetas = [np.asarray(m["theta"], dtype=float) for m in candidates]
     x0 = np.stack([objective.flatten(t)[index] for t in thetas])
     before = np.array([-float(objective.reduced(jnp.asarray(x))) for x in x0])
@@ -336,10 +348,24 @@ def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[
                     nuts_start_converged=bool(converged[k]))
         if accepted:
             mode["theta"] = theta_new.tolist()
-    kept = list(candidates)
-    for mode in kept_modes:
+    # Rank on the target: the modes within the margin of the best seed chains, best first; the rest are dropped.
+    candidates.sort(key=lambda m: -float(m["nuts_target_log_posterior"]))
+    best_value = float(candidates[0]["nuts_target_log_posterior"])
+    # Distinct modes only: several search modes often converge to one point, and copies would take the chain seeds from
+    # a different basin within the margin (M0416, 2026-11-05: four copies of one mode pushed out a second basin 1.9 behind).
+    kept = []
+    for mode in candidates:
+        if best_value - float(mode["nuts_target_log_posterior"]) > margin or len(kept) >= int(config.search.max_chain_modes):
+            continue
+        if any(same_large_scale_model(state, mode["theta"], other["theta"]) for other in kept):
+            mode["duplicate_of_kept"] = True
+            continue
+        kept.append(mode)
+    for mode in candidates:
         if not any(mode is m for m in kept):
             mode["dropped_for_nuts"] = True
+            reason = "a copy of a kept mode" if mode.get("duplicate_of_kept") else f"best {best_value:.2f}, margin {margin:g}"
+            log(f"[init] chain start: mode at {float(mode['nuts_target_log_posterior']):.2f} on the NUTS target dropped ({reason})")
     # Only the kept starts may seed chains: they come first, best first; every other mode leaves the margin.
     for mode in out["modes"]:
         if not any(mode is m for m in kept):
@@ -348,7 +374,7 @@ def converge_chain_starts(state: ModelState, evaluator: Evaluator, search: dict[
     out["theta"] = np.asarray(kept[0]["theta"], dtype=float)
     model = posterior_model(state.parameter_specs, evaluator.log_likelihood)
     negative = block_mass_seed(model, state.parameter_specs, out["theta"])[2]
-    log(f"[init] chain starts: the best of {len(kept_modes)} kept mode(s) on the NUTS target, optimized; every chain starts there; global-block Hessian negative eigenvalues "
+    log(f"[init] chain starts: {len(kept)} of {len(kept_modes)} kept mode(s) within the margin on the NUTS target after optimization; the chains start there, best first; global-block Hessian negative eigenvalues "
         f"{negative.get('n_negative_eigenvalues')} of {negative.get('global_dim')}; {time.perf_counter() - started:.0f}s")
     out["nuts_start_seconds"] = float(time.perf_counter() - started)
     return out
