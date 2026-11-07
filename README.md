@@ -264,7 +264,8 @@ not catalog morphology classifications. Adjust
 `image_diagnostics.fold_pair_max_separation_arcsec` to change the search radius.
 
 `<prefix>_fold_pairs_source_caustics.pdf` (and `_jwst.pdf` when available) contains
-three pairs per page. At most 128 deterministically selected joint draws, including the best fit, enter
+three system/image-pair panels per page, with all knots of each system matched in color.
+At most 128 deterministically selected joint draws, including the best fit, enter
 the source calculation, including draws
 with unrecovered images. Each source is registered to its own caustic; the caustic and anchor
 roots of all draws of a pair are solved in one batched Newton pass (`NEWTON_ITERATIONS` damped
@@ -273,7 +274,21 @@ reuse the standard batched local posterior finder once per draw for the fold-pai
 with the configured tolerances and no grid or adaptive fallback. They are conditional on local root recovery; failures do not establish global image absence.
 Numerical arrays, selection rules, draw indices, and failed solves are saved in
 `final/tables/fold_pairs_source_caustics.{npz,json}`. Calculations are shared across
-imaging variants. Regenerate only this diagnostic with:
+imaging variants. Shared-GRF fold figures use a plotting-only C2 Hermite interpolation
+that preserves the tabulated radial covariance values and derives the deflection and
+its Jacobian from one potential-consistent kernel. Saved conditioning coefficients and
+low-order subtraction are retained. Best-fit curves use a 512 × 512 grid, with per-system
+256/512 resolution comparisons stored in the fold metadata. Posterior bands and
+caustic-aligned sources use the same smooth plotting field. The likelihood, sampling,
+and saved image-finder results retain their original interpolation.
+Both automatic output and cached regeneration use `prepare_fold_plot_data` and the
+same renderer. The default cutouts show outlined catalog crosses and the gravitational
+image-position contours, without GP displacements, GP-adjusted contours, model-image
+markers, or uncertainty-level legend entries. Shared-GRF critical curves use cyan-blue
+with a matching pointwise 16–84% band; parametric curves and bands use orange.
+Source panels use each draw's local GRF caustic anchor and independent axis ranges.
+These display choices are recorded in the fold metadata as `plot_presentation`.
+Regenerate only this diagnostic with:
 
 ```bash
 /home/dutra/.conda/envs/lenstronomy/bin/python scripts/regenerate_fold_diagnostics.py RUN_DIRECTORY
@@ -320,3 +335,13 @@ MPLCONFIGDIR=/tmp/lenscluster-mpl NUMBA_CACHE_DIR=/tmp/lenscluster-numba PYTHONP
 Runs without a shared mass field retain their parametric maps; independent
 family/system GPs cannot be interpreted as a single cluster-wide mass correction.
 
+JWST fold critical curves and bands use the 50th and 16th-84th percentiles of
+tracked curve positions from the same parametric-plus-conditional-GRF draws.
+Segments with fewer than 80% valid draws are omitted, without joining gaps.
+The full z=9 map uses the zero contour of the pointwise median determinant,
+shading where its 16th-84th percentile interval contains zero, from the same
+32 draws in the chain containing the best fit. These are posterior field/curve
+summaries, not curves evaluated at a vector of median model parameters.
+The RGB mass overview retains physical-median density contours and profiles;
+it has no critical-curve uncertainty band. Fold source panels retain their
+draw-wise caustic alignment and explicitly marked best source.

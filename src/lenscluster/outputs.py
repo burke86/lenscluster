@@ -146,6 +146,19 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
                 fold_data = compute_fold_diagnostics(config, state, evaluator, posterior, log=log)
                 save_fold_data(fold_data, tables)
             render_fold_diagnostics(replace(config, image_catalog=image_config), state, fold_data, paths, imaging, log=log)
+            if image_config.figure_suffix == '_jwst':
+                from .apj_fold_cutouts import render_apj_fold_cutouts
+                from .fold_diagnostics import add_best_grf_critical_curves
+                # Reuse selected draws and imaging; never rerun image recovery.
+                add_best_grf_critical_curves(state, evaluator, posterior, fold_data, log=log,
+                                           system_block_fields=True, critical_only=True)
+                save_fold_data(fold_data, tables)
+                output = render_apj_fold_cutouts(config, fold_data, imaging,
+                    plots.figure_path(figures, 'fold_cutouts_apj_jwst.pdf', prefix),
+                    run_directory=paths.root.parent,
+                    source_cache=tables/'fold_pairs_source_caustics.npz')
+                if output is not None:
+                    log(f'[outputs] ApJ fold cutouts: {output}')
     (tables / "run_summary.json").write_text(json.dumps(summary, indent=2, default=float))
     write_run_results(paths.root, name=prefix)
     return summary

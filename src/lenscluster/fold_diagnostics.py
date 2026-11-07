@@ -10,6 +10,7 @@ import time
 from types import SimpleNamespace
 
 import contourpy
+from .grf_plotting import plot_deflection_correction, PLOT_FIELD_VERSION
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,13 +20,15 @@ from scipy.stats import gaussian_kde
 
 STYLE = Path(__file__).with_name('style.mplstyle')
 BLUE, ORANGE, MAGENTA = '#0072B2', '#D55E00', '#CC33AA'
+from .plot_style import CRITICAL_COLOR
+GRF_COLOR = CRITICAL_COLOR
 NEWTON_ITERATIONS = 15   # damped Newton steps per caustic root; the seeds are tracked critical points
 CRITICAL_TRACK_STEPS = 16  # Newton steps along the normal that move the reference seeds onto each draw's critical curve
 
 
-def fold_draw_indices(count, best):
-    """At most 128 reproducible joint draws, always including the best fit."""
-    indices = np.linspace(0, count-1, min(count, 128)).astype(int)
+def fold_draw_indices(count, best, limit=128):
+    """Reproducible joint draws within the configured budget, including the best fit."""
+    indices = np.linspace(0, count-1, min(count, limit)).astype(int)
     if count and best not in indices:
         indices[np.argmin(abs(indices-best))] = best
     return np.sort(indices)
@@ -238,9 +241,10 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
         result['skipped'].append(dict(reason='No finite best posterior draw'))
         return result
     original_best = int(np.nanargmax(posterior.log_prob))
-    indices = fold_draw_indices(len(posterior.samples), original_best)
+    draw_limit = config.image_diagnostics.fold_max_draws
+    indices = fold_draw_indices(len(posterior.samples), original_best, draw_limit)
     result.update(draw_indices=indices.tolist(), original_draw_indices=indices.tolist(),
-                  posterior_draws_available=len(posterior.samples), draw_limit=128, best_original_draw=original_best)
+                  posterior_draws_available=len(posterior.samples), draw_limit=draw_limit, best_original_draw=original_best)
     posterior = SimpleNamespace(samples=np.asarray(posterior.samples)[indices], log_prob=np.asarray(posterior.log_prob)[indices])
     best = int(np.nanargmax(posterior.log_prob)); result['best_draw'] = best
     physical_source = jax.jit(lambda t: (evaluator.physical(t), evaluator.source_positions(t)))
@@ -332,8 +336,7 @@ def compute_fold_diagnostics(config, state, evaluator, posterior, *, log=print):
     for pair in verified:
         pair.pop('tangent'); pair.pop('reference_tangent'); pair.pop('family_index')
         result['pairs'].append(pair)
-    if getattr(state.images, 'system_ids', ()):
-        result = add_system_knots(config, state, evaluator, full_posterior, result, log=log)
+    result = prepare_fold_plot_data(config, state, evaluator, full_posterior, result, log=log)
     result['elapsed_seconds'] = time.monotonic()-started
     log(f"[outputs] fold diagnostics: {len(result['pairs'])} candidate pairs, {result['elapsed_seconds']:.1f}s")
     return result
@@ -386,7 +389,7 @@ def _credible_density_grid(points, *, grid_size=384):
                 points_used=len(points))
 
 
-def _contours(ax, points, color, transform=None, bounds=None):
+def _contours(ax, points, color, transform=None, bounds=None, linewidths=None, outline=True):
     grid = _credible_density_grid(points)
     if grid is None:
         return False
@@ -395,7 +398,10 @@ def _contours(ax, points, color, transform=None, bounds=None):
         xx, yy = transform(xx, yy)
     contours = ax.contour(xx, yy, grid['density'], levels=grid['levels'], colors=[color],
                           linestyles=[(0, (2., 1.5)), '-'] if transform is not None else ['--', '-'],
-                          linewidths=[.35, .5] if transform is not None else [1., 1.4], antialiased=True)
+                          linewidths=linewidths if linewidths is not None else ([.6, .85] if transform is not None else [1., 1.4]), antialiased=True)
+    if transform is not None and outline:
+        from matplotlib import patheffects
+        contours.set_path_effects([patheffects.Stroke(linewidth=1.3, foreground=(0.,0.,0.,.75)), patheffects.Normal()])
     if bounds is not None:
         bounds.extend(path.vertices[np.isfinite(path.vertices).all(axis=1)] for path in contours.get_paths() if len(path.vertices))
     return True
@@ -426,7 +432,7 @@ def save_fold_data(data, tables):
                     arrays[f'system_{i}_{key}'] = value
                 else:
                     meta[key] = value
-            meta['source_draws_valid_by_knot'] = np.isfinite(system['relative']).all(2).sum(0).tolist()
+            meta['source_draws_valid_by_knot'] = np.isfinite(system.get('source_aligned_grf', system.get('source_cartesian_grf', system['relative']))).all(2).sum(0).tolist()
             meta['image_draws_valid'] = np.isfinite(system['positions']).all(2).sum(0).tolist()
             metadata['systems'].append(meta)
     np.savez_compressed(tables/'fold_pairs_source_caustics.npz', **arrays)
@@ -442,6 +448,56 @@ def load_fold_data(tables):
             for i, record in enumerate(data.get(kind, [])):
                 start = f'{prefix}_{i}_'
                 record.update({key[len(start):]: arrays[key].copy() for key in arrays.files if key.startswith(start)})
+    return data
+
+
+CRITICAL_CURVE_STATISTIC = 'pointwise posterior 50th percentile of tracked curve positions; band: 16th-84th percentiles of the same draws'
+
+
+def critical_curve_quantiles(curves, seeds, origin, normal):
+    """Matched line/band segments; omit gaps with <80% valid tracked draws."""
+    curves, seeds, origin, normal = map(np.asarray, (curves, seeds, origin, normal))
+    if not len(curves):
+        return []
+    offsets = np.einsum('dni,i->dn', curves-origin, normal)
+    valid = np.flatnonzero(np.isfinite(offsets).sum(0) >= np.ceil(.8*len(curves)))
+    groups = np.split(valid, np.flatnonzero(np.diff(valid)>1)+1)
+    segments = []
+    for group in groups:
+        if len(group) < 2:
+            continue
+        quantiles = np.nanpercentile(offsets[:, group], [16, 50, 84], axis=0)
+        tangent = seeds[group]-origin-((seeds[group]-origin) @ normal)[:, None]*normal
+        segments.append(origin+tangent[None]+quantiles[..., None]*normal)
+    return segments
+
+
+def prepare_fold_plot_data(config, state, evaluator, posterior, data, *, log=print):
+    """Shared preparation for automatic output and cached regeneration.
+
+    Upgrade older fold caches to system panels and refresh versioned GRF plot
+    products. The renderer always uses gravitational image positions, even if
+    optional GP-adjusted diagnostics are present in a saved cache.
+    """
+    if 'systems' not in data and getattr(state.images, 'system_ids', ()):
+        data = add_system_knots(config, state, evaluator, posterior, data, log=log)
+    add_best_grf_critical_curves(state, evaluator, posterior, data, log=log)
+    data["central_curve_statistic"] = CRITICAL_CURVE_STATISTIC
+    for system in data.get("systems", []):
+        system["central_curve_statistic"] = CRITICAL_CURVE_STATISTIC
+    shared_grf = bool(getattr(evaluator, 'gp_knee', False) and state.gp_blocks == 'all')
+    data['plot_presentation'] = dict(
+        version='fold-system-display-v1',
+        image_position_contours='Parametric + conditional-mean GRF' if shared_grf else 'Parametric',
+        gp_displacement_overlay=False, model_image_markers=False,
+        catalog_marker='Outlined x; 11 pt; 1.25 pt stroke',
+        image_contours='68.3% solid, 95.4% dashed; 0.85/0.60 pt; dark outline',
+        critical_curves='Orange dashed parametric; cyan-blue solid parametric + GRF' if shared_grf else 'Parametric',
+        critical_bands='Pointwise 16-84% for both models' if shared_grf else 'Parametric pointwise 16-84%',
+        grf_interpolation_version=PLOT_FIELD_VERSION if shared_grf else None,
+        source_panel='Local caustic-aligned sources, independent axis ranges' if shared_grf else 'Parametric caustic frame',
+        uncertainty_legend_entries=False,
+        style='Shared stylesheet, top/right ticks, no titles or grids, PDF')
     return data
 
 
@@ -538,6 +594,339 @@ def add_system_knots(config, state, evaluator, posterior, data, *, log=print):
     return data
 
 
+def add_best_grf_critical_curves(state, evaluator, posterior, data, *, log=print,
+                                 system_block_fields=False, critical_only=False):
+    """Two best-draw critical curves on the same sky grid; no posterior resampling."""
+    if not (getattr(evaluator, 'gp_knee', False) and
+            (state.gp_blocks == 'all' or (system_block_fields and state.gp_blocks == 'system'))):
+        return data
+    best = int(np.nanargmax(posterior.log_prob))
+    theta = posterior.samples[best]
+    correction = plot_deflection_correction(evaluator, theta)
+    if correction is None:
+        return data
+    physical = evaluator.physical(theta)
+    for system in data.get('systems', []):
+        if ('critical_grf_best' in system and system.get('critical_overlay_draw') == best
+                and system.get('critical_overlay_version') == PLOT_FIELD_VERSION):
+            continue
+        center, size = np.asarray(system['center']), float(system['fov'])
+        packed = evaluator.packed_state_for_z(physical, float(system['z_source']))
+        family = list(map(str,state.images.family_ids)).index(str(system['anchor_family_id']))
+        curves = {}
+        for resolution in (256,512):
+            x = np.linspace(center[0]-.55*size,center[0]+.55*size,resolution)
+            y = np.linspace(center[1]-.55*size,center[1]+.55*size,resolution)
+            xx,yy = np.meshgrid(x,y); points = np.column_stack([xx.ravel(),yy.ravel()])
+            _,hessian = evaluator.total_fields_at(points,packed,chunk=1024)
+            if resolution == 256 and 'critical_parametric_best' not in system:
+                segments = contourpy.contour_generator(x=x,y=y,z=np.linalg.det(np.eye(2)-hessian).reshape(xx.shape)).lines(0.)
+                system['critical_parametric_best'] = _join_curves(segments)
+            for start in range(0,len(points),384):
+                q = points[start:start+384]
+                c = correction(q[:,0],q[:,1],np.full(len(q),family))
+                hessian[start:start+len(q)] += np.stack(c[2:],axis=-1).reshape(-1,2,2)
+            determinant = np.linalg.det(np.eye(2)-hessian).reshape(xx.shape)
+            curves[resolution] = _join_curves(contourpy.contour_generator(x=x,y=y,z=determinant).lines(0.))
+        # Compare the same local branch on the existing image cross-sections.
+        normal = np.asarray(system['normal']); tangent = np.array([normal[1],-normal[0]])
+        differences = []
+        for seed in system['seeds']:
+            anchors = [curve_cross_section_anchor(curves[r],seed,tangent) for r in (256,512)]
+            if all(a is not None for a in anchors):
+                differences.append(float(np.linalg.norm(anchors[0]-anchors[1])))
+        system['critical_grf_best'] = curves[512]
+        system['critical_overlay_draw'] = best
+        system['critical_overlay_version'] = PLOT_FIELD_VERSION
+        system['grf_resolution_check'] = dict(coarse=256,fine=512,matched_cross_sections=len(differences),
+            median_arcsec=float(np.median(differences)) if differences else None,
+            p95_arcsec=float(np.percentile(differences,95)) if differences else None,
+            max_arcsec=float(np.max(differences)) if differences else None)
+        log(f"[outputs] smooth GRF {system['system_id']}: 256/512 comparison {system['grf_resolution_check']}")
+    if not critical_only:
+        add_grf_source_frames(state, evaluator, posterior, data, log=log)
+    add_grf_critical_band(state, evaluator, posterior, data, log=log)
+    for system in data.get('systems', []):
+        system['critical_grf_local_draws'] = local_critical_branches(
+            system['critical_grf_draws'], system['origin'], system['fov'])
+        system['grf_band_valid_draws'] = np.isfinite(system['critical_grf_local_draws']).all(2).sum(0)
+    if not critical_only:
+        add_caustic_aligned_sources(state, evaluator, posterior, data, log=log)
+    data['critical_overlay'] = 'Best-draw parametric and parametric + conditional-mean GRF curves; pointwise 16-84% bands for both models; source frame includes conditional-mean GRF'
+    return data
+
+
+def _join_curves(segments):
+    return np.vstack([np.vstack([segment,[[np.nan,np.nan]]]) for segment in segments]) if segments else np.empty((0,2))
+
+
+def local_critical_branches(curves, origin, fov):
+    """Keep the continuous local branch nearest the fold anchor in each draw.
+
+    A normal cross-section can also intersect an unrelated galaxy-scale loop.
+    Do not connect these different branches into one uncertainty polygon.
+    """
+    result = np.full_like(curves, np.nan)
+    for draw, curve in enumerate(curves):
+        valid = np.isfinite(curve).all(1)
+        steps = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+        finite_steps = steps[np.isfinite(steps)]
+        limit = max(.15*fov, 5*np.median(finite_steps)) if len(finite_steps) else .15*fov
+        cuts = np.flatnonzero((steps > limit) | ~valid[:-1] | ~valid[1:])+1
+        groups = [g for g in np.split(np.arange(len(curve)), cuts) if len(g)>1 and valid[g].all()]
+        if groups:
+            group = min(groups, key=lambda g: np.linalg.norm(curve[g]-origin, axis=1).min())
+            result[draw, group] = curve[group]
+    return result
+
+
+def critical_crossings(determinant, seeds, normal, targets, span, grid_size=65):
+    """Locate sign boundaries on fixed cross-sections, nearest the tracked branch.
+
+    Bracketing tolerates the tabulated GRF Jacobian's derivative jumps. A boundary
+    need not have an exactly zero determinant. Missing crossings stay NaN.
+    """
+    seeds, normal = np.asarray(seeds), np.asarray(normal)
+    targets = np.nan_to_num(np.asarray(targets), nan=0.)
+    offsets = targets[:, None] + np.linspace(-span, span, grid_size)
+    points = seeds[:, None] + offsets[:, :, None]*normal
+    values = np.asarray(determinant(points.reshape(-1, 2))).reshape(offsets.shape)
+    crossing = np.isfinite(values[:, :-1]) & np.isfinite(values[:, 1:]) & (values[:, :-1]*values[:, 1:] <= 0)
+    distance = abs(.5*(offsets[:, :-1]+offsets[:, 1:])-targets[:, None])
+    choice = np.argmin(np.where(crossing, distance, np.inf), axis=1)
+    valid = crossing.any(1)
+    row = np.arange(len(seeds))
+    low, high = offsets[row, choice].copy(), offsets[row, choice+1].copy()
+    sign_low = values[row, choice].copy()
+    for _ in range(12):
+        mid = (low+high)/2
+        value = np.asarray(determinant(seeds+mid[:, None]*normal))
+        valid &= np.isfinite(value)
+        left = sign_low*value <= 0
+        high = np.where(left, mid, high)
+        low = np.where(left, low, mid)
+        sign_low = np.where(left, sign_low, value)
+    result = seeds+(.5*(low+high))[:, None]*normal
+    result[~valid] = np.nan
+    return result
+
+
+def add_grf_critical_band(state, evaluator, posterior, data, *, log=print):
+    """Cache conditional-mean GRF critical branches for the saved joint draws."""
+    import hashlib
+    systems = data.get('systems', [])
+    indices = np.asarray(data['draw_indices'], int)
+    samples = np.asarray(posterior.samples)[indices]
+    digest = hashlib.sha256(samples.tobytes()+indices.tobytes()+PLOT_FIELD_VERSION.encode()+b'grf-critical-band-v2')
+    for system in systems:
+        for key in ('seeds', 'normal', 'critical'):
+            digest.update(np.asarray(system[key]).tobytes())
+        digest.update(str(system['z_source']).encode())
+    fingerprint = digest.hexdigest()
+    if not systems or all(s.get('grf_band_fingerprint') == fingerprint for s in systems):
+        return data
+    fields, _, _ = _kernels(evaluator)
+    physical_fn = jax.jit(evaluator.physical)
+    family_ids = list(map(str, state.images.family_ids))
+    previous = {id(system): system.get('critical_grf_draws', system['critical']).copy() for system in systems}
+    for system in systems:
+        system['critical_grf_draws'] = np.full_like(system['critical'], np.nan)
+    for draw, theta in enumerate(samples):
+        physical = physical_fn(theta)
+        correction = plot_deflection_correction(evaluator, theta)
+        if correction is None:
+            raise ValueError('GRF critical band requires a conditional deflection field')
+        for system in systems:
+            packed = evaluator.packed_state_for_z(physical, float(system['z_source']))
+            family = family_ids.index(str(system['anchor_family_id']))
+            def determinant(points):
+                values = np.empty(len(points))
+                for start in range(0, len(points), 384):
+                    q = points[start:start+384]; n = len(q)
+                    q = np.pad(q, ((0, 384-n), (0, 0)), mode='edge')
+                    _, jac = fields(packed, jnp.asarray(q))
+                    c = correction(q[:n,0], q[:n,1], np.full(n, family))
+                    hessian = np.stack(c[2:], axis=-1).reshape(-1, 2, 2)
+                    values[start:start+n] = np.linalg.det(np.asarray(jac)[:n]-hessian)
+                return values
+            seeds, normal = np.asarray(system['seeds']), np.asarray(system['normal'])
+            targets = (previous[id(system)][draw]-seeds) @ normal
+            curve = critical_crossings(determinant, seeds, normal, targets, .15, grid_size=17)
+            missing = ~np.isfinite(curve).all(1)
+            if missing.any():
+                curve[missing] = critical_crossings(determinant,seeds[missing],normal,targets[missing],.55*float(system['fov']))
+            system['critical_grf_draws'][draw] = curve
+        if draw % 8 == 0 or draw == len(samples)-1:
+            log(f'[outputs] GRF critical band: {draw+1}/{len(samples)} saved draws')
+    for system in systems:
+        system['grf_band_fingerprint'] = fingerprint
+        system['grf_band_valid_draws'] = np.isfinite(system['critical_grf_draws']).all(2).sum(0)
+        log(f"[outputs] GRF band {system['system_id']}: {int(system['grf_band_valid_draws'].min())}-{int(system['grf_band_valid_draws'].max())} valid draws per cross-section")
+    data['grf_critical_band'] = ('Pointwise 16th-84th percentiles on the existing fixed normal cross-sections; '
+        'GRF determinant sign boundary nearest each draw parametric branch; '
+        'require at least 80% valid draws per cross-section; '
+        'conditional-mean fields only, no residual latent-field realizations')
+    return data
+
+
+def add_grf_source_frames(state, evaluator, posterior, data, *, log=print):
+    """Cartesian sources and the mapped best-draw GRF critical curve.
+
+    The knee covariance uses piecewise-linear interpolation, so its Jacobian is
+    discontinuous. Do not apply the smooth-lens exact caustic-root solver here.
+    Instead map the displayed gridded critical curve through the same deflection
+    field, retaining NaN separators between branches. All source draws use one
+    fixed translation, not draw-dependent caustic alignment.
+    """
+    import hashlib
+    systems = data.get('systems', [])
+    indices = np.asarray(data['draw_indices'], int)
+    samples = np.asarray(posterior.samples)[indices]
+    fingerprint = hashlib.sha256(samples.tobytes() + indices.tobytes() + PLOT_FIELD_VERSION.encode()+b'grf-cartesian-source-v2').hexdigest()
+    if not systems or all(s.get('grf_source_fingerprint') == fingerprint for s in systems):
+        return data
+    sources = np.asarray(jax.jit(jax.vmap(evaluator.source_positions))(jnp.asarray(samples)))
+    best = int(np.nanargmax(posterior.log_prob))
+    theta = posterior.samples[best]
+    physical = evaluator.physical(theta)
+    correction = plot_deflection_correction(evaluator, theta)
+    if correction is None:
+        raise ValueError('GRF source frame requires a conditional deflection field')
+    fields, _, _ = _kernels(evaluator)
+    family_ids = list(map(str, state.images.family_ids))
+    for system in systems:
+        # Remove stale products from the former exact-root attempt, if present.
+        for key in ('relative_grf', 'grf_source_root_residual', 'grf_source_failures', 'grf_reference_tangent'):
+            system.pop(key, None)
+        selected = sources[:, [family_ids.index(str(fid)) for fid in system['family_ids']]]
+        origin = selected[data['best_draw']].mean(0)
+        system['source_origin_grf'] = origin
+        system['source_cartesian_grf'] = selected-origin
+        curve = np.asarray(system['critical_grf_best'])
+        finite = np.isfinite(curve).all(1)
+        points = curve[finite]
+        caustic = np.full_like(curve, np.nan)
+        mapped = np.empty_like(points)
+        packed = evaluator.packed_state_for_z(physical, float(system['z_source']))
+        family = family_ids.index(str(system['anchor_family_id']))
+        for start in range(0, len(points), 384):
+            q = points[start:start+384]; n = len(q)
+            q = np.pad(q, ((0, 384-n), (0, 0)), mode='edge')
+            beta, _ = fields(packed, jnp.asarray(q))
+            c = correction(q[:,0], q[:,1], np.full(384, family))
+            mapped[start:start+n] = np.asarray(beta)[:n]-np.column_stack(c[:2])[:n]
+        caustic[finite] = mapped-origin
+        system['caustic_grf_best'] = caustic
+        system['grf_source_fingerprint'] = fingerprint
+        log(f"[outputs] GRF Cartesian source panel: {system['system_id']}, {len(samples)} draws")
+    data['grf_source_frame'] = ('Cartesian source coordinates minus one fixed best-draw mean source per system; '
+        'best-draw caustic maps the displayed GRF critical curve through the conditional-mean GRF deflection; '
+        'source contours contain all selected draws; no residual latent-field draws')
+    return data
+
+
+def curve_cross_section_anchor(curve, origin, image_tangent):
+    """Interpolate the continuous local branch at a fixed image cross-section."""
+    curve = np.asarray(curve)
+    a, b = curve[:-1], curve[1:]
+    t0, t1 = (a-origin) @ image_tangent, (b-origin) @ image_tangent
+    valid = (np.isfinite(a).all(1) & np.isfinite(b).all(1)
+             & (t0*t1 <= 0) & (abs(t1-t0) > 1e-12))
+    if not valid.any():
+        return None
+    fraction = -t0[valid]/(t1[valid]-t0[valid])
+    anchors = a[valid]+fraction[:, None]*(b[valid]-a[valid])
+    return anchors[np.argmin(np.linalg.norm(anchors-origin, axis=1))]
+
+
+def caustic_centered_sources(sources, anchors, basis):
+    """One shared translation per draw and one fixed orthonormal display basis."""
+    return (np.asarray(sources)-np.asarray(anchors)[:, None]) @ np.asarray(basis).T
+
+
+def add_caustic_aligned_sources(state, evaluator, posterior, data, *, log=print):
+    """Remove source/caustic common motion while preserving knot separations.
+
+    Every draw uses its own conditional-mean GRF caustic anchor on the same
+    image-plane cross-section. A fixed best-draw tangent/normal rotates all draws
+    together. No knot-dependent shifts, contour smoothing, or sample rejection by
+    source position is applied. Missing local anchors remain explicitly missing.
+    """
+    import hashlib
+    systems = data.get('systems', [])
+    if not systems:
+        return data
+    indices = np.asarray(data['draw_indices'], int)
+    samples = np.asarray(posterior.samples)[indices]
+    digest = hashlib.sha256(samples.tobytes()+PLOT_FIELD_VERSION.encode()+b'caustic-centered-sources-v2')
+    for system in systems:
+        digest.update(np.asarray(system['critical_grf_local_draws']).tobytes())
+    fingerprint = digest.hexdigest()
+    if all(s.get('source_alignment_fingerprint') == fingerprint for s in systems):
+        return data
+    physical_source = jax.jit(lambda t: (evaluator.physical(t), evaluator.source_positions(t)))
+    fields, _, _ = _kernels(evaluator)
+    family_ids = list(map(str, state.images.family_ids))
+    for system in systems:
+        system['source_anchor_grf'] = np.full((len(samples), 2), np.nan)
+        system['image_anchor_grf'] = np.full((len(samples), 2), np.nan)
+        system['source_unaligned_grf'] = np.full_like(system['relative'], np.nan)
+        system['caustic_mapped_local_grf'] = np.full_like(system['critical_grf_local_draws'], np.nan)
+    # Best draw first defines one common orientation, independent of the sources.
+    order = [data['best_draw']]+[i for i in range(len(samples)) if i != data['best_draw']]
+    for count, draw in enumerate(order):
+        theta = samples[draw]
+        physical, sources = physical_source(theta)
+        correction = plot_deflection_correction(evaluator, theta)
+        for system in systems:
+            normal = np.asarray(system['normal'])
+            tangent = np.array([normal[1], -normal[0]])
+            curve = system['critical_grf_local_draws'][draw]
+            anchor = curve_cross_section_anchor(curve, system['origin'], tangent)
+            if anchor is None:
+                continue
+            finite = np.isfinite(curve).all(1)
+            points = np.vstack([anchor, curve[finite]])
+            packed = evaluator.packed_state_for_z(physical, float(system['z_source']))
+            family = family_ids.index(str(system['anchor_family_id']))
+            n = len(points)
+            q = np.pad(points, ((0, 384-n), (0, 0)), mode='edge')
+            beta, jac = map(np.asarray, fields(packed, jnp.asarray(q)))
+            c = correction(q[:,0], q[:,1], np.full(384, family))
+            mapped = beta-np.column_stack(c[:2])
+            if draw == data['best_draw']:
+                a = jac[0]-np.array([[c[2][0],c[3][0]],[c[4][0],c[5][0]]])
+                source_tangent = np.linalg.svd(a)[0][:,0]
+                # Fix the otherwise arbitrary SVD sign using the image tangent.
+                if source_tangent @ (a @ tangent) < 0:
+                    source_tangent = -source_tangent
+                source_normal = np.array([-source_tangent[1],source_tangent[0]])
+                system['source_alignment_basis'] = np.stack([source_tangent,source_normal])
+            system['source_anchor_grf'][draw] = mapped[0]
+            system['image_anchor_grf'][draw] = anchor
+            system['caustic_mapped_local_grf'][draw, finite] = mapped[1:n]
+            system['source_unaligned_grf'][draw] = np.asarray(sources)[[family_ids.index(str(fid)) for fid in system['family_ids']]]
+        if count % 16 == 0 or count == len(samples)-1:
+            log(f'[outputs] caustic-aligned sources: {count+1}/{len(samples)} draws')
+    for system in systems:
+        if 'source_alignment_basis' not in system:
+            raise ValueError(f"No best-draw local caustic anchor for {system['system_id']}")
+        basis = system['source_alignment_basis']
+        system['source_aligned_grf'] = caustic_centered_sources(system['source_unaligned_grf'], system['source_anchor_grf'], basis)
+        caustics = (system['caustic_mapped_local_grf']-system['source_anchor_grf'][:,None]) @ basis.T
+        system['caustic_aligned_grf_best'] = caustics[data['best_draw']]
+        system['source_alignment_fingerprint'] = fingerprint
+        valid = np.isfinite(system['source_aligned_grf']).all(2).sum(0)
+        before = np.nanstd(system['source_unaligned_grf'].mean(1),axis=0)
+        after = np.nanstd(system['source_aligned_grf'].mean(1),axis=0)
+        log(f"[outputs] aligned {system['system_id']}: valid={valid.tolist()}, scatter {before.tolist()} -> {after.tolist()} arcsec")
+    data['source_alignment'] = ('Each draw source positions minus its own conditional-mean GRF caustic anchor at the '
+        'fixed image-plane cross-section, rotated into one fixed best-draw tangent/normal basis; '
+        'best caustic shows only the matching continuous local critical branch; '
+        'all knots share the same shift; missing anchors counted explicitly')
+    return data
+
+
 def render_system_fold_diagnostics(config, state, data, paths, imaging, *, log=print):
     """One column per system/fold-image pair; stable knot colors in both planes."""
     import matplotlib.pyplot as plt
@@ -576,21 +965,22 @@ def render_system_fold_diagnostics(config, state, data, paths, imaging, *, log=p
                             return px-window.x0, py-window.y0
                         rgb = rgb_cutout(images, bands, display, coord, system['fov'])
                         ax.imshow(rgb, origin='lower', interpolation='nearest')
-                        ax.plot(*pixels(*system['critical'][best].T), color=MAGENTA, lw=.7)
-                        curve, normal, origin = system['critical'], system['normal'], system['origin']
-                        offsets = np.einsum('dni,i->dn', curve-origin, normal); usable = np.isfinite(offsets).any(0)
-                        if usable.any():
-                            low, high = np.nanpercentile(offsets[:, usable], [16, 84], axis=0)
-                            seeds = system['seeds'][usable]
-                            tangent = seeds-origin-((seeds-origin) @ normal)[:, None]*normal
-                            polygon = np.vstack([origin+tangent+low[:, None]*normal, (origin+tangent+high[:, None]*normal)[::-1]])
-                            ax.add_patch(Polygon(np.column_stack(pixels(*polygon.T)), facecolor=MAGENTA, edgecolor='none', alpha=.2))
+                        sets = [(system['critical'], CRITICAL_COLOR, '--' if 'critical_grf_draws' in system else '-', .12)]
+                        if 'critical_grf_draws' in system:
+                            sets.append((system.get('critical_grf_local_draws', system['critical_grf_draws']), GRF_COLOR, '-', .22))
+                        for curves, color, linestyle, alpha in sets:
+                            for low, median, high in critical_curve_quantiles(
+                                    curves, system['seeds'], system['origin'], system['normal']):
+                                polygon = np.vstack((low, high[::-1]))
+                                ax.add_patch(Polygon(np.column_stack(pixels(*polygon.T)), facecolor=color,
+                                                     edgecolor='none', alpha=alpha, zorder=1.5))
+                                ax.plot(*pixels(*median.T), color=color, ls=linestyle, lw=.7)
                         for j, label in enumerate(system['labels']):
                             k = system['image_family_index'][j]; color = colors[k]
                             _contours(ax, system['positions'][:, j], color, pixels)
-                            ax.plot(*pixels(*system['observed'][j]), 'x', color=color, ms=9, mew=.75, zorder=8)
-                            if np.isfinite(system['positions'][best, j]).all():
-                                ax.plot(*pixels(*system['positions'][best, j]), 'o', mfc='none', mec=color, ms=8, mew=.6, zorder=7)
+                            from matplotlib import patheffects
+                            cross, = ax.plot(*pixels(*system['observed'][j]), 'x', color=color, ms=11, mew=1.25, zorder=8)
+                            cross.set_path_effects([patheffects.Stroke(linewidth=2.4,foreground=(0.,0.,0.,.9)),patheffects.Normal()])
                         size = rgb.shape[0]; bar = .5/reference.pixel_scale_arcsec
                         ax.plot([.07*size, .07*size+bar], [.08*size]*2, color='white', lw=1.2)
                         ax.text(.07*size+bar/2, .11*size, '0.5″', color='white', ha='center', fontsize=8)
@@ -601,51 +991,78 @@ def render_system_fold_diagnostics(config, state, data, paths, imaging, *, log=p
                             transform=ax.transAxes, va='top', color='white', fontsize=9, bbox=dict(facecolor='black', alpha=.65, edgecolor='none'))
                     knot_handles = [Line2D([], [], color=color, label=f'Knot {knot or "single"}') for color, knot in zip(colors, system['knot_ids'])]
                     image_key = [
-                        Line2D([], [], color='white', marker='x', ls='none', ms=6, mew=.75, label='Catalog knot'),
-                        Line2D([], [], color='white', marker='o', mfc='none', ls='none', ms=5, mew=.6, label='Best-model image'),
-                        Line2D([], [], color='white', lw=.5, label='68.3% image region'),
-                        Line2D([], [], color='white', lw=.35, ls='--', label='95.4% image region'),
-                        Line2D([], [], color=MAGENTA, lw=.7, label='Best critical curve'),
-                        Patch(facecolor=MAGENTA, alpha=.2, edgecolor='none', label='Critical-curve 68% band')]
+                        Line2D([], [], color='white', marker='x', ls='none', ms=7, mew=1.25, label='Catalog knot')]
+                    if 'critical_grf_best' in system:
+                        image_key += [
+                            Line2D([], [], color=CRITICAL_COLOR, lw=.7, ls='--', label='Parametric only'),
+                            Line2D([], [], color=GRF_COLOR, lw=.7, label='Parametric + GRF')]
+                    else:
+                        image_key.append(Line2D([], [], color=CRITICAL_COLOR, lw=.7, label='Median critical curve'))
                     ax.legend(handles=knot_handles+image_key, loc='lower right', ncol=2, fontsize=6,
                               handlelength=1.5, columnspacing=.8, labelspacing=.35,
                               frameon=True, facecolor='black', edgecolor='none', framealpha=.75, labelcolor='white')
-                    points = system['relative']; finite = np.isfinite(points).all(2)
+                    has_grf_source = 'source_cartesian_grf' in system
+                    aligned = 'source_aligned_grf' in system
+                    points = system.get('source_aligned_grf', system.get('source_cartesian_grf', system['relative']))
+                    finite = np.isfinite(points).all(2)
                     all_points = points[finite]
-                    center = np.median(all_points[:, 0]) if len(all_points) else 0.
-                    radius = max(.02, 1.3*np.max(abs(all_points[:, 0]-center))) if len(all_points) else .1
-                    height = max(.002, 1.3*np.max(abs(all_points[:, 1]))) if len(all_points) else .1
-                    panel.set(xlim=(center-radius, center+radius), ylim=(-2.0*height, 1.3*height))
-                    panel.axhline(0, color=MAGENTA, lw=1.2)
+                    center = np.median(all_points, axis=0) if len(all_points) else np.zeros(2)
+                    radii = np.maximum(.002, 1.3*np.max(abs(all_points-center), axis=0)) if len(all_points) else np.ones(2)*.1
+                    if has_grf_source:
+                        panel.plot(*system.get('caustic_aligned_grf_best',system['caustic_grf_best']).T, color=GRF_COLOR, lw=.8)
+                    else:
+                        panel.axhline(0, color=MAGENTA, lw=1.2)
+                        radii[1] = max(radii[1], abs(center[1])+.002)
                     counts = []; contour_bounds = []
                     for k, color in enumerate(colors):
-                        _contours(panel, points[:, k], color, bounds=contour_bounds)
+                        _contours(panel, points[:, k], color, bounds=contour_bounds, linewidths=[.55,.8])
                         if finite[best, k]:
                             panel.plot(*points[best, k], 'o', color=color, ms=4)
                         counts.append(f"{system['knot_ids'][k] or 'single'}: {int((points[:, k, 1]<0).sum())}/{int(finite[:, k].sum())}")
                     if contour_bounds:
                         extent = np.vstack(contour_bounds)
-                        radius = max(radius, 1.08*np.max(abs(extent[:, 0]-center)))
-                        height = max(height, 1.08*np.max(abs(extent[:, 1])))
-                        panel.set(xlim=(center-radius, center+radius), ylim=(-2.0*height, 1.3*height))
-                    panel.axhspan(-2.0*height, 0, color='#F4DCDC', alpha=.65, zorder=0)
-                    panel.text(.03, .97, 'Source positions, common caustic anchor', transform=panel.transAxes, va='top', fontsize=7)
+                        radii = np.maximum(radii, 1.08*np.max(abs(extent-center), axis=0))
+                    panel.set(xlim=(center[0]-radii[0], center[0]+radii[0]),
+                              ylim=(center[1]-2*radii[1], center[1]+1.3*radii[1]))
+                    if aligned:
+                        # Fit the complete credible regions and nearby local caustic,
+                        # with independent axis ranges and a lower area for the key.
+                        extent = np.vstack(contour_bounds) if contour_bounds else all_points
+                        caustic = system['caustic_aligned_grf_best']
+                        caustic = caustic[np.isfinite(caustic).all(1)]
+                        nearby = caustic[(caustic[:,0]>=extent[:,0].min()) & (caustic[:,0]<=extent[:,0].max())]
+                        if len(nearby):
+                            extent = np.vstack([extent,nearby])
+                        elif len(caustic):
+                            extent = np.vstack([extent,caustic[np.argmin(np.linalg.norm(caustic-center,axis=1))]])
+                        lo, hi = extent.min(0), extent.max(0)
+                        span = max(1.18*(hi[0]-lo[0]), 1.8*(hi[1]-lo[1]), .01)
+                        mid_x = .5*(lo[0]+hi[0])
+                        yspan = max(1.8*(hi[1]-lo[1]), .01)
+                        bottom = lo[1]-.34*yspan
+                        panel.set(xlim=(mid_x-span/2,mid_x+span/2), ylim=(bottom,bottom+yspan))
+                    if not has_grf_source:
+                        panel.axhspan(center[1]-2*radii[1], 0, color='#F4DCDC', alpha=.65, zorder=0)
+                    panel.text(.03, .97, 'Caustic-aligned source plane' if aligned else 'Sources and best-fit GRF caustic' if has_grf_source else 'Source positions, parametric caustic frame',
+                               transform=panel.transAxes, va='top', fontsize=7)
                     source_key = [
-                        Line2D([], [], color='.2', lw=1.4, label='68.3% source region'),
-                        Line2D([], [], color='.2', lw=1., ls='--', label='95.4% source region'),
                         Line2D([], [], color='.2', marker='o', ls='none', ms=3, label='Best-model source'),
-                        Line2D([], [], color=MAGENTA, lw=1.2, label='Local caustic'),
-                        Patch(facecolor='#F4DCDC', edgecolor='none', label='No local fold pair')]
-                    panel.legend(handles=knot_handles+source_key, loc='lower left', bbox_to_anchor=(.015, .14),
+                        Line2D([], [], color=GRF_COLOR if has_grf_source else MAGENTA, lw=.7,
+                               label='Parametric + GRF caustic' if has_grf_source else 'Parametric caustic')]
+                    if not has_grf_source:
+                        source_key.append(Patch(facecolor='#F4DCDC', edgecolor='none', label='No local fold pair'))
+                    panel.legend(handles=knot_handles+source_key, loc='lower left', bbox_to_anchor=(.015, .12),
                                  ncol=3 if count>2 else 2, fontsize=5.8, handlelength=1.5,
                                  columnspacing=.7, labelspacing=.35, frameon=True,
                                  facecolor='white', edgecolor='none', framealpha=.9)
-                    panel.text(.03, .04, 'No local fold pair / evaluated draws\n'+'; '.join(counts)+'\nSource draws retained when image recovery fails', transform=panel.transAxes, fontsize=6.5, va='bottom', wrap=True)
-                    panel.set_xlabel('Along-caustic coordinate (arcsec)', fontsize=8)
+                    footer = ((f'{int(finite.all(1).sum())}/{len(points)} draws with a local caustic anchor' if aligned else f'{len(points)} source draws; caustic at best fit\nCommon fixed source-plane origin')
+                              if has_grf_source else 'No local fold pair / evaluated draws\n'+'; '.join(counts)+'\nSource draws retained when image recovery fails')
+                    panel.text(.03, .04, footer, transform=panel.transAxes, fontsize=6.5, va='bottom', wrap=True)
+                    panel.set_xlabel(r'$\Delta\beta_t$ (arcsec)' if aligned else r'$\Delta\beta_x$ (arcsec)' if has_grf_source else 'Along-caustic coordinate (arcsec)', fontsize=8)
                     if col == 0:
-                        panel.set_ylabel('Signed nearest-caustic distance (arcsec)', fontsize=8)
+                        panel.set_ylabel(r'$\Delta\beta_n$ (arcsec)' if aligned else r'$\Delta\beta_y$ (arcsec)' if has_grf_source else 'Signed nearest-caustic distance (arcsec)', fontsize=8)
                     panel.tick_params(labelsize=7)
-                    panel.set_aspect('auto')
+                    panel.set_aspect('auto' if aligned else 'equal' if has_grf_source else 'auto', adjustable='box' if aligned else 'datalim')
                     ax.set_xticks([]); ax.set_yticks([])
                     for target in (ax, panel):
                         target.grid(False)
@@ -655,6 +1072,9 @@ def render_system_fold_diagnostics(config, state, data, paths, imaging, *, log=p
 
 
 def render_fold_diagnostics(config, state, data, paths, imaging, *, log=print):
+    data['central_curve_statistic'] = CRITICAL_CURVE_STATISTIC
+    for system in data.get('systems', []):
+        system['central_curve_statistic'] = CRITICAL_CURVE_STATISTIC
     if 'systems' in data:
         return render_system_fold_diagnostics(config, state, data, paths, imaging, log=log)
 
@@ -687,16 +1107,12 @@ def render_fold_diagnostics(config, state, data, paths, imaging, *, log=print):
                     if window is not None:
                         rgb = rgb_cutout(images, bands, display, coord, pair['fov'])
                         ax.imshow(rgb, origin='lower', interpolation='nearest')
-                        ax.plot(*pixels(*pair['critical'][best].T), color=MAGENTA, lw=1.1)
-                        curve = pair['critical']; normal = pair['normal']; origin = pair['origin']
-                        offsets = np.einsum('dni,i->dn', curve-origin, normal)
-                        usable = np.isfinite(offsets).any(0)
-                        if usable.any():
-                            low, high = np.nanpercentile(offsets[:, usable], [16, 84], axis=0)
-                            seeds = pair['seeds'][usable]
-                            tangent = seeds-origin-((seeds-origin) @ normal)[:, None]*normal
-                            polygon = np.vstack([origin+tangent+low[:, None]*normal, (origin+tangent+high[:, None]*normal)[::-1]])
-                            ax.add_patch(Polygon(np.column_stack(pixels(*polygon.T)), facecolor=MAGENTA, edgecolor='none', alpha=.25))
+                        for low, median, high in critical_curve_quantiles(
+                                pair['critical'], pair['seeds'], pair['origin'], pair['normal']):
+                            polygon = np.vstack((low, high[::-1]))
+                            ax.add_patch(Polygon(np.column_stack(pixels(*polygon.T)), facecolor=CRITICAL_COLOR,
+                                                 edgecolor='none', alpha=.25))
+                            ax.plot(*pixels(*median.T), color=CRITICAL_COLOR, lw=1.1)
                         handles = []
                         for k, color in enumerate((BLUE, ORANGE)):
                             _contours(ax, pair['positions'][:, k], color, pixels)

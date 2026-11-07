@@ -97,6 +97,7 @@ def test_compute_all_draws_including_no_pair(synthetic_config, monkeypatch):
     positions=np.array([[[np.nan,np.nan],[np.nan,np.nan]],[[0.,-np.sqrt(.06)],[0.,np.sqrt(.06)]]])
     monkeypatch.setattr(fd,'posterior_image_positions',lambda *args,**kwargs:positions)
     result=fd.compute_fold_diagnostics(synthetic_config,state,FoldEvaluator(),SimpleNamespace(samples=samples,log_prob=[0.,1.]),log=lambda _:None)
+    assert not result['plot_presentation']['gp_displacement_overlay']
     assert len(result['pairs'])==1
     pair=result['pairs'][0]
     np.testing.assert_allclose(pair['relative'][:,1],samples[:,0],atol=1e-10)
@@ -140,12 +141,13 @@ def test_standard_finder_once_per_draw_and_label_mapping(synthetic_config, monke
 
 
 @pytest.mark.parametrize('count,best',[(1,0),(17,8),(128,64),(1000,373),(10000,7777)])
-def test_fold_draw_cap_is_reproducible_and_includes_best(count,best):
-    indices=fd.fold_draw_indices(count,best)
-    assert len(indices)==min(count,128)
+@pytest.mark.parametrize('limit', [32, 128])
+def test_fold_draw_cap_is_reproducible_and_includes_best(count,best,limit):
+    indices=fd.fold_draw_indices(count,best,limit)
+    assert len(indices)==min(count,limit)
     assert len(set(indices))==len(indices)
     assert best in indices and indices.min()>=0 and indices.max()<count
-    np.testing.assert_array_equal(indices,fd.fold_draw_indices(count,best))
+    np.testing.assert_array_equal(indices,fd.fold_draw_indices(count,best,limit))
 
 
 def test_system_knots_include_nonfold_knot_without_cross_system_or_recovery_filter(synthetic_config, tmp_path, monkeypatch):
@@ -237,3 +239,213 @@ def test_smoothed_contours_retain_a_resolved_second_mode():
     # Curvilinear grid contours, not an imposed covariance ellipse or a largest-island-only filter.
     segments=contourpy.contour_generator(x=grid['x'],y=grid['y'],z=grid['density']).lines(grid['levels'][1])
     assert len(segments)==2
+
+
+def test_grf_cartesian_sources_and_caustic_use_same_fixed_translation():
+    import jax.numpy as jnp
+    class Evaluator:
+        n_components = 1
+        calls = 0
+        def physical(self, t): return t
+        def source_positions(self, t): return jnp.array([[.4, t[0]]])
+        def packed_state_for_z(self, p, z): return p
+        def component_rows(self, points, packed, indices):
+            x, y = points.T
+            alpha = jnp.stack([-x, y-y*y/2], axis=-1)[None]
+            hessian = jnp.zeros((1,len(points),2,2)).at[0,:,0,0].set(-1.).at[0,:,1,1].set(1-y)
+            return alpha, hessian
+        def gp_deflection_correction(self, t):
+            self.calls += 1
+            def correction(x, y, families):
+                zero = np.zeros_like(x)
+                return zero, .2*y+.03, zero, zero, zero, zero+.2
+            return correction
+    curve = np.array([[-1., .2], [0., .2], [1., .2], [np.nan, np.nan]])
+    system = dict(system_id='toy', family_ids=['A'], anchor_family_id='A', z_source=2.,
+        critical_grf_best=curve, relative=np.zeros((2,1,2)))
+    data = dict(systems=[system], draw_indices=[0,1], best_draw=1)
+    evaluator = Evaluator()
+    posterior = SimpleNamespace(samples=np.array([[-.07],[.01]]), log_prob=np.array([0.,1.]))
+    state = SimpleNamespace(images=SimpleNamespace(family_ids=['A']))
+    fd.add_grf_source_frames(state,evaluator,posterior,data,log=lambda _:None)
+    np.testing.assert_allclose(system['source_cartesian_grf'][:,0], [[0.,-.08],[0.,0.]], atol=1e-12)
+    np.testing.assert_allclose(system['caustic_grf_best'][:3], [[-2.4,-.06],[-.4,-.06],[1.6,-.06]], atol=1e-12)
+    assert np.isnan(system['caustic_grf_best'][3]).all()
+    np.testing.assert_array_equal(system['relative'], np.zeros((2,1,2)))
+    fd.add_grf_source_frames(state,evaluator,posterior,data,log=lambda _:None)
+    assert evaluator.calls == 1
+
+
+def test_grf_critical_crossings_shift_resolution_and_missing_branches():
+    seeds = np.column_stack([np.linspace(-1.,1.,17), np.zeros(17)])
+    normal = np.array([0.,1.])
+    targets = np.zeros(17)
+    def determinant(points):
+        x,y = points.T
+        return y-(.17+.08*x*x)
+    coarse = fd.critical_crossings(determinant,seeds,normal,targets,1.,grid_size=65)
+    fine = fd.critical_crossings(determinant,seeds,normal,targets,1.,grid_size=129)
+    expected = .17+.08*seeds[:,0]**2
+    np.testing.assert_allclose(coarse[:,1],expected,atol=4e-6)
+    np.testing.assert_allclose(fine,coarse,atol=6e-6)
+    np.testing.assert_array_equal(coarse[:,0],seeds[:,0])
+    missing = fd.critical_crossings(lambda p: np.ones(len(p)),seeds,normal,targets,1.)
+    assert np.isnan(missing).all()
+    # A sign jump from tabulated derivatives is a boundary, not an exact zero.
+    jump = fd.critical_crossings(lambda p: np.where(p[:,1]<.13,-1.,1.),seeds,normal,targets,1.)
+    np.testing.assert_allclose(jump[:,1],.13,atol=4e-6)
+
+
+def test_grf_critical_crossings_follow_nearest_branch():
+    seeds = np.array([[0.,0.],[1.,0.]])
+    def determinant(p): return (p[:,1]-.2)*(p[:,1]+.4)
+    result = fd.critical_crossings(determinant,seeds,np.array([0.,1.]),np.array([.1,-.3]),1.)
+    np.testing.assert_allclose(result[:,1],[.2,-.4],atol=4e-6)
+
+
+def test_local_critical_band_does_not_bridge_unrelated_branch():
+    x=np.linspace(-2,2,41)
+    curves=np.stack([np.column_stack([x,np.zeros_like(x)])]*3)
+    curves[:,30:,1]=4.
+    selected=fd.local_critical_branches(curves,np.zeros(2),4.)
+    np.testing.assert_array_equal(selected[:,:30],curves[:,:30])
+    assert np.isnan(selected[:,30:]).all()
+
+
+def test_caustic_centering_preserves_knot_separations_and_removes_common_shift():
+    shifts=np.array([[0.,0.],[4.,-3.],[-2.,7.]])
+    knots=np.array([[.1,.02],[.3,-.04],[-.1,.05]])
+    angle=.7
+    basis=np.array([[np.cos(angle),np.sin(angle)],[-np.sin(angle),np.cos(angle)]])
+    sources=shifts[:,None]+knots
+    aligned=fd.caustic_centered_sources(sources,shifts,basis)
+    np.testing.assert_allclose(aligned,np.broadcast_to(knots@basis.T,aligned.shape),atol=1e-14)
+    before=np.linalg.norm(sources[:,1]-sources[:,0],axis=1)
+    after=np.linalg.norm(aligned[:,1]-aligned[:,0],axis=1)
+    np.testing.assert_allclose(after,before,atol=1e-14)
+
+
+def test_caustic_anchor_does_not_connect_missing_curve_segments():
+    curve=np.array([[-1.,.2],[1.,.2],[np.nan,np.nan],[3.,4.],[4.,4.]])
+    anchor=fd.curve_cross_section_anchor(curve,np.zeros(2),np.array([1.,0.]))
+    np.testing.assert_allclose(anchor,[0.,.2])
+    missing=np.array([[-2.,.2],[-1.,.2],[np.nan,np.nan],[1.,.2],[2.,.2]])
+    assert fd.curve_cross_section_anchor(missing,np.zeros(2),np.array([1.,0.])) is None
+
+
+def test_aligned_sources_follow_each_draw_grf_caustic(monkeypatch):
+    import jax.numpy as jnp
+    class Evaluator:
+        calls=0
+        def physical(self,t): return t
+        def source_positions(self,t): return jnp.array([[.4,t[0]+.01]])
+        def packed_state_for_z(self,p,z): return p
+        def gp_deflection_correction(self,t):
+            self.calls+=1
+            def correction(x,y,families):
+                z=np.zeros_like(x)
+                return z,.2*y+.03,z,z,z,z+.2
+            return correction
+    def fields(p,q):
+        x,y=q.T
+        beta=jnp.column_stack([2*x,y*y/2+p[0]])
+        a=jnp.zeros((len(q),2,2)).at[:,0,0].set(2.).at[:,1,1].set(y)
+        return beta,a
+    monkeypatch.setattr(fd,'_kernels',lambda e:(fields,None,None))
+    curve=np.column_stack([np.linspace(-1,1,97),np.full(97,.2)])
+    system=dict(system_id='toy',family_ids=['A'],anchor_family_id='A',z_source=2.,
+        origin=np.zeros(2),normal=np.array([0.,1.]),critical_grf_local_draws=np.tile(curve,(2,1,1)),
+        relative=np.zeros((2,1,2)))
+    data=dict(systems=[system],draw_indices=[0,1],best_draw=1)
+    state=SimpleNamespace(images=SimpleNamespace(family_ids=['A']))
+    evaluator=Evaluator()
+    posterior=SimpleNamespace(samples=np.array([[-3.],[4.]]))
+    fd.add_caustic_aligned_sources(state,evaluator,posterior,data,log=lambda _:None)
+    np.testing.assert_allclose(system['source_aligned_grf'][:,0],[[.4,.06],[.4,.06]],atol=1e-12)
+    np.testing.assert_allclose(system['caustic_aligned_grf_best'][:,1],0.,atol=1e-12)
+    fd.add_caustic_aligned_sources(state,evaluator,posterior,data,log=lambda _:None)
+    assert evaluator.calls==2
+
+
+def test_prepare_fold_plot_upgrades_old_cache_and_records_gravitational_display(monkeypatch):
+    calls=[]
+    def knots(config,state,evaluator,posterior,data,**kwargs):
+        calls.append('knots');data['systems']=[];return data
+    def grf(state,evaluator,posterior,data,**kwargs):
+        calls.append('grf');return data
+    monkeypatch.setattr(fd,'add_system_knots',knots)
+    monkeypatch.setattr(fd,'add_best_grf_critical_curves',grf)
+    state=SimpleNamespace(images=SimpleNamespace(system_ids=['S']),gp_blocks='all')
+    evaluator=SimpleNamespace(gp_knee=True)
+    data=dict(pairs=[])
+    fd.prepare_fold_plot_data(None,state,evaluator,None,data)
+    assert calls==['knots','grf']
+    presentation=data['plot_presentation']
+    assert not presentation['gp_displacement_overlay']
+    assert not presentation['model_image_markers']
+    assert presentation['grf_interpolation_version']==fd.PLOT_FIELD_VERSION
+    calls.clear()
+    fd.prepare_fold_plot_data(None,state,evaluator,None,data)
+    assert calls==['grf']  # Existing system geometry is reused.
+
+
+def test_standard_system_render_retains_latest_style_and_ignores_cached_gp(synthetic_config,tmp_path,monkeypatch):
+    from lenscluster import cutouts
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.contour import QuadContourSet
+    rng=np.random.default_rng(38);n=40
+    curve=np.column_stack([np.linspace(-2,2,97),np.zeros(97)])
+    observed=np.array([[0.,-.5],[0.,.5]])
+    positions=observed+rng.normal(size=(n,2,2))*.025
+    source=rng.normal(size=(n,1,2))*[.4,.02]
+    system=dict(system_id='S',image_ids=['a','b'],family_ids=['S1'],knot_ids=['A'],labels=['a','b'],
+        image_family_index=np.array([0,0]),center=np.zeros(2),fov=4.,z_source=2.,
+        observed=observed,positions=positions,relative=source,source_cartesian_grf=source,source_aligned_grf=source,
+        caustic_aligned_grf_best=curve,caustic_grf_best=curve,
+        critical=np.tile(curve,(n,1,1)),critical_parametric_best=curve+[0.,.2],critical_grf_best=curve,
+        critical_grf_draws=np.tile(curve,(n,1,1)),normal=np.array([0.,1.]),origin=np.zeros(2),seeds=curve,
+        gp_adjusted_mean_positions=positions+100.,gp_displacement_covariance=np.zeros((n,2,2,2)))
+    data=dict(systems=[system],pairs=[],best_draw=0,draw_indices=list(range(n)))
+    wcs=WCS(naxis=2);wcs.wcs.crpix=[1000,1000];wcs.wcs.crval=[0,0]
+    wcs.wcs.cdelt=[-.05/3600,.05/3600];wcs.wcs.ctype=['RA---TAN','DEC--TAN']
+    band=SimpleNamespace(wcs=wcs,shape=(2000,2000),pixel_scale_arcsec=.05)
+    monkeypatch.setattr(cutouts,'rgb_cutout',lambda *args:np.full((80,80,3),.2))
+    captured=[];save=PdfPages.savefig
+    def capture(self,fig,*args,**kwargs):
+        captured.append(fig);return save(self,fig,*args,**kwargs)
+    monkeypatch.setattr(PdfPages,'savefig',capture)
+    output=fd.render_fold_diagnostics(synthetic_config,SimpleNamespace(reference=(3,0.,0.)),data,
+        SimpleNamespace(figures=tmp_path),({'F814W':band},('F814W',),None,'toy'),log=lambda _:None)
+    assert output.read_bytes().startswith(b'%PDF')
+    upper,lower=captured[0].axes
+    labels=[t.get_text() for t in upper.get_legend().get_texts()]
+    assert not any('GP' in label or '%' in label or 'image' in label for label in labels)
+    crosses=[line for line in upper.lines if line.get_marker()=='x']
+    assert len(crosses)==2
+    assert all(c.get_markersize()==11 and c.get_markeredgewidth()==1.25 and c.get_path_effects() for c in crosses)
+    assert not any(line.get_marker() in ('o','D') for line in upper.lines)
+    contours=[c for c in upper.collections if isinstance(c,QuadContourSet)]
+    assert len(contours)==2
+    for contour in contours:
+        np.testing.assert_allclose(contour.get_linewidths(),[.6,.85])
+        assert contour.get_path_effects()
+    assert any(line.get_color()==fd.GRF_COLOR for line in upper.lines)
+    xspan=np.ptp(lower.get_xlim());yspan=np.ptp(lower.get_ylim())
+    assert yspan<xspan/2  # Flat systems must not inherit a square source-plane range.
+    assert not upper.get_title() and not lower.get_title()
+
+
+def test_critical_curve_quantiles_use_same_draws_and_do_not_bridge_gaps():
+    normal=np.array([.6,.8]);tangent=np.array([.8,-.6]);origin=np.array([2.,-1.])
+    seeds=origin+np.arange(7)[:,None]*tangent
+    shifts=np.linspace(-.3,.8,101)**3  # asymmetric, unlike a median-parameter surrogate
+    curves=seeds[None]+shifts[:,None,None]*normal
+    curves[:30,3]=np.nan
+    segments=fd.critical_curve_quantiles(curves,seeds,origin,normal)
+    assert len(segments)==2
+    for low,median,high in segments:
+        offsets=np.array([low-origin,median-origin,high-origin])@normal
+        expected=np.quantile(shifts,[.16,.5,.84])
+        np.testing.assert_allclose(offsets,np.broadcast_to(expected[:,None],offsets.shape),atol=1e-14)
+        assert np.all(offsets[0]<=offsets[1]) and np.all(offsets[1]<=offsets[2])
+    assert fd.critical_curve_quantiles(np.empty((0,7,2)),seeds,origin,normal)==[]
