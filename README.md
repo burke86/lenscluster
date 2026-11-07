@@ -152,6 +152,17 @@ are SEM across mocks. In the compact figure, horizontal intervals show the centr
 68% and 95% of residuals across mocks; the right panel shows empirical coverage
 of the posterior intervals. Source coordinates are omitted from the compact figure.
 
+Hera and Ares outputs also write `<prefix>_all_vs_image_footprint_histogram.pdf`.
+This compares exact parametric and truth-map projected masses in circular apertures
+of radius twice `Re = 8 * 10**(-0.24*(m_F160W-20))` kpc. The normalization is fixed
+from the exploratory Hera comparison, not retuned for each fit or for Ares.
+All usable members and the subset inside the observed-image convex hull share bins;
+the display shows the central 99% of all ratios. Tables and TeX statistics use the
+full distribution. The physical posterior-median model includes the conditional GRF
+mean when a shared knee-spectrum field is available; otherwise the exported metadata
+explicitly identifies parametric-only masses. Incomplete or numerically unresolved
+apertures are recorded and excluded.
+
 ## Member diagnostics
 
 The normal plotting workflow also writes `member_deviations.pdf` (one multipage PDF),

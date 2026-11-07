@@ -12,6 +12,7 @@ import pandas as pd
 
 from . import plots
 from .chain_traces import write_chain_traces
+from .block_corner import write_posterior_block_corner
 from .config import LensClusterSolverConfig
 from .diagnostics import fit_summary, image_recovery_tables
 from .evaluator import Evaluator
@@ -19,6 +20,7 @@ from .model import ModelState, PosteriorResults
 from .potfile_plots import write_potfile_plots
 from .member_diagnostic_plots import write_member_diagnostic_plots
 from .truth_recovery import compute_truth_recovery
+from .aperture_mass_histogram import write_aperture_mass_histogram
 from .results_tex import write_run_results
 from .gp_plots import write_gp_plots
 from .covariance_plots import write_covariance_plots
@@ -67,6 +69,8 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
     member_table = plots.member_scaling_table(state, posterior)
     member_table.to_csv(tables / "member_scaling_relation.csv", index=False)
     write_potfile_plots(posterior.physical, state.parameter_specs, figures, prefix, posterior=posterior, log=log)
+    write_posterior_block_corner(posterior.physical, state.parameter_specs,
+                                plots.figure_path(figures, "corner_combined.pdf", prefix))
     write_covariance_plots(config, state, evaluator, posterior, paths, log=log)
     write_gp_plots(config, state, evaluator, posterior, paths, log=log)
     write_member_diagnostic_plots(config, state, evaluator, posterior, paths, log=log)
@@ -101,6 +105,7 @@ def write_outputs(config: LensClusterSolverConfig, state: ModelState, evaluator:
 
     truth = compute_truth_recovery(state, evaluator, np.asarray(posterior.samples), config.truth, paths.fits, tables,
                                    seed=config.runtime.seed, log=log)
+    write_aperture_mass_histogram(config, state, evaluator, posterior, paths, image_df, log=log)
     if truth is not None:
         from .exact_images import astropy_cosmology
         from .magnification_recovery_plot import write_magnification_recovery

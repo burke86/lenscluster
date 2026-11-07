@@ -67,7 +67,7 @@ def test_small_catalog_pdf_and_style(synthetic_config, tmp_path, monkeypatch):
     assert all(r['sampled_max_exact_map_error'] is not None for r in rows)
 
 
-@pytest.mark.parametrize("cluster,missing_hst,expected", [("toy",False,1),("m0416",False,2),("as1063",True,1)])
+@pytest.mark.parametrize("cluster,missing_hst,expected", [("toy",False,1),("m0416",False,2),("as1063",True,1),("hera",False,1),("ares",False,1)])
 def test_output_reuses_loaded_imaging(monkeypatch, synthetic_config, tmp_path, cluster, missing_hst, expected):
     from dataclasses import replace
     from lenscluster import outputs, cutouts, mass_figure, chain_traces
@@ -76,7 +76,7 @@ def test_output_reuses_loaded_imaging(monkeypatch, synthetic_config, tmp_path, c
     posterior=SimpleNamespace(samples=np.zeros((1,1)),physical=np.zeros((1,1)),log_prob=np.zeros(1))
     evaluator=SimpleNamespace(physical=lambda p:p,source_positions=lambda p:np.zeros((1,2)))
     paths=SimpleNamespace(tables=tmp_path/'tables',figures=tmp_path/'figures',fits=tmp_path/'fits',root=tmp_path)
-    for name in ['write_chain_traces','write_potfile_plots','write_covariance_plots','write_member_diagnostic_plots','write_run_results']:
+    for name in ['write_chain_traces','write_potfile_plots','write_covariance_plots','write_member_diagnostic_plots','write_run_results','write_posterior_block_corner','write_gp_plots','write_aperture_mass_histogram']:
         monkeypatch.setattr(outputs,name,lambda *a,**k:None)
     for name in ['posterior_summary_table','classification_table']:
         monkeypatch.setattr(outputs,name,lambda *a:pd.DataFrame())
@@ -87,7 +87,7 @@ def test_output_reuses_loaded_imaging(monkeypatch, synthetic_config, tmp_path, c
     monkeypatch.setattr(outputs,'compute_truth_recovery',lambda *a,**k:None)
     monkeypatch.setattr(outputs,'image_recovery_tables',lambda *a,**k:{'image_fit_quality':pd.DataFrame({'image':['a']}),'image_count_recovery':pd.DataFrame(),'image_recovery_extra_images':pd.DataFrame()})
     monkeypatch.setattr(outputs,'fit_summary',lambda *a:{'observed_image_count':1})
-    imaging=object()
+    imaging=cluster if cluster in {"hera","ares"} else "test-imaging"
     def load(image_config, *args):
         if missing_hst and not image_config.figure_suffix:
             raise FileNotFoundError('HST unavailable')
@@ -97,11 +97,21 @@ def test_output_reuses_loaded_imaging(monkeypatch, synthetic_config, tmp_path, c
     calls=[];monkeypatch.setattr(outputs,'write_covariance_cutouts',lambda *a,**k:calls.append(a[5]))
     from lenscluster import image_position_contours
     monkeypatch.setattr(image_position_contours,"load_or_compute_contours",lambda *a,**k:None)
+    from lenscluster import small_lambda_jwst
+    lambda_calls=[]
+    monkeypatch.setattr(small_lambda_jwst,'write_small_lambda_jwst',lambda *a,**k:lambda_calls.append(a))
+    from lenscluster import jwst_rgb_figure
+    rgb_calls=[]
+    monkeypatch.setattr(jwst_rgb_figure,'render_rgb_critical',lambda *a,**k:rgb_calls.append(a))
     fold_calls=[]; fold_renders=[]
-    monkeypatch.setattr(outputs,"compute_fold_diagnostics",lambda *a,**k: fold_calls.append(1) or {"pairs":[]})
+    monkeypatch.setattr(outputs,"compute_fold_diagnostics",lambda *a,**k: fold_calls.append(1) or {"pairs":[],"systems":[]})
     monkeypatch.setattr(outputs,"save_fold_data",lambda *a:None)
     monkeypatch.setattr(outputs,"render_fold_diagnostics",lambda *a,**k:fold_renders.append(a[4]))
     outputs.write_outputs(config,state,evaluator,posterior,{},paths,log=lambda _:None)
+    assert len(rgb_calls)==(1 if cluster in {"hera","ares"} else 0)
+    assert all(call[7].name.endswith("hst_rgb_critical_z9.pdf") for call in rgb_calls)
+    assert len(lambda_calls)==(1 if cluster in {"m0416","as1063"} else 0)
+    assert all(call[5][3] is imaging for call in lambda_calls)
     assert len(fold_calls)==1 and len(fold_renders)==expected
     assert len(calls)==expected and all(call[3] is imaging for call in calls)
 
