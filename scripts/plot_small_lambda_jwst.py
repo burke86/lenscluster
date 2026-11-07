@@ -15,7 +15,7 @@ def main():
     parser.add_argument('--minimum-major-sigma',type=float,default=.1,help='Minimum major-axis posterior standard deviation in arcseconds')
     parser.add_argument('--minimum-axis-ratio',type=float,default=2.,help='Minimum major/minor posterior standard-deviation ratio')
     parser.add_argument('--fov',type=float,default=3.,help='Minimum square field of view in arcseconds; expand to enclose 2-sigma contour')
-    parser.add_argument('--image-dir',default='/data/sync/GalaxyClusterImaging/JWST_Images')
+    parser.add_argument('--image-dir',default='data/imaging')
     args=parser.parse_args()
     if args.count<1 or args.fov<=0:parser.error('count and fov must be positive')
     import matplotlib

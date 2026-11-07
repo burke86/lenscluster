@@ -31,7 +31,7 @@ def parse_args():
     p.add_argument("--field", type=float, default=70.0, help="half-side in arcsec of the searched field")
     p.add_argument("--step", type=float, default=0.25, help="coarse grid step in arcsec")
     p.add_argument("--stamp", type=float, default=4.0, help="side in arcsec of the colour stamps")
-    p.add_argument("--image-dir", default="data/JWST_Images/M0416")
+    p.add_argument("--image-dir", default="data/imaging/m0416/canucs_dr1")
     p.add_argument("--bands", default="F115W,F150W,F200W,F444W")
     p.add_argument("--out", default="output/counter_images")
     return p.parse_args()

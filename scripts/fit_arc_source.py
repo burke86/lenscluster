@@ -49,7 +49,7 @@ def parse_args():
     p.add_argument("--system", default="K12", help="catalog system whose fold pair a-b is fit")
     p.add_argument("--images", default="a,b", help="the images of the system inside the cutout")
     p.add_argument("--band", default="F150W")
-    p.add_argument("--image-dir", default="data/JWST_Images/M0416")
+    p.add_argument("--image-dir", default="data/imaging/m0416/canucs_dr1")
     p.add_argument("--image-kind", choices=["bgsub", "sci"], default="bgsub",
                    help="bgsub: the CANUCS mosaic with the diffuse light and bright galaxies subtracted; sci: the plain mosaic")
     p.add_argument("--arc-radius", type=float, default=0.5,

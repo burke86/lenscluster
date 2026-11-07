@@ -11,7 +11,7 @@ from _covariance_plot_cli import load_run
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_directory')
-    parser.add_argument('--image-dir',default='data/JWST_Images')
+    parser.add_argument('--image-dir',default='data/imaging')
     parser.add_argument('--systems',nargs='+',default=['D36','D24','D19','D60','D37','D35','D1C','D9B'])
     args=parser.parse_args()
     import matplotlib

@@ -139,7 +139,7 @@ def main(argv=None) -> int:
     parser.add_argument("catalog", type=Path)
     parser.add_argument("output", type=Path, help="multi-page PDF")
     parser.add_argument("--dz", type=float, default=0.01, help="largest redshift difference within a set (default 0.01)")
-    parser.add_argument("--image-dir", type=Path, default=Path("data/JWST_Images"))
+    parser.add_argument("--image-dir", type=Path, default=Path("data/imaging"))
     parser.add_argument("--cluster", default="m0416")
     parser.add_argument("--bands", nargs="+", default=["F115W", "F150W", "F200W", "F444W"])
     parser.add_argument("--margin", type=float, default=1.0)

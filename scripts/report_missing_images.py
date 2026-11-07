@@ -30,7 +30,7 @@ def parse_args():
     p.add_argument("--sites", required=True, help="output folder of find_missing_images.py")
     p.add_argument("--grades", default="A (spec-z),A,B", help="grades shown as new candidates")
     p.add_argument("--stamp", type=float, default=4.0)
-    p.add_argument("--image-dir", default="data/JWST_Images/M0416")
+    p.add_argument("--image-dir", default="data/imaging/m0416/canucs_dr1")
     p.add_argument("--cluster", choices=["m0416", "as1063"], default="m0416")
     p.add_argument("--bands", default="F115W,F150W,F200W,F444W")
     return p.parse_args()

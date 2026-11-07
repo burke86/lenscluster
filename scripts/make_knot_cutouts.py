@@ -7,7 +7,7 @@ apart, then the rest.  Stamps are in the mosaic's pixel orientation.
 
 Example:
     python scripts/make_knot_cutouts.py catalogs/m0416/bergamini2023/images.yaml output/knot_cutouts/m0416_bergamini_jwst_knots.pdf \\
-        --image-dir /Users/isaque.dutra/sync/GalaxyClusterImaging/JWST_Images
+        --image-dir data/imaging
 """
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("catalog", type=Path)
     parser.add_argument("output", type=Path, help="multi-page PDF")
-    parser.add_argument("--image-dir", type=Path, default=Path("data/JWST_Images"))
+    parser.add_argument("--image-dir", type=Path, default=Path("data/imaging"))
     parser.add_argument("--cluster", default="m0416", help="imaging cluster key (cutouts.CLUSTER_IMAGE_TOKENS)")
     parser.add_argument("--bands", nargs="+", default=["F115W", "F150W", "F200W", "F444W"])
     parser.add_argument("--margin", type=float, default=1.2, help="arcsec around the knots")

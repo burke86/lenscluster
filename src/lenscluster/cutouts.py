@@ -94,7 +94,7 @@ def imaging_variants(config, *, overview_only=False):
     if cluster in {"m0416", "as1063"} and not any(
         str(band).upper() in DEFAULT_JWST_RGB_BANDS for band in (primary.bands or ())
     ):
-        variants.append(replace(primary, image_dir="data/JWST_Images", image_scale="auto",
+        variants.append(replace(primary, image_dir=f"data/imaging/{cluster}/{'canucs_dr1' if cluster == 'm0416' else 'dja_v7.5'}", image_scale="auto",
                                 bands=tuple(DEFAULT_JWST_RGB_BANDS), rgb=DisplayConfig(),
                                 figure_suffix="_jwst"))
     if overview_only:

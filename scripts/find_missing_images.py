@@ -68,7 +68,7 @@ def parse_args():
     p.add_argument("--step", type=float, default=0.3, help="coarse grid step in arcsec")
     p.add_argument("--families", default="", help="comma list of families to search (default all)")
     p.add_argument("--sigma-pos", type=float, default=0.4, help="model positional error in arcsec added to the draw spread")
-    p.add_argument("--image-dir", default="data/JWST_Images/M0416")
+    p.add_argument("--image-dir", default="data/imaging/m0416/canucs_dr1")
     p.add_argument("--cluster", choices=["m0416", "as1063"], default="m0416",
                    help="photometry and published catalogs: CANUCS (M0416) or DJA v7.5 + Diego/Caminha/Bergamini (AS1063, colours only)")
     p.add_argument("--out", default="output/missing_images")

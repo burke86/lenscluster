@@ -6,7 +6,7 @@ Three scripts reconstruct the source of a lensed arc in JWST light with the lens
 - `make_source_rgb.py` makes the NIRCam colour figure: the observed arc, the model arc and the source.
 - `predict_counter_images.py` traces a system's model source through the whole field and finds every image, including ones the catalog lacks.
 
-The data come from `data/JWST_Images/M0416`: the CANUCS DR1 bgsub mosaics, rms maps and `_psf.fits.gz` PSFs. Decompressed `.fits` files are faster to read than `.gz`. Keep rms and PSF files out of the science-image lookup (see `ANCILLARY_PRODUCT_TOKENS` in `src/lenscluster/cutouts.py`).
+The data come from `data/imaging/m0416/canucs_dr1` (the CANUCS DR1 sci mosaics; the bgsub mosaics, rms maps and PSFs of the same release sit beside them when downloaded): the CANUCS DR1 bgsub mosaics, rms maps and `_psf.fits.gz` PSFs. Decompressed `.fits` files are faster to read than `.gz`. Keep rms and PSF files out of the science-image lookup (see `ANCILLARY_PRODUCT_TOKENS` in `src/lenscluster/cutouts.py`).
 
 ## Rerunning on a new lens model
 

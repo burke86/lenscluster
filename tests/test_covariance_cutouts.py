@@ -128,6 +128,6 @@ def test_default_jwst_variants(synthetic_config):
         assert jwst.bands == tuple(DEFAULT_JWST_RGB_BANDS)
         assert jwst.rgb == RGBDisplayConfig()
         assert jwst.figure_suffix == '_jwst'
-        assert jwst.image_dir == 'data/JWST_Images'
+        assert jwst.image_dir in ('data/imaging/m0416/canucs_dr1', 'data/imaging/as1063/dja_v7.5')
         assert imaging_variants(replace(config, image_catalog=jwst)) == [jwst]
     assert imaging_variants(synthetic_config) == [synthetic_config.image_catalog]

@@ -305,7 +305,7 @@ def main():
             p.error('Source-grid reference must use the same run, system, images and fixed lens components')
     if args.science is None:
         scale=40 if args.band=='F444W' else 20
-        stem=ROOT/f'data/JWST_Images/M0416/hlsp_canucs_jwst_nircam_macs0416-clu-{scale}mas_{args.band.lower()}_v1_sci.fits'
+        stem=ROOT/f'data/imaging/m0416/canucs_dr1/hlsp_canucs_jwst_nircam_macs0416-clu-{scale}mas_{args.band.lower()}_v1_sci.fits'
         args.science=stem if stem.exists() else Path(str(stem)+'.gz')
     if args.psf is None and args.psf_fwhm is None:
         args.psf=matching_product(args.science,'psf')

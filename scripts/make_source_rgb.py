@@ -30,7 +30,7 @@ def parse_args():
     p.add_argument("runs", nargs="+", help="fit_arc_source output folders, one per band, sharing one source grid")
     p.add_argument("--out", required=True, help="output PDF")
     p.add_argument("--draw", type=int, default=0, help="index of the lens draw (0 = the best draw)")
-    p.add_argument("--image-dir", default="data/JWST_Images/M0416")
+    p.add_argument("--image-dir", default="data/imaging/m0416/canucs_dr1")
     p.add_argument("--source-zoom", type=float, default=0.4, help="crop the source panel to this fraction of the grid around its light")
     p.add_argument("--source-smooth", type=float, default=3.0,
                    help="Gaussian sigma in source pixels applied to every band's source for display (per-pixel noise is independent "

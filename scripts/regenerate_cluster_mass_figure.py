@@ -35,8 +35,12 @@ def main():
         from lenscluster.rgb import DEFAULT_HFF_RGB_BANDS, DEFAULT_JWST_RGB_BANDS
         jwst = args.imaging == "jwst"
         from lenscluster.config import RGBDisplayConfig
+        from lenscluster.cutouts import cluster_from_config
+        cluster = cluster_from_config(config.model, config.paths.run_name)
+        jwst_dir = f"data/imaging/{cluster}/{'canucs_dr1' if cluster == 'm0416' else 'dja_v7.5'}"
+        hst_dir = f"data/imaging/{cluster}/buffalo"
         # The run's saved display numbers belong to the imaging it was run with; the library defaults carry the balance.
-        config = replace(config, image_catalog=replace(config.image_catalog, image_dir="data/JWST_Images" if jwst else "data/BUFFALO_Images",
+        config = replace(config, image_catalog=replace(config.image_catalog, image_dir=jwst_dir if jwst else hst_dir,
                                                        image_scale="auto", bands=tuple(DEFAULT_JWST_RGB_BANDS if jwst else DEFAULT_HFF_RGB_BANDS),
                                                        rgb=RGBDisplayConfig(), figure_suffix="_jwst" if jwst else ""))
     from dataclasses import replace

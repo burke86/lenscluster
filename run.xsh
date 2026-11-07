@@ -14,6 +14,9 @@ seed = 12345
 # New family A: A.1, A.2, A.3; geometric z=1.3847046874, no spectroscopic redshift.
 # This catalog controls RGB overlays (family-matched circles/squares; green family-A squares).
 M0416_CANDIDATES = "src/lenscluster/data/m0416_candidates.json"
+# Critical-curve RGB composite: top left-to-right, then right top-to-bottom.
+M0416_RGB_IMAGE_CUTOUTS = ("K34.b", "K34.a", "K33.e", "K77.b")
+M0416_RGB_FOLD_CUTOUTS = ("K1", "K6", "K8", "K12")
 
 $MPLCONFIGDIR = "/tmp/matplotlib-lenscluster"
 os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib-lenscluster"
@@ -72,12 +75,20 @@ SIGMA_INST_ARCSEC = 0.001
 # HFF display settings for observed clusters.
 HFF_RGB_BANDS = ["F435W", "F606W", "F814W", "F105W", "F125W", "F140W", "F160W"]
 HFF_RGB_DISPLAY = {}      # library defaults: f_nu-scaled Lupton display with the warm-white balance of lenscluster.rgb
-# --imaging jwst: NIRCam mosaics (CANUCS for MACS0416, DJA for AS1063) under data/JWST_Images; blue F115W+F150W, green
+# --imaging jwst: NIRCam mosaics (CANUCS for MACS0416, DJA for AS1063) under data/imaging/<cluster>/{canucs_dr1,dja_v7.5} (scripts/download_imaging.py); blue F115W+F150W, green
 # F150W+F200W, red F444W, the STScI/UNCOVER hue assignment with the four bands we hold.
 JWST_RGB_BANDS = ["F115W", "F150W", "F200W", "F444W"]
 
 VALID_CLUSTERS = "ARES, HERA, AS1063, AS1063_JWST, M0416_BERGAMINI2023, M0416_CANUCS2025"
 FF_RGB_BANDS = ("F435W", "F606W", "F814W")
+
+
+def imaging_dir(cluster_key: str, imaging: str) -> str:
+    """data/imaging/<cluster>/<source> (scripts/download_imaging.py): the JWST mosaics (CANUCS DR1 for M0416, DJA v7.5 for
+    AS1063), the BUFFALO HST mosaics, or the FF-SIMS simulated HST images of Hera and Ares."""
+    cluster = cluster_key.split("_")[0]
+    source = {"jwst": "canucs_dr1" if cluster == "m0416" else "dja_v7.5", "hst": "buffalo", "ffsims": "ffsims"}[imaging]
+    return f"data/imaging/{cluster}/{source}"
 FF_RGB_DISPLAY = RGBDisplayConfig(q=6.8, stretch=0.0158, minimum=0.00105, red_gain=0.62, green_gain=0.78, blue_gain=3.65)
 
 
@@ -255,9 +266,9 @@ FF_SIMS_CLUSTERS = {
         # The brightest cluster galaxies stay in the scaling relation, as on Hera: independent halos cost parameters, made
         # the chains multi-well and did not improve the fit.
         "independent_member_halos": (),
-        "kappa_true_fits": "data/ff_sims/published/ares/kappa_z9_0.fits",
-        "gammax_true_fits": "data/ff_sims/published/ares/gammax_z9_0.fits",
-        "gammay_true_fits": "data/ff_sims/published/ares/gammay_z9_0.fits",
+        "kappa_true_fits": "data/imaging/ares/ffsims/kappa_z9_0.fits",
+        "gammax_true_fits": "data/imaging/ares/ffsims/gammax_z9_0.fits",
+        "gammay_true_fits": "data/imaging/ares/ffsims/gammay_z9_0.fits",
         # Ares is semi-analytic: its subhalos are analytic profiles, so there is no resolution softening to match.
         "softening_length_kpc": 0.0,
     },
@@ -272,9 +283,9 @@ FF_SIMS_CLUSTERS = {
         ),
         "member_population": MemberPopulationConfig.bergamini2019("potfile_1", "catalogs/hera/members.yaml", 0.507, prior_mag0=19.82),
         "independent_member_halos": (),
-        "kappa_true_fits": "data/ff_sims/published/hera/kappa_z9_0.fits",
-        "gammax_true_fits": "data/ff_sims/published/hera/gammax_z9_0.fits",
-        "gammay_true_fits": "data/ff_sims/published/hera/gammay_z9_0.fits",
+        "kappa_true_fits": "data/imaging/hera/ffsims/kappa_z9_0.fits",
+        "gammax_true_fits": "data/imaging/hera/ffsims/gammax_z9_0.fits",
+        "gammay_true_fits": "data/imaging/hera/ffsims/gammay_z9_0.fits",
         # Hera is an N-body cluster (H0 = 72, softening 2.3 h^-1 kpc = 3.19 kpc): added in quadrature to the member cores so
         # that their cusps match the simulation's resolution; the dPIE total mass is independent of the core.
         "softening_length_kpc": 2.3 / 0.72,
@@ -725,7 +736,9 @@ def build_config(
                                   gammay_true_fits=cluster_config.get("gammay_true_fits")),
         image_catalog=ImageCatalogCutoutConfig(
             candidate_catalog_path=M0416_CANDIDATES if cluster == "M0416_CANUCS2025" else None,
-            image_dir=("data/JWST_Images" if imaging == "jwst" else "data/BUFFALO_Images") if is_hff else "data/ff_sims",
+            rgb_critical_image_cutouts=M0416_RGB_IMAGE_CUTOUTS if cluster.startswith("M0416") else (),
+            rgb_critical_fold_cutouts=M0416_RGB_FOLD_CUTOUTS if cluster.startswith("M0416") else (),
+            image_dir=imaging_dir(cluster_config["cluster_key"], imaging if is_hff else "ffsims"),
             image_scale="auto",
             bands=(tuple(JWST_RGB_BANDS) if imaging == "jwst" else tuple(HFF_RGB_BANDS)) if is_hff else FF_RGB_BANDS,
             rgb=RGBDisplayConfig(**HFF_RGB_DISPLAY) if is_hff else FF_RGB_DISPLAY,
