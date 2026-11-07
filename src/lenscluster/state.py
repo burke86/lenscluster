@@ -693,7 +693,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 centered=False, scale_site_name=specs[int(scale_index[component])].sample_name,
                 dof=float(getattr(scaling, "member_deviation_dof", 4.0)) if heavy_tail else None))
     sigma_def_index = sigma_extra_index = sigma_sel_index = lambda_sel_index = sigma_shared_index = sigma_white_index = gp_ell_index = -1
-    gp_u_small_index = gp_ell_small_index = gp_sigma_large_index = gp_sigma_alpha_index = gp_knee_index = gp_knee_gamma_index = -1
+    gp_sigma_alpha_index = gp_knee_index = gp_knee_gamma_index = -1
     gp_sigma_alpha2_index = gp_knee2_index = gp_knee_beta_low_index = -1
     likelihood = config.likelihood
     spectrum = str(getattr(likelihood, "gp_knee_spectrum", "knee"))
@@ -731,20 +731,6 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         sigma_white_index = len(specs)
         specs.append(_half_normal_scale_spec("images.sigma_white", "images_sigma_white", "images", "sigma_white",
                                              float(likelihood.gp_knee_sigma_white_prior_scale_arcsec)))
-    elif likelihood.likelihood_mode == "gp_image_plane" and likelihood.gp_kernel == "potential":
-        # Potential kernel: u_S = sigma_S / ell_S and ell_S (log-normal), sigma_L (half-normal, optional) and the image-plane
-        # measurement term sigma_extra (optional); ell_L is fixed.  No sigma_shared, sigma_white, gp_ell or source-plane floors.
-        gp_u_small_index = len(specs)
-        specs.append(_error_scale_spec("images.gp_u_small", "images_gp_u_small", "images", "gp_u_small", likelihood.gp_u_small_prior))
-        gp_ell_small_index = len(specs)
-        specs.append(_error_scale_spec("images.gp_ell_small", "images_gp_ell_small", "images", "gp_ell_small", likelihood.gp_ell_small_prior))
-        if likelihood.gp_sigma_large_prior_scale_arcsec is not None:
-            gp_sigma_large_index = len(specs)
-            specs.append(_half_normal_scale_spec("images.gp_sigma_large", "images_gp_sigma_large", "images", "gp_sigma_large",
-                                                 float(likelihood.gp_sigma_large_prior_scale_arcsec)))
-        if likelihood.sigma_extra_prior is not None:
-            sigma_extra_index = len(specs)
-            specs.append(_error_scale_spec("images.sigma_extra", "images_sigma_extra", "images", "sigma_extra", likelihood.sigma_extra_prior))
     elif likelihood.likelihood_mode == "gp_image_plane":
         # Two sampled image-plane scales; the source-plane floors and the selection term do not exist in this model.
         sigma_shared_index = len(specs)
@@ -839,10 +825,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         lambda_sel_param_index=int(lambda_sel_index), sigma_shared_param_index=int(sigma_shared_index), sigma_white_param_index=int(sigma_white_index),
         gp_ell_param_index=int(gp_ell_index), gp_correlation_length_arcsec=float(config.likelihood.gp_correlation_length_arcsec),
         gp_floor_arcsec=float(config.likelihood.gp_floor_arcsec),
-        gp_kernel=str(config.likelihood.gp_kernel), gp_kernel_family=str(config.likelihood.gp_kernel_family),
-        gp_u_small_param_index=int(gp_u_small_index), gp_ell_small_param_index=int(gp_ell_small_index),
-        gp_sigma_large_param_index=int(gp_sigma_large_index), gp_ell_large_arcsec=float(config.likelihood.gp_ell_large_arcsec),
-        gp_reference_redshift=float(config.likelihood.gp_reference_redshift),
+        gp_kernel=str(config.likelihood.gp_kernel), gp_reference_redshift=float(config.likelihood.gp_reference_redshift),
         gp_blocks=str(config.likelihood.gp_blocks),
         gp_knee=dict(gamma=float(config.likelihood.gp_knee_gamma), project=tuple(str(m) for m in config.likelihood.gp_knee_project_modes),
                      spectrum=spectrum, plane_redshift=float(getattr(config.likelihood, "gp_knee2_plane_redshift", 0.7)), knee_fixed=config.likelihood.gp_knee_fixed_arcsec, ell_fixed=config.likelihood.gp_knee_ell_fixed_arcsec,
@@ -886,11 +869,6 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
         if gp_ell_index >= 0:
             state.initial_theta[gp_ell_index] = float(np.log(config.likelihood.gp_knee_ell_start_arcsec))
         state.initial_theta[sigma_white_index] = float(config.likelihood.gp_knee_sigma_white_start_arcsec)
-    if gp_u_small_index >= 0:
-        state.initial_theta[gp_u_small_index] = float(np.log(config.likelihood.gp_u_small_start))
-        state.initial_theta[gp_ell_small_index] = float(np.log(config.likelihood.gp_ell_small_start_arcsec))
-    if gp_sigma_large_index >= 0:
-        state.initial_theta[gp_sigma_large_index] = float(config.likelihood.gp_sigma_large_start_arcsec)
     return with_member_classes(state, exact, classification, centered=np.zeros(n_members, dtype=bool))
 
 

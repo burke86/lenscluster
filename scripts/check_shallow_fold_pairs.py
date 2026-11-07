@@ -1,6 +1,6 @@
 """Own depth and depth error of the shallow fold pairs at a saved run's best fit, for the gp_image_plane pre-run check.
 
-Works on a run of any likelihood mode: only the lens model enters.  For a gp_kernel="potential" run the
+Works on a run of any likelihood mode: only the lens model enters.  For a gp_kernel="knee" run the
 --sigma-shared/--sigma-white values are ignored: the hyperparameters come from the draw itself.  ell and sigma_fl default to the saved configuration (or
 the library defaults for a run without them) and can be overridden to see what a planned run would get.
 """

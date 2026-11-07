@@ -539,18 +539,9 @@ def _run_init(config: LensClusterSolverConfig) -> InitResult:
                 header = (f"grf_gp likelihood (GRF of unmodelled mass with a knee spectrum + image-plane GP) on {evaluator.gp_blocks} blocks at the start: sigma_alpha {scales['gp_sigma_alpha']:.3f}\" knee {scales['gp_knee']:.2f}\" slope {scales['gp_knee_gamma']:.2f} "
                           f"sigma_shared {scales['sigma_shared']:.3f}\" at {scales['gp_ell']:.2f}\" sigma_white {scales['sigma_white']:.3f}\"")
                 pairs = shallow_fold_pairs(state, evaluator, theta)
-                log(shallow_fold_pair_report(pairs, evaluator.gp_floor, header=header, potential=True))
+                log(shallow_fold_pair_report(pairs, evaluator.gp_floor, header=header, knee=True))
                 artifacts.write_json(paths.tables / "shallow_fold_pairs.json", {"pairs": pairs, "model": "init start", "likelihood": "grf_gp", "gp_kernel": "knee",
                                                                                  "gp_blocks": evaluator.gp_blocks, **scales})
-            elif evaluator.gp_potential:
-                scales = {k: float(v) for k, v in evaluator.error_scales(evaluator.physical(jnp.asarray(theta))).items()
-                          if k in ("gp_u_small", "gp_ell_small", "gp_sigma_small", "gp_sigma_large", "gp_ell_large", "sigma_extra")}
-                header = (f"{evaluator.gp_kernel_family} potential kernel at the start: sigma_S {scales['gp_sigma_small']:.3f}\" ell_S {scales['gp_ell_small']:.2f}\" "
-                          f"sigma_L {scales['gp_sigma_large']:.3f}\" ell_L {scales['gp_ell_large']:.1f}\" sigma_extra {scales['sigma_extra']:.3f}\"")
-                pairs = shallow_fold_pairs(state, evaluator, theta)
-                log(shallow_fold_pair_report(pairs, evaluator.gp_floor, header=header, potential=True))
-                artifacts.write_json(paths.tables / "shallow_fold_pairs.json", {"pairs": pairs, "model": "init start", "gp_kernel": "potential",
-                                                                                 "gp_kernel_family": evaluator.gp_kernel_family, **scales})
             else:
                 shared, white = float(config.likelihood.sigma_shared_start_arcsec), float(config.likelihood.sigma_white_start_arcsec)
                 pairs = shallow_fold_pairs(state, evaluator, theta, sigma_shared_arcsec=shared, sigma_white_arcsec=white)
@@ -702,8 +693,7 @@ def dry_run(config: LensClusterSolverConfig) -> dict[str, Any]:
         "output": {"init": str(run_paths(config).init.root), "final": str(run_paths(config).final.root)},
         "likelihood": {"smoothed": "smoothed-local-image-plane",
                        "gp_image_plane": ("gp-image-plane (correlated image-plane displacements per family)" if config.likelihood.gp_kernel == "image_plane"
-                                          else f"grf_gp (GRF of unmodelled mass with a knee spectrum + image-plane GP, {config.likelihood.gp_blocks} blocks)" if config.likelihood.gp_kernel == "knee"
-                                          else f"gp-potential ({config.likelihood.gp_kernel_family} deflection kernel, two scales, per family)")}.get(
+                                          else f"grf_gp (GRF of unmodelled mass with a knee spectrum + image-plane GP, {config.likelihood.gp_blocks} blocks)")}.get(
             config.likelihood.likelihood_mode, config.likelihood.likelihood_mode),
         "parameters": int(state.n_parameters), "images": int(state.images.n_images), "families": int(state.images.n_families),
         "members": int(len(state.members.member_ids)), "components": int(len(state.base_components)),

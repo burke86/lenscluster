@@ -123,8 +123,8 @@ class ExactImageSolver:
         or the iteration budget is spent; starts that produce non-finite values are frozen.  Returns per start: the
         final position, whether it converged, whether it passes the identification tolerance (the Newton step at the
         final position is small, so it sits on a root), the iteration count and the final step and source residual.
-        ``correction(x, y)`` adds a deflection field to the lens (the GP conditional mean under the potential kernel, see
-        ``gp_image_plane.MeanDeflection``), aligned with the starts."""
+        ``correction(x, y)`` adds a deflection field to the lens (the GP conditional mean under the knee kernel, see
+        ``gp_knee.MeanDeflectionKnee``), aligned with the starts."""
         cfg = self.config
         shoot = self._corrected(self.ray_shoot_and_jacobian if shoot is None else shoot, correction)
         x, y = np.array(start_x, dtype=float), np.array(start_y, dtype=float)
@@ -288,7 +288,7 @@ class ExactImageSolver:
         fine sub-grid that pass the same reach test on their own fields.  All seeds of all families are refined in one
         batched Levenberg-Marquardt solve with per-seed source redshifts; distinct converged roots inside each window are
         the images.  Returns (x, y) per family, in order.  ``correction(x, y, family_index)`` adds a deflection field per
-        family (``gp_image_plane.MeanDeflection``), with family_index the position in ``families``."""
+        family (``gp_knee.MeanDeflectionKnee``), with family_index the position in ``families``."""
         cfg = self.config
         coarse, fine = float(cfg.exact_image_grid_pitch_arcsec), float(cfg.exact_image_fine_pitch_arcsec)
         reach = float(cfg.exact_image_seed_tolerance_pitches)

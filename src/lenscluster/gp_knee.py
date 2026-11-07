@@ -455,7 +455,7 @@ def block_residual(backprojected_slots, source, layout):
 class MeanDeflectionKnee:
     """E[delta_alpha(theta) | F] at arbitrary points for one draw: w_point sum_j w_j K_alpha(theta - theta_j) v_j over the
     images of the point's block, v = C^-1 (b - J beta).  Called with (x, y, family indices), returns the deflection and
-    its Jacobian like ``gp_image_plane.MeanDeflection``.  The knee curves are evaluated once at the draw's lambda_t
+    its Jacobian.  The knee curves are evaluated once at the draw's lambda_t
     and interpolated linearly in r (their derivative in r is then piecewise constant, which the solver tolerates)."""
 
     def __init__(self, layout: dict, tables: dict, coefficients, lam: float, sigma_alpha2: float, weights_per_family, gamma=None,

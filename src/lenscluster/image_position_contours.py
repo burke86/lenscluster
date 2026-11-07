@@ -54,8 +54,8 @@ def compute_position_draws(config, state, evaluator, posterior, extra, *, log=pr
     separation = float(config.image_diagnostics.exact_image_min_separation_arcsec)
     for draw, theta in enumerate(posterior.samples):
         packed, sources = prepare(theta); sources = np.asarray(sources)
-        # Potential kernel: the GP mean deflection goes with the draw's source (see Evaluator.gp_deflection_correction).
-        correction = evaluator.gp_deflection_correction(theta) if getattr(evaluator, 'gp_potential', False) else None
+        # Knee kernel: the GP mean deflection goes with the draw's source (see Evaluator.gp_deflection_correction).
+        correction = evaluator.gp_deflection_correction(theta) if getattr(evaluator, 'gp_knee', False) else None
         extra_kwargs = {} if correction is None else dict(correction=lambda x, y: correction(x, y, fi))
         result = solver._refine(packed, sources[fi, 0], sources[fi, 1], *starts.T,
                                 shoot=solver.ray_shoot_and_jacobian_per_image, **extra_kwargs)
@@ -130,7 +130,7 @@ def overview_draw_indices(count, best):
 def load_or_compute_contours(config, state, evaluator, posterior, extra, tables, *, log=print):
     tables=Path(tables); tables.mkdir(parents=True,exist_ok=True)
     fingerprint=hashlib.sha256(np.asarray(posterior.samples).tobytes())
-    fingerprint.update(b"fast-local-known-extra-v1" + (b"-gp-mean-deflection" if getattr(evaluator, 'gp_potential', False) else b""))
+    fingerprint.update(b"fast-local-known-extra-v1" + (b"-gp-mean-deflection" if getattr(evaluator, 'gp_knee', False) else b""))
     fingerprint.update(json.dumps(config.to_json_dict(),sort_keys=True,default=str).encode())
     fingerprint.update(extra.to_csv(index=False).encode())
     fingerprint.update(json.dumps(state.members.classification,sort_keys=True,default=str).encode())

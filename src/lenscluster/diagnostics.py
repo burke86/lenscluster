@@ -25,7 +25,7 @@ def predictions_at(solver: ExactImageSolver, state: ModelState, evaluator: Evalu
     family_by_id = {f.family_id: f for f in state.family_data}
     families = [family_by_id[family_id] for family_id in images.family_ids]
     # Potential kernel: the draw's source scatters by the deflection error, so the lens gets the GP's mean deflection.
-    correction = evaluator.gp_deflection_correction(theta) if getattr(evaluator, "gp_potential", False) else None
+    correction = evaluator.gp_deflection_correction(theta) if getattr(evaluator, "gp_knee", False) else None
     extra_kwargs = {} if correction is None else dict(correction=correction)
     if adaptive is False:        # posterior draws: all families in one batched local solve
         batched = solver.predict_all_local(images, families, evaluator.packed_state(physical)[0], np.asarray(sources), **extra_kwargs)

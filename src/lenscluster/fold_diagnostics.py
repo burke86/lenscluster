@@ -207,7 +207,7 @@ def posterior_image_positions(config, state, evaluator, posterior, *, family_ids
     physical_source = jax.jit(lambda t: (evaluator.physical(t), evaluator.source_positions(t)[selected_index]))
     for draw, theta in enumerate(posterior.samples):
         physical, sources = physical_source(theta)
-        mean = evaluator.gp_deflection_correction(theta) if getattr(evaluator, 'gp_potential', False) else None
+        mean = evaluator.gp_deflection_correction(theta) if getattr(evaluator, 'gp_knee', False) else None
         correction = None if mean is None else (lambda x, y, k: mean(x, y, selected_index[np.asarray(k)]))
         extra_kwargs = {} if correction is None else dict(correction=correction)
         details = solver.predict_all_local(images, families, evaluator.packed_state(physical, factor_per_image=factors)[0], np.asarray(sources),

@@ -160,14 +160,10 @@ DEFAULT_SCALE_SITES = (('images.sigma_shared', 'Shared displacement scale', r'$\
                        ('images.sigma_white', 'Independent displacement scale', r'$\sigma_{\rm white}$', 1e3, 'mas'))
 KNEE_SCALE_SITES = (('images.gp_sigma_alpha', 'Mass-field deflection error', r'$\sigma_\alpha$', 1e3, 'mas'),
                     ('images.gp_knee', 'Knee wavelength', r'$\ell_{\rm knee}$', 1.0, 'arcsec'),
-                    ('images.gp_knee_gamma', 'Spectral slope beyond the knee', r'$p$', 1.0, ''),
+                    ('images.gp_knee_gamma', 'Spectral slope beyond the knee', r'$\gamma_{\rm GRF}$', 1.0, ''),
                     ('images.sigma_shared', 'Image-plane GP amplitude', r'$\sigma_{\rm shared}$', 1e3, 'mas'),
                     ('images.gp_ell', 'Image-plane GP length', r'$\ell$', 1.0, 'arcsec'),
                     ('images.sigma_white', 'Independent position scatter', r'$\sigma_{\rm white}$', 1e3, 'mas'))
-POTENTIAL_SCALE_SITES = (('images.gp_u_small', 'Substructure amplitude per length', r'$u_S=\sigma_S/\ell_S$', 1.0, ''),
-                         ('images.gp_ell_small', 'Substructure length scale', r'$\ell_S$', 1.0, 'arcsec'),
-                         ('images.gp_sigma_large', 'Large-scale deflection error', r'$\sigma_L$', 1e3, 'mas'),
-                         ('images.sigma_extra', 'Extra image-plane scatter', r'$\sigma_{\rm extra}$', 1e3, 'mas'))
 
 
 def plot_scale_posteriors(state, posterior, output, sites=DEFAULT_SCALE_SITES):
@@ -199,83 +195,6 @@ def plot_scale_posteriors(state, posterior, output, sites=DEFAULT_SCALE_SITES):
     fig.text(.5,.055,'Shading marks the central 68% posterior interval; dotted lines mark the medians.',ha='center',fontsize=12)
     fig.text(.5,.025,'Display ranges focus on the fitted scales. Prior curves keep their full normalization.',ha='center',fontsize=12)
     fig.tight_layout(rect=(0,.08,1,1),w_pad=3)
-    return save(fig,output)
-
-
-def potential_medians(state, evaluator, posterior):
-    """Median hyperparameters of the potential kernel from the posterior, with the derived sigma_S."""
-    names=[p.name for p in state.parameter_specs]
-    med=lambda n: float(np.median(posterior.physical[:,names.index(n)])) if n in names else 0.0
-    u,ell=med('images.gp_u_small'),med('images.gp_ell_small')
-    return dict(u_small=u,ell_small=ell,sigma_small=u*ell,sigma_large=med('images.gp_sigma_large'),ell_large=float(evaluator.gp_ell_large),
-                sigma_extra=med('images.sigma_extra'),family=str(evaluator.gp_kernel_family))
-
-
-def plot_potential_kernel(state, evaluator, posterior, output):
-    """Left: same-family links coloured by the deflection-error correlation (mean of the longitudinal and transverse parts)
-    at the median hyperparameters.  Right: the longitudinal and transverse correlation curves of the fitted kernel."""
-    from lenscluster.gp_image_plane import kernel_profile
-    h=potential_medians(state,evaluator,posterior)
-    profile=kernel_profile(h['family'])
-    xy=np.column_stack([state.images.x_obs,state.images.y_obs])
-    slots,mask=(np.asarray(evaluator.gp[k]) for k in ('slots','mask'))
-    total=h['sigma_small']**2+h['sigma_large']**2
-    def curves(d):
-        long=(h['sigma_small']**2*profile['longitudinal'](d/h['ell_small'])+h['sigma_large']**2*profile['longitudinal'](d/h['ell_large']))/total
-        trans=(h['sigma_small']**2*profile['transverse'](d/h['ell_small'])+h['sigma_large']**2*profile['transverse'](d/h['ell_large']))/total
-        return long,trans
-    point=np.zeros(len(xy));segments=[];correlations=[];separations=[]
-    for f in range(len(slots)):
-        rows=slots[f][mask[f]]
-        for n,i in enumerate(rows):
-            for j in rows[n+1:]:
-                sep=np.linalg.norm(xy[i]-xy[j]);long,trans=curves(sep);rho=.5*(long+trans)
-                segments.append([xy[i],xy[j]]);correlations.append(rho);separations.append(sep)
-                point[i]=max(point[i],rho);point[j]=max(point[j],rho)
-    correlations=np.asarray(correlations);separations=np.asarray(separations)
-    fig,(sky,curve)=plt.subplots(1,2,figsize=(14,7))
-    norm=plt.Normalize(-.5,1)
-    visible=np.abs(correlations)>=.2
-    if visible.any():
-        lines=LineCollection(np.asarray(segments)[visible],cmap='coolwarm_r',norm=norm,linewidths=2.2)
-        lines.set_array(correlations[visible]);sky.add_collection(lines)
-        cbar=fig.colorbar(lines,ax=sky,fraction=.035,pad=.035);cbar.set_label(r'Deflection-error correlation $\rho_{ij}$')
-    sky.scatter(*xy.T,s=32,c=point,cmap='coolwarm_r',norm=norm,zorder=3,edgecolors='white',linewidths=.4)
-    sky.set_aspect('equal');sky.invert_xaxis();sky.set_xlabel('x (arcsec)');sky.set_ylabel('y (arcsec)')
-    d=np.geomspace(.1,max(separations.max()*1.05 if separations.size else 30,30),500)
-    long,trans=curves(d)
-    curve.plot(d,trans,color=GP_COLOR,lw=2.4,label='Transverse (across the separation)')
-    curve.plot(d,long,color=WHITE_COLOR,lw=2.4,label='Longitudinal (along the separation)')
-    curve.axhline(0,color='.5',lw=1)
-    if separations.size:
-        curve.scatter(separations,correlations,s=24,color=INK,alpha=.4,linewidths=0,label='Same-family pairs (mean of both)')
-    curve.set(xscale='log',xlim=(.1,d.max()),ylim=(-.55,1.16),xlabel='Image separation (arcsec)',ylabel='Deflection-error correlation')
-    curve.legend(loc='lower left',fontsize=12)
-    curve.text(.04,.95,(rf"{h['family']} kernel: $\sigma_S={1e3*h['sigma_small']:.0f}$ mas, $\ell_S={h['ell_small']:.2g}$ arcsec"
-                        +(rf", $\sigma_L={1e3*h['sigma_large']:.0f}$ mas at $\ell_L={h['ell_large']:.0f}$ arcsec" if h['sigma_large']>0 else '')),
-               transform=curve.transAxes,va='top',fontsize=12)
-    fig.text(.5,.025,r'Medians of the posterior. A mass lump between two images pulls them together (longitudinal anticorrelation) and pushes both sideways alike.',ha='center',fontsize=12)
-    fig.tight_layout(rect=(0,.06,1,1),w_pad=3)
-    return save(fig,output)
-
-
-def plot_potential_pair_errors(state, evaluator, posterior, output):
-    """Source-plane error on the deflection difference of two images against their separation, longitudinal and
-    transverse, for the fitted kernel, with the shallow fold pairs' separations marked."""
-    from lenscluster.gp_image_plane import kernel_profile
-    h=potential_medians(state,evaluator,posterior)
-    profile=kernel_profile(h['family'])
-    d=np.linspace(0,25,500)
-    def difference(part):
-        k=lambda ell: profile[part](d/ell)
-        return np.sqrt(2*h['sigma_small']**2*(1-k(h['ell_small']))+2*h['sigma_large']**2*(1-k(h['ell_large'])))
-    fig,ax=plt.subplots(figsize=(7,7))
-    ax.plot(d,1e3*difference('longitudinal'),color=WHITE_COLOR,lw=2.4,label='Longitudinal')
-    ax.plot(d,1e3*difference('transverse'),color=GP_COLOR,lw=2.4,label='Transverse')
-    ax.axhline(1e3*np.sqrt(2)*state.gp_floor_arcsec,color='.5',ls=':',lw=1.6,label=r'Floor $\sqrt{2}\,\sigma_{\rm fl}$')
-    ax.set(xlim=(0,25),xlabel='Image-pair separation (arcsec)',ylabel=r'Error on $\delta\alpha_i-\delta\alpha_j$ (mas)')
-    ax.legend(loc='lower right',fontsize=12)
-    fig.tight_layout()
     return save(fig,output)
 
 
@@ -317,18 +236,14 @@ def write_gp_plots(config, state, evaluator, posterior, paths, *, log=print):
                 plot_knee_kernel(state, evaluator, posterior, paths.figures / f"{prefix}gp_kernel_curves.pdf"),
                 plot_scale_posteriors(state, posterior, paths.figures / f"{prefix}gp_scale_posteriors.pdf", KNEE_SCALE_SITES),
             ]
-        elif getattr(evaluator, "gp_potential", False):
-            outputs = [
-                plot_potential_kernel(state, evaluator, posterior, paths.figures / f"{prefix}gp_kernel_sky.pdf"),
-                plot_potential_pair_errors(state, evaluator, posterior, paths.figures / f"{prefix}gp_pair_errors.pdf"),
-                plot_scale_posteriors(state, posterior, paths.figures / f"{prefix}gp_scale_posteriors.pdf", POTENTIAL_SCALE_SITES),
-            ]
         else:
             outputs = [
                 plot_kernel_sky(state, evaluator, posterior, paths.figures / f"{prefix}gp_kernel_sky.pdf"),
                 plot_shared_vs_white(state, evaluator, posterior, paths.figures / f"{prefix}gp_shared_vs_white.pdf"),
                 plot_scale_posteriors(state, posterior, paths.figures / f"{prefix}gp_scale_posteriors.pdf"),
             ]
+    from .field_plots import write_field_plots
+    outputs.extend(write_field_plots(config, state, evaluator, posterior, paths, log=log))
     for output in outputs:
         log(f"[outputs] {output}")
     return outputs

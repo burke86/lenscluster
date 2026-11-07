@@ -398,23 +398,9 @@ class LikelihoodConfig:
     gp_correlation_length_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=7.0, log_sigma=0.5, upper=30.0))
     gp_floor_arcsec: float = 0.0015               # sigma_fl, a smoothness floor only (1.5 mas)
     # gp_image_plane only.  gp_kernel selects the structure of the GP term: "image_plane" (above: an image-plane displacement
-    # multiplied by the Jacobian, C = B S B^T) or "potential" (a potential error delta_psi; its gradient is the deflection
-    # error, which enters the source plane directly: C = W K_alpha W + B Sigma_meas B^T + sigma_fl^2 I with
-    # Cov(delta_alpha_a, delta_alpha_b) = -d_a d_b k_psi, see gp_image_plane.deflection_kernel).  Under "potential" the sampled
-    # sites are gp_u_small = sigma_S / ell_S (log-normal; sigma_kappa,S / sqrt 2 for the Gaussian family), gp_ell_small
-    # (log-normal), gp_sigma_large (half-normal; None drops the large scale) and sigma_extra (sigma_extra_prior; the image-plane
-    # measurement term); ell_L is fixed.  sigma_shared, sigma_white and gp_ell do not exist under "potential".  Both scales
-    # use the kernel family gp_kernel_family: "gaussian" or "matern52" (Matern-5/2 on the potential, Matern-3/2 deflection).
-    # The redshift weight w = (D_ds/D_s)(z) / (D_ds/D_s)(gp_reference_redshift) scales each family's deflection error.
+    # multiplied by the Jacobian, C = B S B^T) or "knee" (below: a mass field plus the image-plane GP).  Under "knee" the
+    # redshift weight w = (D_ds/D_s)(z) / (D_ds/D_s)(gp_reference_redshift) scales each family's deflection error.
     gp_kernel: str = "image_plane"
-    gp_kernel_family: str = "gaussian"
-    gp_u_small_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.015, log_sigma=1.1))
-    gp_u_small_start: float = 0.015
-    gp_ell_small_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=2.0, log_sigma=0.5))
-    gp_ell_small_start_arcsec: float = 2.0
-    gp_sigma_large_prior_scale_arcsec: float | None = 0.02   # HalfNormal scale of sigma_L (source plane, at z_ref)
-    gp_sigma_large_start_arcsec: float = 0.01
-    gp_ell_large_arcsec: float = 25.0
     gp_reference_redshift: float = 2.0
     # gp_kernel = "knee" (gp_knee.py, .agents/gp-knee-plan.md): a curl-free mass field on the potential with a knee convergence
     # spectrum P_kappa = P0 / (1 + (k/k_t)^gamma) between gp_knee_scales, plus the image-plane GP, on blocks given by gp_blocks:
@@ -671,8 +657,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     _positive("likelihood.sigma_white_prior_scale_arcsec", config.likelihood.sigma_white_prior_scale_arcsec)
     _positive("likelihood.sigma_shared_start_arcsec", config.likelihood.sigma_shared_start_arcsec)
     _positive("likelihood.sigma_white_start_arcsec", config.likelihood.sigma_white_start_arcsec)
-    if config.likelihood.gp_kernel not in {"image_plane", "potential", "knee"}:
-        raise ValueError("likelihood.gp_kernel must be 'image_plane', 'potential' or 'knee'.")
+    if config.likelihood.gp_kernel not in {"image_plane", "knee"}:
+        raise ValueError("likelihood.gp_kernel must be 'image_plane' or 'knee'.")
     if config.likelihood.gp_blocks not in {"all", "system", "family"}:
         raise ValueError("likelihood.gp_blocks must be 'all', 'system' or 'family'.")
     _positive("likelihood.gp_knee_gamma", config.likelihood.gp_knee_gamma)
@@ -745,15 +731,7 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     for name in ("gp_knee_r_step_arcsec", "gp_sigma_alpha_start_arcsec", "gp_knee_start_arcsec", "gp_knee_sigma_shared_start_arcsec",
                  "gp_knee_ell_start_arcsec", "gp_knee_sigma_white_prior_scale_arcsec", "gp_knee_sigma_white_start_arcsec"):
         _positive(f"likelihood.{name}", getattr(config.likelihood, name))
-    if config.likelihood.gp_kernel_family not in {"gaussian", "matern52"}:
-        raise ValueError("likelihood.gp_kernel_family must be 'gaussian' or 'matern52'.")
-    _positive("likelihood.gp_u_small_start", config.likelihood.gp_u_small_start)
-    _positive("likelihood.gp_ell_small_start_arcsec", config.likelihood.gp_ell_small_start_arcsec)
-    _positive("likelihood.gp_sigma_large_start_arcsec", config.likelihood.gp_sigma_large_start_arcsec)
-    _positive("likelihood.gp_ell_large_arcsec", config.likelihood.gp_ell_large_arcsec)
     _positive("likelihood.gp_reference_redshift", config.likelihood.gp_reference_redshift)
-    if config.likelihood.gp_sigma_large_prior_scale_arcsec is not None:
-        _positive("likelihood.gp_sigma_large_prior_scale_arcsec", config.likelihood.gp_sigma_large_prior_scale_arcsec)
     for label, prior in (("likelihood.sigma_def_prior", config.likelihood.sigma_def_prior),
                          ("likelihood.gp_sigma_alpha_prior", config.likelihood.gp_sigma_alpha_prior),
                          ("likelihood.gp_knee_prior", config.likelihood.gp_knee_prior),
@@ -761,8 +739,6 @@ def validate_config(config: LensClusterSolverConfig) -> None:
                          ("likelihood.gp_knee2_prior", config.likelihood.gp_knee2_prior),
                          ("likelihood.gp_knee_sigma_shared_prior", config.likelihood.gp_knee_sigma_shared_prior),
                          ("likelihood.gp_knee_ell_prior", config.likelihood.gp_knee_ell_prior),
-                         ("likelihood.gp_u_small_prior", config.likelihood.gp_u_small_prior),
-                         ("likelihood.gp_ell_small_prior", config.likelihood.gp_ell_small_prior),
                          ("likelihood.sigma_extra_prior", config.likelihood.sigma_extra_prior),
                          ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior),
                          ("likelihood.lambda_sel_prior", config.likelihood.lambda_sel_prior),

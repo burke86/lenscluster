@@ -30,10 +30,9 @@ class Evaluator:
         self.likelihood_mode = likelihood
         self.gp_mode = likelihood == "gp_image_plane"
         self.gp_kernel = str(getattr(state, "gp_kernel", "image_plane"))
+        # gp_knee: part of the GP is a deflection error in the source plane (the mass field); the image solver adds its mean.
         self.gp_knee = self.gp_mode and self.gp_kernel == "knee"
-        # gp_potential: the GP (or part of it) is a deflection error in the source plane; the image solver then adds its mean.
-        self.gp_potential = self.gp_mode and self.gp_kernel in ("potential", "knee")
-        has_gp_sites = int(state.sigma_shared_param_index) >= 0 or int(getattr(state, "gp_u_small_param_index", -1)) >= 0
+        has_gp_sites = int(state.sigma_shared_param_index) >= 0
         if self.gp_mode != has_gp_sites:
             raise ValueError("gp_image_plane needs a state built with likelihood_mode='gp_image_plane', and the other modes one without")
         self.state = state
@@ -72,9 +71,6 @@ class Evaluator:
         self.lambda_sel_index = int(state.lambda_sel_param_index)
         self.sigma_shared_index, self.sigma_white_index = int(state.sigma_shared_param_index), int(state.sigma_white_param_index)
         self.gp_ell_index = int(getattr(state, "gp_ell_param_index", -1))
-        self.gp_u_small_index = int(getattr(state, "gp_u_small_param_index", -1))
-        self.gp_ell_small_index = int(getattr(state, "gp_ell_small_param_index", -1))
-        self.gp_sigma_large_index = int(getattr(state, "gp_sigma_large_param_index", -1))
         self.gp_sigma_alpha_index = int(getattr(state, "gp_sigma_alpha_param_index", -1))
         self.gp_knee_index = int(getattr(state, "gp_knee_param_index", -1))
         self.gp_knee_gamma_index = int(getattr(state, "gp_knee_gamma_param_index", -1))
@@ -87,7 +83,6 @@ class Evaluator:
                                                 | {int(i) for i in np.asarray(members.radius_scatter_param_index) if i >= 0}
                                                 | {i for i in (self.sigma_def_index, self.sigma_extra_index, self.sigma_sel_index, self.lambda_sel_index,
                                                                self.sigma_shared_index, self.sigma_white_index, self.gp_ell_index,
-                                                               self.gp_u_small_index, self.gp_ell_small_index, self.gp_sigma_large_index,
                                                                self.gp_sigma_alpha_index, self.gp_knee_index, self.gp_sigma_alpha2_index,
                                                                self.gp_knee2_index) if i >= 0}), dtype=jnp.int32)
         if self.gp_mode:
@@ -95,10 +90,8 @@ class Evaluator:
             # the kernel at the fixed ell (recomputed from the separations at every evaluation when ell is sampled).
             self.gp_floor = float(state.gp_floor_arcsec)
             self.gp_ell_fixed = float(state.gp_correlation_length_arcsec)
-            self.gp_kernel_family = str(getattr(state, "gp_kernel_family", "gaussian"))
-            self.gp_ell_large = float(getattr(state, "gp_ell_large_arcsec", 25.0))
             weights = None
-            if self.gp_potential:
+            if self.gp_knee:
                 reference = float(dpie_sigma0_factor_from_config(state.z_lens, float(getattr(state, "gp_reference_redshift", 2.0)), state.cosmo_config))
                 self.gp_weights_per_image = gp.redshift_weights(self.factor_by_z[jnp.asarray(images.z_index_per_image)], reference)
                 weights = self.gp_weights_per_image
@@ -507,20 +500,6 @@ class Evaluator:
                         sigma_meas=jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_img)), sigma_img=sigma_img,
                         sigma_shared=sigma_shared, sigma_white=sigma_white, gp_ell=gp_ell, gp_sigma_alpha=sigma_alpha, gp_knee=knee,
                         gp_knee_gamma=knee_gamma, gp_sigma_alpha2=sigma_alpha2, gp_knee2=knee2, gp_knee_beta_low=beta_low)
-        if self.gp_potential:
-            # Potential kernel: C_ii = w_i^2 (sigma_S^2 + sigma_L^2) I + sigma_fl^2 I + sigma_meas^2 A A^T, a per-image sigma_def.
-            u_small, ell_small = physical[self.gp_u_small_index], physical[self.gp_ell_small_index]
-            sigma_small = u_small * ell_small
-            sigma_large = physical[self.gp_sigma_large_index] if self.gp_sigma_large_index >= 0 else zero
-            sigma_extra = physical[self.sigma_extra_index] if self.sigma_extra_index >= 0 else zero
-            w = self.gp_weights_per_image
-            kappa = gp.KAPPA_CONSTANT[self.gp_kernel_family]
-            sigma_def = jnp.sqrt(jnp.square(w) * (jnp.square(sigma_small) + jnp.square(sigma_large)) + jnp.square(self.gp_floor))
-            return dict(sigma_def=sigma_def, sigma_extra=sigma_extra, sigma_sel=zero, lambda_sel=one,
-                        sigma_meas=jnp.sqrt(jnp.square(images.sigma_inst_per_image) + jnp.square(sigma_extra)),
-                        gp_u_small=u_small, gp_ell_small=ell_small, gp_sigma_small=sigma_small, gp_sigma_large=sigma_large,
-                        gp_ell_large=jnp.asarray(self.gp_ell_large, dtype=jnp.float64),
-                        sigma_kappa_small=kappa * u_small, sigma_kappa_large=kappa * sigma_large / self.gp_ell_large)
         if self.gp_mode:
             sigma_shared, sigma_white = physical[self.sigma_shared_index], physical[self.sigma_white_index]
             sigma_img = jnp.sqrt(jnp.square(sigma_shared) + jnp.square(sigma_white))
@@ -571,59 +550,41 @@ class Evaluator:
         return stats
 
     def gp_kernel_blocks(self, physical: jnp.ndarray, scales: dict[str, Any] | None = None, layout: dict | None = None) -> dict[str, Any]:
-        """Source-plane GP kernels: the deflection covariance blocks W K_alpha W (S, M, M, 2, 2) in slot order and the padded
-        image-plane variances sigma_meas^2 (S, M).  Under the knee kernel also ``k_img``, the image-plane GP covariance
-        sigma_shared^2 K_img (S, M, M) that B S B^T adds between images, and ``white`` = sigma_inst^2 + sigma_white^2.
-        ``layout`` (knee kernel) is one group of ``self.gp_groups``; the full layout by default."""
+        """Knee kernel: the deflection covariance blocks W K_alpha W (S, M, M, 2, 2) in slot order, ``k_img``, the image-plane
+        GP covariance sigma_shared^2 K_img (S, M, M) that B S B^T adds between images, ``white`` = sigma_inst^2 + sigma_white^2
+        and the padded image-plane variances sigma_meas^2 (S, M).  ``layout`` is one group of ``self.gp_groups``; the full
+        layout by default."""
+        if not self.gp_knee:
+            raise ValueError("gp_kernel_blocks needs the knee kernel")
         layout = self.gp if layout is None else layout
         frozen = getattr(self, "gp_frozen_blocks", None)
         if frozen is not None:
             return frozen[id(layout)]
         scales = self.error_scales(physical) if scales is None else scales
-        if self.gp_knee:
-            mask, w = layout["mask"], layout["weights"]
-            pair_mask = layout["pair_mask"]
-            if self.gp_sigma_alpha_index >= 0:
-                # The second table axis: the sampled slope (knee, power law) or the low-k slope (broken power law).
-                axis = (scales["gp_knee_beta_low"] if self.gp_knee_beta_low_index >= 0
-                        else scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
-                c_l, c_t = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee"], axis)
-                k_alpha = gp_knee.deflection_blocks(c_l, c_t, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha"]))
-                k_alpha = k_alpha * (w[:, :, None] * w[:, None, :])[..., None, None]
-                if self.gp_sigma_alpha2_index >= 0:
-                    # A second, independent knee field (two_knee: the same redshift weights; knee_foreground: weight 1;
-                    # knee_background: a plane behind the cluster; the slot weights in layout["weights2"]).
-                    c_l2, c_t2 = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee2"],
-                                                           scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
-                    w2 = layout.get("weights2", w)
-                    k_alpha = k_alpha + (gp_knee.deflection_blocks(c_l2, c_t2, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha2"]))
-                                         * (w2[:, :, None] * w2[:, None, :])[..., None, None])
-                if getattr(self, "gp_project_modes", ()):
-                    k_alpha = gp_knee.project_low_order(k_alpha, layout["xy"], mask, w, self.gp_project_modes)
-            else:
-                k_alpha = jnp.zeros(layout["nn"].shape, dtype=jnp.float64)
-            k_img = jnp.square(scales["sigma_shared"]) * jnp.exp(-layout["squared_separations"] / (2.0 * jnp.square(scales["gp_ell"]))) * pair_mask
-            white = jnp.where(mask, layout["sigma_inst2"] + jnp.square(scales["sigma_white"]), 0.0)
-            return dict(k_alpha=k_alpha, k_img=k_img, white=white, sigma_meas2=white + jnp.where(mask, jnp.square(scales["sigma_shared"]), 0.0))
-        d2, outer, mask, w = layout["squared_separations"], layout["outer"], layout["mask"], layout["weights"]
-        k_alpha = gp.deflection_kernel(d2, outer, mask, jnp.square(scales["gp_sigma_small"]), scales["gp_ell_small"], self.gp_kernel_family)
-        if self.gp_sigma_large_index >= 0:
-            k_alpha = k_alpha + gp.deflection_kernel(d2, outer, mask, jnp.square(scales["gp_sigma_large"]), scales["gp_ell_large"], self.gp_kernel_family)
-        k_alpha = k_alpha * (w[:, :, None] * w[:, None, :])[..., None, None]
-        sigma_meas2 = jnp.where(mask, layout["sigma_inst2"] + jnp.square(scales["sigma_extra"]), 0.0)
-        return dict(k_alpha=k_alpha, sigma_meas2=sigma_meas2)
-
-    def _gp_mean_inputs(self, params: jnp.ndarray):
-        """v = C^-1 (b - beta) per family (F, M, 2) at this draw's sources, and the four scales (sigma_S, ell_S, sigma_L, ell_L)."""
-        layout = self.gp
-        slots, mask = layout["slots"], layout["mask"]
-        n_families, size = mask.shape
-        stats = self.statistics(params)
-        residual = jnp.where(mask[..., None], stats["fields"]["backprojected"][slots] - stats["source_by_family"][:, None, :], 0.0)
-        v = jax.scipy.linalg.cho_solve((stats["family_cholesky"], True), residual.reshape(n_families, 2 * size)[..., None])[..., 0].reshape(n_families, size, 2)
-        v = jnp.where(mask[..., None], v, 0.0)
-        scales = self.error_scales(stats["physical"])
-        return v, jnp.stack([scales["gp_sigma_small"], scales["gp_ell_small"], scales["gp_sigma_large"], scales["gp_ell_large"]])
+        mask, w = layout["mask"], layout["weights"]
+        pair_mask = layout["pair_mask"]
+        if self.gp_sigma_alpha_index >= 0:
+            # The second table axis: the sampled slope (knee, power law) or the low-k slope (broken power law).
+            axis = (scales["gp_knee_beta_low"] if self.gp_knee_beta_low_index >= 0
+                    else scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
+            c_l, c_t = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee"], axis)
+            k_alpha = gp_knee.deflection_blocks(c_l, c_t, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha"]))
+            k_alpha = k_alpha * (w[:, :, None] * w[:, None, :])[..., None, None]
+            if self.gp_sigma_alpha2_index >= 0:
+                # A second, independent knee field (two_knee: the same redshift weights; knee_foreground: weight 1;
+                # knee_background: a plane behind the cluster; the slot weights in layout["weights2"]).
+                c_l2, c_t2 = gp_knee.pair_coefficients(layout["pair_tables"], layout["r_local"], layout["r_fraction"], scales["gp_knee2"],
+                                                       scales["gp_knee_gamma"] if self.gp_knee_gamma_index >= 0 else None)
+                w2 = layout.get("weights2", w)
+                k_alpha = k_alpha + (gp_knee.deflection_blocks(c_l2, c_t2, layout["nn"], pair_mask, jnp.square(scales["gp_sigma_alpha2"]))
+                                     * (w2[:, :, None] * w2[:, None, :])[..., None, None])
+            if getattr(self, "gp_project_modes", ()):
+                k_alpha = gp_knee.project_low_order(k_alpha, layout["xy"], mask, w, self.gp_project_modes)
+        else:
+            k_alpha = jnp.zeros(layout["nn"].shape, dtype=jnp.float64)
+        k_img = jnp.square(scales["sigma_shared"]) * jnp.exp(-layout["squared_separations"] / (2.0 * jnp.square(scales["gp_ell"]))) * pair_mask
+        white = jnp.where(mask, layout["sigma_inst2"] + jnp.square(scales["sigma_white"]), 0.0)
+        return dict(k_alpha=k_alpha, k_img=k_img, white=white, sigma_meas2=white + jnp.where(mask, jnp.square(scales["sigma_shared"]), 0.0))
 
     def freeze_gp_kernels(self, params) -> None:
         """Knee kernel only: compute the kernel blocks (mass field, image-plane GP, white terms) once at the error scales of
@@ -717,34 +678,24 @@ class Evaluator:
             self._padded = Evaluator(state, self.likelihood_mode)
         return self._padded
 
-    def gp_deflection_correction(self, params) -> "gp.MeanDeflection | gp_knee.MeanDeflectionKnee | None":
-        """Potential kernel: the GP conditional mean of the deflection error at this draw (``gp.MeanDeflection``), which the
-        image solver adds to the lens so that the draw's source and lens belong together; None under the other likelihoods.
-        Under the potential kernel the sampled source scatters by the deflection error around the centroid, and solving
-        with the lens alone puts the effective source off the caustic for fold pairs."""
-        if not self.gp_potential:
+    def gp_deflection_correction(self, params) -> "gp_knee.MeanDeflectionKnee | None":
+        """Knee kernel: the GP conditional mean of the mass field's deflection error at this draw, which the image solver adds
+        to the lens so that the draw's source and lens belong together; None under the other likelihoods.  The sampled
+        source scatters by the deflection error around the centroid, and solving with the lens alone puts the effective
+        source off the caustic for fold pairs."""
+        if not self.gp_knee:
             return None
-        if self.gp_knee:
-            if self.gp_sigma_alpha_index < 0 or self.gp_knee_spectrum != "knee":
-                return None                                            # no mass field, or a spectrum the mean field does not cover
-            if self.gp_groups is not None:
-                return self._padded_evaluator().gp_deflection_correction(params)
-            if not hasattr(self, "_knee_mean_inputs_jit"):
-                self._knee_mean_inputs_jit = jax.jit(self._knee_mean_inputs)
-            v, s = self._knee_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))
-            s = np.asarray(s, dtype=float)
-            return gp_knee.MeanDeflectionKnee(self.gp, self.gp_tables, v, float(s[1]), float(s[0]) ** 2, self.gp_weights_per_family,
-                                              gamma=float(s[2]) if self.gp_knee_gamma_index >= 0 else None,
-                                              modes=tuple(getattr(self, "gp_project_modes", ())))
-        if not hasattr(self, "_gp_mean_inputs_jit"):
-            self._gp_mean_inputs_jit = jax.jit(self._gp_mean_inputs)
-        v, s = self._gp_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))
+        if self.gp_sigma_alpha_index < 0 or self.gp_knee_spectrum != "knee":
+            return None                                                # no mass field, or a spectrum the mean field does not cover
+        if self.gp_groups is not None:
+            return self._padded_evaluator().gp_deflection_correction(params)
+        if not hasattr(self, "_knee_mean_inputs_jit"):
+            self._knee_mean_inputs_jit = jax.jit(self._knee_mean_inputs)
+        v, s = self._knee_mean_inputs_jit(jnp.asarray(params, dtype=jnp.float64))
         s = np.asarray(s, dtype=float)
-        terms = [(s[0] ** 2, s[1])] + ([(s[2] ** 2, s[3])] if self.gp_sigma_large_index >= 0 and s[2] > 0 else [])
-        layout = self.gp
-        weights = np.asarray(layout["weights"])[:, 0]                   # one redshift per family; slot 0 is always real
-        return gp.MeanDeflection(np.asarray(self.xy)[np.asarray(layout["slots"])], layout["mask"], np.asarray(v), weights ** 2, terms,
-                                 self.gp_kernel_family)
+        return gp_knee.MeanDeflectionKnee(self.gp, self.gp_tables, v, float(s[1]), float(s[0]) ** 2, self.gp_weights_per_family,
+                                          gamma=float(s[2]) if self.gp_knee_gamma_index >= 0 else None,
+                                          modes=tuple(getattr(self, "gp_project_modes", ())))
 
     def _gp_statistics(self, params: jnp.ndarray, physical: jnp.ndarray, fields: dict[str, Any]) -> dict[str, Any]:
         """gp_image_plane: one Cholesky factor of the family covariance serves the Gaussian term and the source conditional;
@@ -756,14 +707,9 @@ class Evaluator:
         slots, mask, counts = layout["slots"], layout["mask"], layout["counts"]
         if self.gp_knee:
             return self._knee_statistics(params, physical, fields, scales)
-        if self.gp_potential:
-            blocks = self.gp_kernel_blocks(physical, scales)
-            family_covariance, family_cholesky = gp.family_covariance_potential(jacobian[slots], blocks["k_alpha"], blocks["sigma_meas2"], mask,
-                                                                                jnp.square(sigma_fl))
-        else:
-            kernel = layout["kernel"] if self.gp_ell_index < 0 else gp.kernel_from_separations(layout["squared_separations"], mask, scales["gp_ell"])
-            family_covariance, family_cholesky = gp.family_covariance(jacobian[slots], kernel, layout["sigma_inst2"], mask,
-                                                                      jnp.square(scales["sigma_shared"]), jnp.square(scales["sigma_white"]), jnp.square(sigma_fl))
+        kernel = layout["kernel"] if self.gp_ell_index < 0 else gp.kernel_from_separations(layout["squared_separations"], mask, scales["gp_ell"])
+        family_covariance, family_cholesky = gp.family_covariance(jacobian[slots], kernel, layout["sigma_inst2"], mask,
+                                                                  jnp.square(scales["sigma_shared"]), jnp.square(scales["sigma_white"]), jnp.square(sigma_fl))
         padded_backprojected = backprojected[slots]
         whitening = gp.family_source_whitening(family_cholesky, padded_backprojected, mask)
         coordinates = jnp.stack((params[images.source_x_param_index], params[images.source_y_param_index]), -1)
@@ -773,8 +719,8 @@ class Evaluator:
         determinant_gradient = fields["determinant_gradient"]
         if self.freeze_determinant_gradient:
             determinant_gradient = jax.lax.stop_gradient(determinant_gradient)
-        # Per image: the diagonal block C_ii and the smoothed determinant on it.  image_plane: (sigma_inst^2 + sigma_white^2 +
-        # sigma_shared^2) A A^T + sigma_fl^2 I (k_ii = 1); potential: sigma_meas^2 A A^T + (w_i^2 (sigma_S^2 + sigma_L^2) + sigma_fl^2) I.
+        # Per image: the diagonal block C_ii = (sigma_inst^2 + sigma_white^2 + sigma_shared^2) A A^T + sigma_fl^2 I (k_ii = 1)
+        # and the smoothed determinant on it.
         stats = sl.statistics(backprojected, source[images.family_index_per_image], jacobian, determinant_gradient,
                               scales["sigma_meas"], scales["sigma_def"], 0.0, 1.0, parity=images.parity)
         log_h = sl.log_expected_absolute_normal(stats["determinant_mean"], jnp.maximum(stats["determinant_variance"], 1e-16), images.parity)
