@@ -293,8 +293,9 @@ def test_stress_values_and_gradients_finite(tmp_path):
 def test_two_scales_reproduce_the_rho_model(synthetic_config):
     """sigma_shared^2 = 0.99 sigma^2 and sigma_white^2 = 0.01 sigma^2 is the earlier rho = 0.99 model at sigma_img = sigma:
     S = sigma^2 (rho K + (1 - rho) I) kron I_2 + sigma_inst^2 I.  The log-target agrees to 1e-10.  ell is fixed so that
-    the precomputed kernel is the one the likelihood reads."""
-    state = build_state(gp_config(synthetic_config, gp_correlation_length_prior=None))
+    the precomputed kernel is the one the likelihood reads.  The half-normal sigma_white prior, so that sigma_white = 0
+    (the old model) is a point of the parameter space."""
+    state = build_state(gp_config(synthetic_config, gp_correlation_length_prior=None, sigma_white_prior=None))
     evaluator = Evaluator(state, "gp_image_plane")
     sigma = 0.23
     theta = set_image_scales(state, state.initial_theta, sigma)

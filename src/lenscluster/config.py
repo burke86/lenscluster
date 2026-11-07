@@ -384,11 +384,14 @@ class LikelihoodConfig:
     sigma_inst_arcsec: float | None = None    # overrides the catalog's instrumental astrometric error for every image
     # gp_image_plane only.  Image-plane displacement covariance per family
     # S = sigma_shared^2 (K kron I) + (sigma_inst,i^2 + sigma_white^2) I with the Gaussian kernel K_ij = exp(-|theta_i - theta_j|^2 / 2 ell^2);
-    # source-plane covariance C = B S B^T + sigma_fl^2 I with B = blockdiag(A_i).  sigma_shared (log-normal) and sigma_white
-    # (half-normal) are sampled and replace sigma_extra, sigma_def and sigma_sel; ell and sigma_fl are fixed.  The prior on
+    # source-plane covariance C = B S B^T + sigma_fl^2 I with B = blockdiag(A_i).  sigma_shared and sigma_white (both
+    # log-normal) are sampled and replace sigma_extra, sigma_def and sigma_sel; ell and sigma_fl are fixed.  The prior on
     # sigma_shared is truncated at 1": the untruncated prior puts 7e-5 of its mass there, and a 32" value carried a spurious init mode.
     sigma_shared_prior: LogNormalPriorConfig = field(default_factory=lambda: LogNormalPriorConfig(median=0.15, log_sigma=0.5, upper=1.0))
-    sigma_white_prior_scale_arcsec: float = 0.05  # HalfNormal scale of sigma_white
+    # sigma_white log-normal (sampled as its log), the knee kernel's prior, so the white scatter is learned and kept away
+    # from zero when sigma_inst is small; None uses the half-normal of sigma_white_prior_scale_arcsec.
+    sigma_white_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.015, log_sigma=0.5, upper=0.1))
+    sigma_white_prior_scale_arcsec: float = 0.05  # HalfNormal scale of sigma_white when sigma_white_prior is None
     sigma_shared_start_arcsec: float = 0.168      # start of the init search (the sigma_img posterior median of the oct31a M0416 run)
     sigma_white_start_arcsec: float = 0.02
     gp_correlation_length_arcsec: float = 7.0     # ell: the fixed value, or the start of the init search when ell is sampled
@@ -463,6 +466,10 @@ class LikelihoodConfig:
     gp_knee_fixed_arcsec: float | None = None
     gp_knee_ell_fixed_arcsec: float | None = None
     gp_knee_sigma_white_prior_scale_arcsec: float = 0.03
+    # sigma_white log-normal (sampled as its log) instead of the half-normal above, so the white image-plane scatter is
+    # inferred and kept away from zero when sigma_inst is small (2026-11-05: the fits put it at 0.006-0.02"); None uses the
+    # half-normal of gp_knee_sigma_white_prior_scale_arcsec.
+    gp_knee_sigma_white_prior: LogNormalPriorConfig | None = field(default_factory=lambda: LogNormalPriorConfig(median=0.015, log_sigma=0.5, upper=0.1))
     gp_knee_sigma_white_start_arcsec: float = 0.012
     # Extra measurement scatter (arcsec, log-normal) added in quadrature to sigma_inst: image registration, feature
     # centring, manual marking.  None fixes the measurement error at the catalog value.
@@ -739,6 +746,8 @@ def validate_config(config: LensClusterSolverConfig) -> None:
                          ("likelihood.gp_knee2_prior", config.likelihood.gp_knee2_prior),
                          ("likelihood.gp_knee_sigma_shared_prior", config.likelihood.gp_knee_sigma_shared_prior),
                          ("likelihood.gp_knee_ell_prior", config.likelihood.gp_knee_ell_prior),
+                         ("likelihood.gp_knee_sigma_white_prior", config.likelihood.gp_knee_sigma_white_prior),
+                         ("likelihood.sigma_white_prior", config.likelihood.sigma_white_prior),
                          ("likelihood.sigma_extra_prior", config.likelihood.sigma_extra_prior),
                          ("likelihood.sigma_sel_prior", config.likelihood.sigma_sel_prior),
                          ("likelihood.lambda_sel_prior", config.likelihood.lambda_sel_prior),
