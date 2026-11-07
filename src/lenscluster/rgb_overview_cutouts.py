@@ -8,39 +8,46 @@ from .cutouts import arcsec_to_skycoord, arcsec_to_radec, cutout_window, rgb_cut
 from .fold_diagnostics import _credible_density_grid, load_fold_data, critical_curve_quantiles
 from .plot_style import CRITICAL_COLOR
 
-IMAGE_LABELS = ('K34.b', 'K34.a', 'K33.e', 'K77.b')
-SYSTEM_IDS = ('K1', 'K6', 'K8', 'K12')
 
 
-def overview_cutout_data(tables, prefix, *, log=print):
+def overview_cutout_data(tables, prefix, *, image_labels=(), system_ids=(), state=None, evaluator=None, posterior=None, log=print):
     """Reuse saved image draws and fold geometry, never run an image search."""
+    image_labels,system_ids=tuple(image_labels),tuple(system_ids)
+    if not image_labels and not system_ids:
+        return None
+    if len(image_labels)>4 or len(system_ids)>4:
+        raise ValueError('RGB critical overview supports at most four image and four fold cutouts')
     tables=Path(tables)
     required=[tables/'posterior_overview_positions.npz',
               tables/f'{prefix}_small_lambda_a_image_posteriors_jwst.csv',
-              tables/'fold_pairs_source_caustics.npz',tables/'fold_pairs_source_caustics.json',
-              tables/f'{prefix}_small_lambda_a_image_posteriors_jwst_critical.npz']
+              tables/'fold_pairs_source_caustics.npz',tables/'fold_pairs_source_caustics.json']
     if not all(p.exists() for p in required):
         log('[outputs] RGB inset panels unavailable: generate posterior-position and fold diagnostics first')
         return None
     ranking=pd.read_csv(required[1]).set_index('image_label')
-    with np.load(required[4]) as saved:
-        critical={key:saved[key].copy() for key in ('centers','fovs','redshifts','median_determinant','lower','upper')}
+    critical_path=tables/f'{prefix}_small_lambda_a_image_posteriors_jwst_critical.npz'
+    critical=None
+    if critical_path.exists():
+        with np.load(critical_path) as saved:
+            if 'lower' in saved and 'upper' in saved:
+                critical={key:saved[key].copy() for key in ('centers','fovs','redshifts','median_determinant','lower','upper')}
     with np.load(required[0]) as data:
         labels=data['image_labels'].astype(str).tolist()
         positions=data['recovered'].copy()
+        draw_indices=data['draw_indices'].copy()
     folds=load_fold_data(tables)
     systems=[]
-    for identity in SYSTEM_IDS:
+    for identity in system_ids:
         matches=[s for s in folds['systems'] if s['system_id']==identity]
         if len(matches)!=1:
             log(f'[outputs] RGB inset panels unavailable: expected one fold system {identity}, found {len(matches)}')
             return None
         systems.append(matches[0])
-    if any(label not in labels or label not in ranking.index for label in IMAGE_LABELS):
+    if any(label not in labels or label not in ranking.index for label in image_labels):
         log('[outputs] RGB inset panels unavailable: selected image IDs absent from catalog')
         return None
     images=[]
-    for label in IMAGE_LABELS:
+    for label in image_labels:
         row=ranking.loc[label]
         grid=_credible_density_grid(positions[:,labels.index(label)])
         if grid is None:
@@ -54,14 +61,26 @@ def overview_cutout_data(tables, prefix, *, log=print):
         center=np.array([row.x_arcsec,row.y_arcsec])
         radius=np.max(np.abs(np.concatenate(curves)-center))
         fov=float(.5*np.ceil(max(3.,2.3*radius)/.5))
-        matches=np.flatnonzero(np.all(np.isclose(critical['centers'],center,rtol=0,atol=1e-10),axis=1)
-                               &np.isclose(critical['redshifts'],row.z_source,rtol=0,atol=1e-10)
-                               &np.isclose(critical['fovs'],fov,rtol=0,atol=1e-10))
-        if len(matches)!=1:
-            raise ValueError(f'Regenerate small-lambda cutout critical fields for {label}: cached geometry does not match')
-        k=matches[0]
-        images.append(dict(label=label,center=center,fov=fov,z=row.z_source,grid=grid,
-                           critical={key:critical[key][k] for key in ('median_determinant','lower','upper')}))
+        item=dict(label=label,center=center,fov=fov,z=row.z_source,grid=grid)
+        if critical is not None:
+            matches=np.flatnonzero(np.all(np.isclose(critical['centers'],center,rtol=0,atol=1e-10),axis=1)
+                                   &np.isclose(critical['redshifts'],row.z_source,rtol=0,atol=1e-10)
+                                   &np.isclose(critical['fovs'],fov,rtol=0,atol=1e-10))
+            if len(matches)==1:
+                item['critical']={key:critical[key][matches[0]] for key in ('median_determinant','lower','upper')}
+        images.append(item)
+    if any('critical' not in item for item in images):
+        if state is None or evaluator is None or posterior is None:
+            raise ValueError('Selected RGB cutouts require source-redshift critical fields')
+        # Explicit launcher selections are independent of the standalone uncertainty cuts.
+        import json
+        from .cutout_critical_fields import median_cutout_determinants
+        fingerprint=json.loads((tables/'posterior_overview_positions.json').read_text())['fingerprint']
+        _,median,_,lower,upper=median_cutout_determinants(state,evaluator,posterior,
+            [item['center'] for item in images],[item['fov'] for item in images],
+            [item['z'] for item in images],draw_indices,tables/f'{prefix}_rgb_inset_critical.npz',fingerprint,log=log)
+        for i,item in enumerate(images):
+            item['critical']=dict(median_determinant=median[i],lower=lower[i],upper=upper[i])
     return dict(images=images,systems=systems)
 
 
@@ -69,6 +88,7 @@ def render_overview_cutouts(fig, data, imaging, frame):
     """Four panels left-to-right above; four folds top-to-bottom at right."""
     images,bands,display,_=imaging
     reference=images[rgb_reference_band(bands)]
+    palette=['#0072B2','#E69F00','#009E73','#CC79A7','#D55E00','#56B4E9','#F0E442','#7B61A8']
     def panel(rect,center,fov,label,z):
         ax=fig.add_axes(rect)
         sky=arcsec_to_skycoord(*center,frame)
@@ -112,9 +132,14 @@ def render_overview_cutouts(fig, data, imaging, frame):
             vertices=np.vstack((low,high[::-1]))
             ax.add_patch(Polygon(np.column_stack(pixels(*vertices.T)),facecolor=CRITICAL_COLOR,alpha=.18,edgecolor='none'))
             ax.plot(*pixels(*median.T),color=CRITICAL_COLOR,lw=.65)
+        label_points=[]
         for j,label in enumerate(s['labels']):
-            color='tab:orange'
+            color=palette[s['image_family_index'][j]%len(palette)]
             contour(ax,_credible_density_grid(s['positions'][:,j]),pixels,color)
-            ax.plot(*pixels(*s['observed'][j]),'x',color=color,ms=3,mew=.5)
-    return dict(top=list(IMAGE_LABELS),right=list(SYSTEM_IDS),
+            point=pixels(*s['observed'][j])
+            ax.plot(*point,'x',color=color,ms=3,mew=.5)
+            label_points.append((label,point,color))
+        from .apj_fold_cutouts import label_catalog_images
+        label_catalog_images(ax,label_points)
+    return dict(top=[item['label'] for item in data['images']],right=[s['system_id'] for s in data['systems']],
                 position_probability=.954499736,position_contours='2 sigma only; conditional on recovery')

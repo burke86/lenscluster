@@ -573,6 +573,8 @@ class RGBDisplayConfig:
 class ImageCatalogCutoutConfig:
     image_dir: str | Path | None = None
     candidate_catalog_path: str | Path | None = None  # optional display-only proposed associations
+    rgb_critical_image_cutouts: tuple[str, ...] = ()  # ordered top panels, at most four
+    rgb_critical_fold_cutouts: tuple[str, ...] = ()   # ordered right panels, at most four
     image_scale: str = "60mas"
     bands: tuple[str, ...] | None = None
     figure_suffix: str = ""                  # appended to the cluster mass figure name, e.g. "_jwst"

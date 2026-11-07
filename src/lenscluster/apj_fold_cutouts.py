@@ -62,30 +62,7 @@ def render_apj_fold_cutouts(config, data, imaging, output, *, max_separation=3.,
         ax.text(.06*size+bar/2,.10*size,r'$0.5^{\prime\prime}$',ha='center',color='white',fontsize=7)
         ax.set(xlim=(-.5,rgb.shape[1]-.5),ylim=(-.5,size-.5),xticks=[],yticks=[])
         ax.grid(False)
-        # Place full catalog IDs close to their crosses without covering other labels.
-        from matplotlib.transforms import Bbox
-        fig.canvas.draw()
-        renderer=fig.canvas.get_renderer()
-        occupied=[text.get_window_extent(renderer).expanded(1.05,1.1) for text in ax.texts]
-        markers=[Bbox.from_bounds(*(ax.transData.transform(point)-4),8,8)
-                 for _,point,_ in label_points]
-        for label,point,color in label_points:
-            text=ax.annotate(label,point,xytext=(5,5),textcoords='offset points',
-                fontsize=6,color=color,zorder=9,annotation_clip=True)
-            candidates=[]
-            for radius in (5,10,16):
-                for dx,dy in ((1,1),(1,-1),(-1,1),(-1,-1),(0,1),(0,-1),(1,0),(-1,0)):
-                    text.set_position((radius*dx,radius*dy))
-                    text.set_ha('left' if dx>0 else 'right' if dx<0 else 'center')
-                    text.set_va('bottom' if dy>0 else 'top' if dy<0 else 'center')
-                    box=text.get_window_extent(renderer).expanded(1.05,1.1)
-                    overlaps=sum(box.overlaps(other) for other in occupied+markers)
-                    inside=ax.bbox.contains(box.x0,box.y0) and ax.bbox.contains(box.x1,box.y1)
-                    candidates.append((1000*(not inside)+100*overlaps+radius,
-                                       text.get_position(),text.get_ha(),text.get_va()))
-            _,position,ha,va=min(candidates,key=lambda candidate:candidate[0])
-            text.set_position(position);text.set_ha(ha);text.set_va(va)
-            occupied.append(text.get_window_extent(renderer).expanded(1.05,1.1))
+        label_catalog_images(ax,label_points)
     for ax in list(axes.flat)[len(systems):]:ax.set_visible(False)
     output=Path(output)
     if output.suffix.lower() != '.pdf':
@@ -104,3 +81,32 @@ def render_apj_fold_cutouts(config, data, imaging, output, *, max_separation=3.,
         grf_scope='system-specific' if config.likelihood.gp_blocks=='system' else 'shared',
         draw_indices=data['draw_indices']),indent=2)+'\n')
     return output
+
+
+def label_catalog_images(ax, label_points):
+    """Place catalog IDs beside their matching crosses, avoiding labels and markers."""
+    fig=ax.figure
+    # Place full catalog IDs close to their crosses without covering other labels.
+    from matplotlib.transforms import Bbox
+    fig.canvas.draw()
+    renderer=fig.canvas.get_renderer()
+    occupied=[text.get_window_extent(renderer).expanded(1.05,1.1) for text in ax.texts]
+    markers=[Bbox.from_bounds(*(ax.transData.transform(point)-4),8,8)
+             for _,point,_ in label_points]
+    for label,point,color in label_points:
+        text=ax.annotate(label,point,xytext=(5,5),textcoords='offset points',
+            fontsize=6,color=color,zorder=9,annotation_clip=True)
+        candidates=[]
+        for radius in (5,10,16):
+            for dx,dy in ((1,1),(1,-1),(-1,1),(-1,-1),(0,1),(0,-1),(1,0),(-1,0)):
+                text.set_position((radius*dx,radius*dy))
+                text.set_ha('left' if dx>0 else 'right' if dx<0 else 'center')
+                text.set_va('bottom' if dy>0 else 'top' if dy<0 else 'center')
+                box=text.get_window_extent(renderer).expanded(1.05,1.1)
+                overlaps=sum(box.overlaps(other) for other in occupied+markers)
+                inside=ax.bbox.contains(box.x0,box.y0) and ax.bbox.contains(box.x1,box.y1)
+                candidates.append((1000*(not inside)+100*overlaps+radius,
+                                   text.get_position(),text.get_ha(),text.get_va()))
+        _,position,ha,va=min(candidates,key=lambda candidate:candidate[0])
+        text.set_position(position);text.set_ha(ha);text.set_va(va)
+        occupied.append(text.get_window_extent(renderer).expanded(1.05,1.1))

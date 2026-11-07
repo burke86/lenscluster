@@ -73,11 +73,14 @@ def render_rgb_critical(config, state, evaluator, theta, catalog, extra, imaging
     insets=None
     if m0416:
         from .rgb_overview_cutouts import overview_cutout_data, render_overview_cutouts
-        insets=overview_cutout_data(tables,config.paths.figure_prefix,log=log)
+        insets=overview_cutout_data(tables,config.paths.figure_prefix,
+            image_labels=getattr(config.image_catalog,'rgb_critical_image_cutouts',()),
+            system_ids=getattr(config.image_catalog,'rgb_critical_fold_cutouts',()),
+            state=state,evaluator=evaluator,posterior=posterior,log=log)
     fig=plt.figure(figsize=(11.4,11.4) if insets is not None else (9,9))
     ax=(fig.add_axes([.07,.07,.72,.72],projection=geometry['wcs']) if insets is not None
         else fig.add_subplot(111,projection=geometry['wcs']))
-    n=geometry['resolution'];yellow='#FFE34D'
+    n=geometry['resolution']
     ax.imshow(rgb,origin='lower',extent=(-.5,n-.5,-.5,n-.5),interpolation='none')
     if band is not None:
         draw_critical_interval(ax,lower,upper,CRITICAL_COLOR,(-.5,n-.5,-.5,n-.5))
@@ -117,8 +120,6 @@ def render_rgb_critical(config, state, evaluator, theta, catalog, extra, imaging
         all_px.extend(cx);all_py.extend(cy)
         overlay_rows.extend(rows)
     if overlay_rows:
-        ax.legend(loc='lower left',fontsize=8,ncol=4,title='Circles: identified  /  squares: proposed',title_fontsize=8,frameon=True,facecolor='black',edgecolor='none',labelcolor='white',framealpha=.75)
-        ax.get_legend().get_title().set_color('white')
         pd.DataFrame(overlay_rows).to_csv(tables/f'{stem}_candidate_overlays.csv',index=False)
     # Include both fitted images and proposed candidates, with 3 arcsec padding.
     pad=3./geometry['size']*n
@@ -130,12 +131,11 @@ def render_rgb_critical(config, state, evaluator, theta, catalog, extra, imaging
     ra,dec=ax.coords
     ra.set_axislabel('R.A. (J2000)');dec.set_axislabel('Dec. (J2000)')
     ra.set_major_formatter('hh:mm:ss');dec.set_major_formatter('dd:mm:ss')
-    ra.set_ticks(number=5,color=yellow,direction='in',size=6,width=1)
-    dec.set_ticks(number=5,color=yellow,direction='in',size=6,width=1)
+    ra.set_ticks(number=5,color='white',direction='in',size=6,width=1)
+    dec.set_ticks(number=5,color='white',direction='in',size=6,width=1)
     ra.set_ticks_position('bt');dec.set_ticks_position('lr')
     ra.set_ticklabel_position('b');dec.set_ticklabel_position('l')
     ra.display_minor_ticks(True);dec.display_minor_ticks(True)
-    ax.text(.025,.975,r'$z_{\rm s}=9$',transform=ax.transAxes,ha='left',va='top',color=yellow,fontsize=14)
     inset_info=render_overview_cutouts(fig,insets,imaging,state.reference) if insets is not None else None
     fig.savefig(output,dpi=300,bbox_inches='tight',pad_inches=.06);plt.close(fig)
     output.with_suffix('.json').write_text(json.dumps(dict(run=config.paths.run_name,insets=inset_info,best_index=best_index,central_statistic='zero contour of pointwise posterior median determinant; same draws as band',z_source=9.,model='parametric + conditional mean GRF; no GP displacement' if shared_grf else 'parametric only; no shared GRF available',grf_derivatives=PLOT_FIELD_VERSION,bands=list(bands),catalog_images=len(catalog),resolution=n,determinant_resolution=int(det.shape[0]),critical_definition='median over draws of det(I - Hessian_draw) = 0',cache_fingerprint=fingerprint,marker_photometry=str(photpath) if photpath else None,magnitude_band='F200W AB' if photpath else None,matched_magnitudes=int(valid.sum()),missing_magnitude_policy='minimum marker area 9 pt^2',marker_area='clip(16*10**(-0.2*(m-26)),9,64) pt^2',crop_padding_arcsec=3.,crop_pixel_limits=limits,candidate_catalog=str(candidate_path) if candidate_path else None,candidate_overlays=[r['id'] for r in overlay_rows]),indent=2)+'\n')
