@@ -54,7 +54,7 @@ class _HessianSeen(Exception):
 def _capture_hessian_start(monkeypatch):
     seen = {}
 
-    def capture(model, specs, reference_theta):
+    def capture(model, specs, reference_theta, **kwargs):
         seen["theta"] = np.asarray(reference_theta, dtype=float).copy()
         raise _HessianSeen
     monkeypatch.setattr(sampling, "block_mass_seed", capture)

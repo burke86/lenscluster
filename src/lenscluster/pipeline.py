@@ -640,6 +640,8 @@ def run_final(config: LensClusterSolverConfig, init: InitResult) -> RunResult:
                              target_accept=sampling.target_accept, initial_step_size=sampling.initial_step_size,
                              seed=runtime.seed, thin=sampling.thin, print_summary=runtime.numpyro_print_summary,
                              mass_matrix=sampling.mass_matrix, dense_member_offsets=sampling.dense_member_offsets,
+                             dense_offset_members=getattr(sampling, "dense_offset_members", "all"),
+                             far_field_offsets=getattr(sampling, "far_field_offsets", "sample"),
                              stiffness=getattr(sampling, "stiffness_diagnostic", True), log=log)
         posterior.diagnostics["start_check"] = start_check
         artifacts.save_posterior(stage.artifacts, posterior)

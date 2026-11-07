@@ -678,7 +678,8 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
     offset_specs = [("velocity_offset", MEMBER_OFFSET_SITE_NAME, offset_index, scatter_index)]
     if deviation_mode in ("sigma_rcut", "mass_rcut"):
         offset_specs.append(("radius_offset", MEMBER_RADIUS_OFFSET_SITE_NAME, radius_offset_index, radius_scatter_index))
-    heavy_tail = str(getattr(scaling, "member_deviation_tail", "normal")) == "student_t"
+    heavy_tail = str(getattr(scaling, "member_deviation_tail", "student_t")) == "student_t"
+    dof = float(getattr(scaling, "member_deviation_dof", 4.0))
     for field_name, site_name, index_array, scale_index in offset_specs:
         for site_index, record in enumerate(records):
             component = int(record["component_index"])
@@ -691,7 +692,7 @@ def build_state(config: LensClusterSolverConfig, *, exact_member_positions: np.n
                 component_family="member_scatter_offset", transform_kind="identity",
                 physical_mean=0.0, physical_std=1.0, sample_site_name=site_name, sample_site_index=site_index,
                 centered=False, scale_site_name=specs[int(scale_index[component])].sample_name,
-                dof=float(getattr(scaling, "member_deviation_dof", 4.0)) if heavy_tail else None))
+                dof=dof if heavy_tail else None))
     sigma_def_index = sigma_extra_index = sigma_sel_index = lambda_sel_index = sigma_shared_index = sigma_white_index = gp_ell_index = -1
     gp_sigma_alpha_index = gp_knee_index = gp_knee_gamma_index = -1
     gp_sigma_alpha2_index = gp_knee2_index = gp_knee_beta_low_index = -1

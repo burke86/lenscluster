@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 import jax
@@ -18,6 +18,57 @@ from .evaluator import Evaluator
 from .model import ModelState, ParameterSpec, PosteriorResults
 
 LATENT_FAMILIES = frozenset({"source_position", "member_scatter_offset"})
+DIAGONAL_SITE_SUFFIX = "_diag"            # member-offset sites split off the dense block (SamplingConfig.dense_offset_members)
+FIXED_SITE_SUFFIX = "_fixed"              # far-field offsets pinned at the relation (SamplingConfig.far_field_offsets)
+FIXED_OFFSET_STD = 1.0e-3
+
+
+def split_offset_sites(specs: list[ParameterSpec], starts: np.ndarray, state, *, dense_offset_members: str = "all",
+                       far_field_offsets: str = "sample", log=print) -> tuple[list[ParameterSpec], np.ndarray]:
+    """Sampling-only regrouping of the member-offset sites: offsets of members outside ``dense_offset_members`` move to a
+    diagonal site, far-field offsets to a pinned site when ``far_field_offsets`` is "fixed".  The latent vector keeps its
+    layout (the sites only regroup indices), so everything after sampling uses the state's own specs."""
+    if dense_offset_members == "all" and far_field_offsets == "sample":
+        return specs, starts
+    members = state.members
+    packed = state.packed_lens_spec
+    n = len(members.member_ids)
+    keep = {"all": np.ones(n, bool), "none": np.zeros(n, bool), "centered": np.asarray(members.centered, bool),
+            "exact": np.isin(np.arange(n), np.asarray(members.exact_positions, int))}[dense_offset_members]
+    far = np.isin(np.arange(n), np.asarray(members.far_positions, int))
+    specs, starts = list(specs), np.array(starts, dtype=float, copy=True)
+    suffix: dict[int, str] = {}
+    fixed = skipped = 0
+    for position in range(n):
+        offsets = [int(members.offset_param_index[position]), int(members.radius_offset_param_index[position])]
+        if far_field_offsets == "fixed" and far[position]:
+            for idx in offsets:
+                if idx < 0:
+                    continue
+                if specs[idx].centered:
+                    skipped += 1
+                    continue
+                specs[idx] = replace(specs[idx], prior_kind="normal", std=FIXED_OFFSET_STD, dof=None)
+                starts[:, idx] = 0.0
+                suffix[idx] = FIXED_SITE_SUFFIX
+                fixed += 1
+        if not keep[position]:
+            for idx in offsets:
+                if idx >= 0 and idx not in suffix:
+                    suffix[idx] = DIAGONAL_SITE_SUFFIX
+    counters: dict[str, int] = {}
+    order = sorted((i for i, s in enumerate(specs) if s.sample_site_name and s.component_family == "member_scatter_offset"),
+                   key=lambda i: (specs[i].sample_site_name, specs[i].sample_site_index))
+    for i in order:
+        name = specs[i].sample_site_name + suffix.get(i, "")
+        specs[i] = replace(specs[i], sample_site_name=name, sample_site_index=counters.get(name, 0))
+        counters[name] = counters.get(name, 0) + 1
+    log(f"[nuts] offset sites: dense for '{dense_offset_members}' members ({int(keep.sum())} of {n}), far-field offsets "
+        f"{far_field_offsets} ({fixed} pinned{f', {skipped} centered left free' if skipped else ''}); sites "
+        + ", ".join(f"{k} {v}" for k, v in sorted(counters.items())))
+    return specs, starts
+
+
 EIGENVALUE_FLOOR = 1.0
 FINITE_DIFFERENCE_STEP = 1.0e-4
 
@@ -179,7 +230,9 @@ def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarr
     sites = sample_sites(specs)
     global_names, latent_names = [], []
     for site in sites:
-        latent = [specs[i].component_family in LATENT_FAMILIES and specs[i].component_family not in dense_families for i in site.indices]
+        split_off = site.name.endswith((DIAGONAL_SITE_SUFFIX, FIXED_SITE_SUFFIX))
+        latent = [specs[i].component_family in LATENT_FAMILIES and (specs[i].component_family not in dense_families or split_off)
+                  for i in site.indices]
         if any(latent) and not all(latent):
             raise ValueError(f"Sample site {site.name!r} mixes global and latent parameters")
         (latent_names if all(latent) else global_names).append(site.name)
@@ -197,7 +250,8 @@ def block_mass_seed(model, specs: list[ParameterSpec], reference_theta: np.ndarr
         for name in latent_names:
             for idx in site_by_name[name].indices:
                 spec = specs[idx]
-                scales.append(float(np.exp(theta[[s_.sample_name for s_ in specs].index(spec.scale_site_name)])) ** 2 if spec.centered else 1.0)
+                scales.append(float(np.exp(theta[[s_.sample_name for s_ in specs].index(spec.scale_site_name)])) ** 2 if spec.centered
+                              else float(spec.std) ** 2 if spec.std else 1.0)
         inverse_mass[latent_names] = jnp.asarray(scales, dtype=jnp.float64)
     diagnostics: dict[str, Any] = dict(global_dim=int(global_vector.size), latent_dim=latent_dim,
                                        global_sites=list(global_names), latent_sites=list(latent_names))
@@ -375,11 +429,13 @@ def adaptation_diagnostics(step_size: np.ndarray, energy: np.ndarray, accept: np
 def run_nuts(state: ModelState, evaluator: Evaluator, starts: np.ndarray, *, warmup: int, samples: int, chains: int,
              chain_method: str, max_tree_depth: int, target_accept: float, initial_step_size: float, seed: int,
              thin: int = 1, print_summary: bool = False, mass_matrix: str = "hessian", dense_member_offsets: bool = False,
+             dense_offset_members: str = "all", far_field_offsets: str = "sample",
              stiffness: bool = True, log=print) -> PosteriorResults:
     """Run NUTS from one latent start per chain (starts has shape (chains, n_params))."""
-    specs = state.parameter_specs
-    model = posterior_model(specs, evaluator.log_likelihood)
     starts = np.asarray(starts, dtype=float).reshape(chains, -1)
+    specs, starts = split_offset_sites(state.parameter_specs, starts, state, dense_offset_members=dense_offset_members,
+                                       far_field_offsets=far_field_offsets, log=log)
+    model = posterior_model(specs, evaluator.log_likelihood)
     dense_families = ("member_scatter_offset",) if dense_member_offsets else ()
     dense_mass, inverse_mass, mass_diagnostics = block_mass_seed(model, specs, starts[0], dense_families=dense_families)
     if mass_matrix == "hessian":

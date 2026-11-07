@@ -114,7 +114,9 @@ def test_hierarchical_prior_width_against_independent_quadrature(synthetic_confi
     from scipy.integrate import quad
     from scipy.optimize import brentq
     from scipy.stats import norm
-    config = replace(synthetic_config, scaling=replace(synthetic_config.scaling, member_deviation='sigma'))
+    # The quadrature below integrates a normal deviation over the log-normal scatter, so the test asks for normal tails
+    # (the default is Student-t with 4 degrees of freedom, whose 84th percentile is wider).
+    config = replace(synthetic_config, scaling=replace(synthetic_config.scaling, member_deviation='sigma', member_deviation_tail='normal'))
     state = build_state(config)
     prior = config.scaling.member_velocity_scatter_prior
     def cdf(q):

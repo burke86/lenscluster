@@ -42,7 +42,7 @@ def test_student_t_deviations_are_the_sampled_prior(synthetic_config):
 
 
 def test_a_large_dof_gives_back_the_normal(synthetic_config):
-    normal = build_state(synthetic_config.validate())
+    normal = build_state(_tail(synthetic_config, tail="normal").validate())      # the default tail is Student-t(4)
     wide = build_state(_tail(synthetic_config, dof=1.0e7).validate())
     a, b = _offset_site(normal), _offset_site(wide)
     value = jnp.linspace(-3.0, 3.0, len(a.indices))

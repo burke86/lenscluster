@@ -305,6 +305,15 @@ class SamplingConfig:
     # source coordinates stay diagonal.  The bright members' offsets trade off against sigma*, the core and the slopes
     # (correlations to 0.74 on M0416), which the diagonal mass cannot follow (2026-11-03).
     dense_member_offsets: bool = True
+    # Which members' offsets join the dense block when dense_member_offsets is set: "all"; "centered" (the members the data
+    # pin, centering "auto"); "exact" (not the far-field members); "none".  The rest are sampled with a diagonal mass.
+    # A 600-dimensional dense block cannot be estimated from a warmup whose draws have an ESS of tens; "centered" (the
+    # default since 2026-11-04, quick tests on AS1063) cut the chain disagreement by 3, made the far-field offsets mix
+    # (ESS 4 -> 785 of 400 draws) and the softest direction 4x stiffer, at 2/3 of the time per draw.
+    dense_offset_members: str = "centered"
+    # "sample": far-field members keep free offsets; "fixed": their offsets are pinned at the relation (unit normal
+    # prior of width FIXED_OFFSET_STD, start 0).  Far-field members barely move the images, so the offsets are prior-only.
+    far_field_offsets: str = "sample"
     # After sampling: the stiffest direction at each chain's last state with its adapted mass (power iteration on
     # Hessian-vector products, ~30 per chain), the step size it allows and the parameters in it (sampling.stiffness_diagnostic).
     stiffness_diagnostic: bool = True
@@ -348,7 +357,8 @@ class ScalingModelConfig:
     # member_deviation_dof degrees of freedom, so a few members can sit far from the relation without widening the scatter
     # for all (the radius scatter grew to 1.6-1.8 against a 0.3 prior for five members on M0416, 2026-11-03).  With the
     # Student-t the scatter is the scale; the standard deviation is scatter * sqrt(dof / (dof - 2)).
-    member_deviation_tail: str = "normal"
+    # Student-t is the default since 2026-11-04 (a scale-mixture form was tried and dropped: per-member funnels).
+    member_deviation_tail: str = "student_t"
     member_deviation_dof: float = 4.0
     # Member core radius at the pivot (fit_corekpc): log-normal with this median (kpc) and log width, on 0.01-10 kpc.
     corekpc_prior_median: float = 0.15
@@ -651,6 +661,10 @@ def validate_config(config: LensClusterSolverConfig) -> None:
     if not 0.0 < sampling.target_accept < 1.0:
         raise ValueError("sampling.target_accept must lie between 0 and 1.")
     _positive("sampling.initial_step_size", sampling.initial_step_size)
+    if sampling.dense_offset_members not in {"all", "centered", "exact", "none"}:
+        raise ValueError("sampling.dense_offset_members must be 'all', 'centered', 'exact' or 'none'.")
+    if sampling.far_field_offsets not in {"sample", "fixed"}:
+        raise ValueError("sampling.far_field_offsets must be 'sample' or 'fixed'.")
     members = config.members
     _positive("members.far_field_cut_radii", members.far_field_cut_radii)
     if members.cut_radius_inflation < 1.0 or not math.isfinite(members.cut_radius_inflation):
