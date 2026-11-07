@@ -40,7 +40,8 @@ paper/*
 .claude-octopus/
 tmp/
 output
-docs/
+docs/_build/
+docs_old/
 AGENTS.md
 
 validation_runs/
