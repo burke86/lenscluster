@@ -1,4 +1,4 @@
-"""JWST cutouts of images closest to a singular Jacobian, with 1- and 2-sigma position contours."""
+"""JWST cutouts of the image posteriors with largest major-axis uncertainty, with 1- and 2-sigma contours."""
 from pathlib import Path
 import argparse
 import sys
@@ -12,6 +12,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run',type=Path)
     parser.add_argument('--count',type=int,default=24)
+    parser.add_argument('--minimum-major-sigma',type=float,default=.1,help='Minimum major-axis posterior standard deviation in arcseconds')
+    parser.add_argument('--minimum-axis-ratio',type=float,default=2.,help='Minimum major/minor posterior standard-deviation ratio')
     parser.add_argument('--fov',type=float,default=3.,help='Minimum square field of view in arcseconds; expand to enclose 2-sigma contour')
     parser.add_argument('--image-dir',default='/data/sync/GalaxyClusterImaging/JWST_Images')
     args=parser.parse_args()
@@ -33,7 +35,8 @@ def main():
     contours=load_or_compute_contours(config,state,evaluator,posterior,extra,paths.tables)
     imaging=load_cluster_imaging(view,config.model,config.paths.run_name)
     write_small_lambda_jwst(config,state,evaluator,posterior,paths,imaging,contours,
-                          count=args.count,minimum_fov=args.fov)
+                          count=args.count,minimum_fov=args.fov,
+                          minimum_major_sigma=args.minimum_major_sigma,minimum_axis_ratio=args.minimum_axis_ratio)
 
 
 if __name__=='__main__':main()

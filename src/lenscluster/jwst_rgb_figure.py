@@ -157,18 +157,19 @@ def best_chain_draw_indices(posterior, best_index, count=32):
     return np.sort(indices),chain
 
 
-def draw_critical_interval(ax, lower, upper, color, extent):
+def draw_critical_interval(ax, lower, upper, color, extent=None, *, coordinates=None):
     """Shade the intersection lower<=0 and upper>=0, preserving subpixel bands.
 
     Interpolating min(-lower, upper) first can erase a narrow interval whose
     two boundaries cross a pixel. Intersect their separately contoured regions.
     """
-    style=dict(origin='lower',extent=extent)
+    style=dict(origin='lower',extent=extent) if coordinates is None else {}
+    args=() if coordinates is None else tuple(coordinates)
     if np.min(lower)>=0 or np.max(upper)<=0:
         return None
     bound=max(float(np.max(np.abs(lower))),float(np.max(np.abs(upper))),1.)+1.
-    fill=ax.contourf(lower,levels=[-bound,0.],colors=[color],alpha=.25,zorder=2,**style)
-    clip=ax.contourf(upper,levels=[0.,bound],colors='none',**style)
+    fill=ax.contourf(*args,lower,levels=[-bound,0.],colors=[color],alpha=.25,zorder=2,**style)
+    clip=ax.contourf(*args,upper,levels=[0.,bound],colors='none',**style)
     fill.set_clip_path(clip.get_paths()[0],ax.transData)
     fill.set_clip_box(ax.bbox)  # Keep the interval clipped to the displayed RGB crop too.
     clip.remove()

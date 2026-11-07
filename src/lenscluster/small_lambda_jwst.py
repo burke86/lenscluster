@@ -1,4 +1,4 @@
-"""JWST image-position posterior cutouts ranked by the near-singular eigenvalue."""
+"""JWST image-position posterior cutouts ranked by largest posterior position uncertainty."""
 from pathlib import Path
 import json
 
@@ -11,7 +11,28 @@ import pandas as pd
 from .cutouts import arcsec_to_skycoord, arcsec_to_radec, cutout_window, rgb_cutout, rgb_reference_band
 from .grf_plotting import plot_deflection_correction, PLOT_FIELD_VERSION
 from .fold_diagnostics import _credible_density_grid
-from .plot_style import PAPER_STYLE
+from .plot_style import PAPER_STYLE, CRITICAL_COLOR
+
+
+def posterior_axis_statistics(positions):
+    """Major/minor standard deviations and ratio, conditional on image recovery.
+
+    These summarize the whole distribution, including separate posterior islands.
+    Fewer than ten recovered draws or singular covariance cannot be ranked.
+    """
+    result=np.full((positions.shape[1],3),np.nan)
+    for i in range(positions.shape[1]):
+        points=np.asarray(positions[:,i])
+        points=points[np.isfinite(points).all(axis=1)]
+        if len(points)<10:
+            continue
+        eigenvalues=np.linalg.eigvalsh(np.cov(points.T))
+        if eigenvalues[0]<=0 or not np.isfinite(eigenvalues).all():
+            continue
+        minor,major=np.sqrt(eigenvalues)
+        result[i]=major,minor,major/minor
+    return result
+
 
 def singular_eigenvalue(jacobian):
     """Signed eigenvalue nearest zero, not the algebraically smallest eigenvalue."""
@@ -29,10 +50,12 @@ def singular_eigenvalue(jacobian):
 
 @plt.rc_context()
 def write_small_lambda_jwst(config, state, evaluator, posterior, paths, imaging, position_contours,
-                           *, count=24, minimum_fov=3., log=print):
+                           *, count=24, minimum_fov=3., minimum_major_sigma=.1, minimum_axis_ratio=2., log=print):
     """Reuse the overview's verified joint position draws; no new image searches."""
     if count < 1 or minimum_fov <= 0:
         raise ValueError('count and minimum_fov must be positive')
+    if minimum_major_sigma<0 or minimum_axis_ratio<1:
+        raise ValueError('minimum_major_sigma must be nonnegative and minimum_axis_ratio at least one')
     data=position_contours['position_data']
     fingerprint=position_contours['fingerprint']
     positions=np.asarray(data['recovered'])
@@ -75,15 +98,21 @@ def write_small_lambda_jwst(config, state, evaluator, posterior, paths, imaging,
     quantiles=np.percentile(abs(values),[16,50,84],axis=0)
     z_by_family={str(f.family_id):f.z_source for f in state.family_data}
     family_labels=np.asarray(state.images.family_ids).astype(str)[families]
+    axis_statistics=posterior_axis_statistics(positions)
     rows=pd.DataFrame(dict(image_label=labels,family_id=family_labels,z_source=[z_by_family[f] for f in family_labels],
         x_arcsec=xy[:,0],y_arcsec=xy[:,1],abs_lambda_a_p16=quantiles[0],abs_lambda_a_median=quantiles[1],
+        posterior_sigma_major_arcsec=axis_statistics[:,0],posterior_sigma_minor_arcsec=axis_statistics[:,1],posterior_axis_ratio=axis_statistics[:,2],
         abs_lambda_a_p84=quantiles[2],recovered_draws=np.isfinite(positions).all(2).sum(0),total_draws=len(indices)))
-    rows=rows.sort_values(['abs_lambda_a_median','image_label'],kind='stable').reset_index(names='image_index')
+    rows=rows.sort_values(['posterior_sigma_major_arcsec','image_label'],ascending=[False,True],kind='stable').reset_index(names='image_index')
     rows['rank']=np.arange(1,len(rows)+1);rows['shown']=False;rows['skip_reason']='';rows['fov_arcsec']=np.nan
     images,bands,display,cluster=imaging
     reference=images[rgb_reference_band(bands)]
     selected=[]
     for row_index,row in rows.iterrows():
+        if not np.isfinite(row.posterior_axis_ratio):
+            rows.loc[row_index,'skip_reason']='Insufficient recovered draws or singular position covariance';continue
+        if row.posterior_sigma_major_arcsec<minimum_major_sigma or row.posterior_axis_ratio<minimum_axis_ratio:
+            rows.loc[row_index,'skip_reason']='Below minimum uncertainty extent or elongation';continue
         coord=arcsec_to_skycoord(row.x_arcsec,row.y_arcsec,state.reference)
         window=cutout_window(reference,coord,minimum_fov)
         if window is None:
@@ -109,24 +138,40 @@ def write_small_lambda_jwst(config, state, evaluator, posterior, paths, imaging,
         log('[outputs] small-lambda JWST cutouts skipped: no resolved posterior contours within imaging')
         return None
     stem=f'{config.paths.figure_prefix}_small_lambda_a_image_posteriors_jwst'
+    from .cutout_critical_fields import median_cutout_determinants
+    critical_grids,critical_determinants,critical_indices,critical_lower,critical_upper=median_cutout_determinants(
+        state,evaluator,posterior,[[r.x_arcsec,r.y_arcsec] for r,_,_,_,_ in selected],
+        [f for _,_,_,_,f in selected],[r.z_source for r,_,_,_,_ in selected],indices,
+        paths.tables/f'{stem}_critical.npz',fingerprint,log=log)
     plt.style.use(Path(__file__).with_name('style.mplstyle'));plt.rcParams.update(PAPER_STYLE)
     columns=min(3,len(selected));nrows=int(np.ceil(len(selected)/columns))
     fig,axes=plt.subplots(nrows,columns,figsize=(7.1,7.1*nrows/columns),squeeze=False)
     fig.subplots_adjust(left=0,right=1,bottom=0,top=1,wspace=0,hspace=0)
     contour_rows=[]
-    for ax,(row,coord,window,grid,fov) in zip(axes.flat,selected):
+    for panel_index,(ax,(row,coord,window,grid,fov)) in enumerate(zip(axes.flat,selected)):
         rgb=rgb_cutout(images,bands,display,coord,fov)
         ax.imshow(rgb,origin='lower',interpolation='nearest')
+        critical_grid=critical_grids[panel_index]
+        cra,cdec=arcsec_to_radec(critical_grid[...,0],critical_grid[...,1],state.reference)
+        cx,cy=reference.wcs.world_to_pixel_values(cra,cdec)
+        from .jwst_rgb_figure import draw_critical_interval
+        draw_critical_interval(ax,critical_lower[panel_index],critical_upper[panel_index],CRITICAL_COLOR,
+                               coordinates=(cx-window.x0,cy-window.y0))
+        determinant=critical_determinants[panel_index]
+        if determinant.min()<0<determinant.max():
+            ax.contour(cx-window.x0,cy-window.y0,determinant,levels=[0],colors=[CRITICAL_COLOR],linewidths=.85)
+
         ra,dec=arcsec_to_radec(grid['x'],grid['y'],state.reference)
         px,py=reference.wcs.world_to_pixel_values(ra,dec)
         contour=ax.contour(px-window.x0,py-window.y0,grid['density'],levels=grid['levels'],
-                          colors=['#56B4E9'],linewidths=[.65,.85],linestyles=['--','-'])
+                          colors=['tab:orange'],linewidths=[.65,.85],linestyles=['--','-'])
         segments=[seg for level in contour.allsegs for seg in level]
         clipped=any(np.any((seg[:,0]<0)|(seg[:,0]>rgb.shape[1]-1)|(seg[:,1]<0)|(seg[:,1]>rgb.shape[0]-1)) for seg in segments)
         contour_rows.append(dict(image_label=row.image_label,probabilities=[.682689492,.954499736],
+            posterior_axis_ratio=float(row.posterior_axis_ratio),posterior_sigma_major_arcsec=float(row.posterior_sigma_major_arcsec),
             recovered_draws=int(row.recovered_draws),total_draws=len(indices),fov_arcsec=fov,contour_clipped=bool(clipped),
             kde_integrated_mass=grid['integrated_mass'],bandwidth_factor=grid['bandwidth_factor']))
-        text=f'{row.image_label}'+ '\n'+rf'$z={row.z_source:.3f}$'+ '\n'+rf'$|\lambda_a|_{{50}}={row.abs_lambda_a_median:.4f}$'
+        text=f'{row.image_label}'+ '\n'+rf'$z={row.z_source:.3f}$'+ '\n'+rf'$\sigma_{{\rm major}}={row.posterior_sigma_major_arcsec:.3f}^{{\prime\prime}}$'+ '\n'+rf'$\sigma_{{\rm major}}/\sigma_{{\rm minor}}={row.posterior_axis_ratio:.2f}$'
         ax.text(.03,.97,text,transform=ax.transAxes,ha='left',va='top',fontsize=7,color='white',
                 bbox=dict(facecolor='black',alpha=.5,edgecolor='none',pad=2))
         size=rgb.shape[0];bar=.5/reference.pixel_scale_arcsec
@@ -137,9 +182,11 @@ def write_small_lambda_jwst(config, state, evaluator, posterior, paths, imaging,
     output=paths.figures/f'{stem}.pdf';fig.savefig(output,dpi=350,bbox_inches='tight',pad_inches=0);plt.close(fig)
     rows.to_csv(paths.tables/f'{stem}.csv',index=False)
     np.savez_compressed(paths.tables/f'{stem}.npz',lambda_a=values,draw_indices=indices,image_labels=labels,
-                        abs_lambda_a_quantiles=quantiles,observed_xy=xy)
+                        abs_lambda_a_quantiles=quantiles,observed_xy=xy,posterior_axis_statistics=axis_statistics)
     info=dict(run=str(paths.figures.parent),image_dir=config.image_catalog.image_dir,bands=list(bands),minimum_fov_arcsec=minimum_fov,
-        ranking='Ascending median absolute eigenvalue nearest zero, at catalog positions and family redshifts; ties by image label',
+        critical_curve='Blue: zero contour of posterior median determinant at each source redshift; parametric + shared GRF when enabled',critical_draw_indices=critical_indices.tolist(),critical_band='16-84% determinant interval from the same smoothed parametric + GRF draws',
+        minimum_major_sigma_arcsec=minimum_major_sigma,minimum_axis_ratio=minimum_axis_ratio,maximum_cutouts=count,
+        ranking='Descending major-axis standard deviation (sqrt of largest eigenvalue of recovered image-position sample covariance); ties by image label; at least 10 recovered draws and positive-definite covariance',
         model='exact parametric + conditional-mean GRF, smooth plotting derivatives',grf_version=PLOT_FIELD_VERSION,
         jacobian_max_asymmetry=max(asymmetries),singular_value_check='abs(lambda_a) checked against smallest singular value for every image/draw',
         position_contours='68.2689492% (solid) and 95.4499736% (dashed) KDE highest-density regions, conditional on successful local image recovery; no covariance ellipses',
