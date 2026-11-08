@@ -77,3 +77,8 @@ catalogs/**/bayes.dat
 catalogs/**/index.html*
 *.bbl
 !docs/requirements.txt
+
+# Local working material, not for the repository
+Writing_Guide.md
+feasibility/
+paper_probabilistic/
