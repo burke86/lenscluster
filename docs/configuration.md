@@ -2,7 +2,8 @@
 
 Every fit is described by one frozen dataclass, {class}`~lenscluster.config.LensClusterSolverConfig`. It groups the
 lens model, the likelihood, the search and the sampler, the run paths and the figure options. Build it, call
-`validate()`, and pass it to {func}`lenscluster.pipeline.run`. Change a field of a frozen config with
+`validate()`, and pass it to {func}`lenscluster.pipeline.run`. Build it in Python, as on this page, or read the lens
+model from a Lenstool parameter file (see {ref}`lenstool-par`). Change a field of a frozen config with
 `dataclasses.replace`:
 
 ```python
@@ -154,14 +155,14 @@ the circular far-field series of the dPIE ("far-field"), which is much cheaper. 
 
 `centering`
 : Which members sample their deviation directly rather than as a unit offset: `"none"`, `"auto"` (where the data
-  constrain the deviation more than the prior does) or `"exact"`. `run.xsh` uses `"auto"`.
+  constrain the deviation more than the prior does) or `"exact"`. The production fits use `"auto"`.
 
 The posterior audit checks the far-field approximation after sampling (see {doc}`pipeline`).
 
 ## Search and sampling
 
 `SearchConfig` controls the init stage. The main fields are `n_starts` (prior draws for the large-scale search; 256 in
-`run.xsh`), `halo_method` and `member_method` (`"lbfgs"`, `"optax-lbfgs"`, `"adam"` or `"svi"`), `member_starts`, and
+the production fits), `halo_method` and `member_method` (`"lbfgs"`, `"optax-lbfgs"`, `"adam"` or `"svi"`), `member_starts`, and
 `warm_start` (a previous run directory whose saved start replaces the search). See {doc}`pipeline` for how the stages
 use them.
 
@@ -181,32 +182,92 @@ RunPathsConfig(output_dir="results/demo/hera", run_name="v1", figure_prefix="her
 The run directory is `<output_dir>/<run_name>/`, and figure file names start with `figure_prefix`. `run_name` must be a
 single directory name.
 
-## Settings used by `run.xsh`
+## Recommended settings
 
-`run.xsh` starts from the library defaults and changes several of them. The main differences:
+The library defaults are conservative. The production fits of the supported clusters change these:
 
-| setting | library default | `run.xsh` | `run.xsh --fast` |
+```python
+from dataclasses import replace
+from lenscluster.config import MemberConfig, SamplingConfig, SearchConfig
+
+config = replace(
+    config,
+    likelihood=grf_likelihood,                              # see the Likelihoods page
+    search=replace(config.search, n_starts=256),
+    sampling=SamplingConfig(warmup=250, samples=100, max_tree_depth=8, target_accept=0.8),
+    members=replace(config.members, centering="auto"),
+)
+```
+
+| setting | library default | production fits | quick look |
 |---|---|---|---|
 | likelihood | `smoothed` | GRF + image-plane GP, `gp_blocks="all"` | GRF + image-plane GP, `gp_blocks="system"` |
-| `search.n_starts` | 32 | 256 | 256 |
-| NUTS warmup + samples | 250 + 200 | 250 + 100 | 500 + 250 |
+| `search.n_starts` | 32 | 256 | 32–256 |
+| NUTS warmup + samples | 250 + 200 | 250 + 100 per chain | 150 + 100 |
 | `target_accept` | 0.85 | 0.8 | 0.8 |
 | `members.centering` | `none` | `auto` | `auto` |
-| `far_field_cut_radii` | 3 | 3 | 2 |
-| member shapes | fixed | per cluster (M0416_CANUCS2025 samples at 0.1) | fixed |
+| `members.far_field_cut_radii` | 3 | 3 | 2 (check the audit) |
+| `scaling.member_shape_scatter` | `None` (fixed) | `None`, or 0.1 to sample shapes | `None` |
 
-`xonsh run.xsh --help` lists every command-line option; the most used are:
+Common changes on an existing configuration:
 
-| option | effect |
+| to | change |
 |---|---|
-| `--likelihood grf_gp\|gp_image_plane\|smoothed` | the position likelihood (see {doc}`likelihoods`) |
-| `--gp-blocks all\|system\|family` | GRF covariance blocks |
-| `--stage init\|final\|both` | run one or both stages |
-| `--warm-start RUN_DIR` | start from another run's saved start; skips the search |
-| `--warmup N`, `--samples N` | NUTS draws per chain |
-| `--kinematics G26` | add member kinematics from these catalog sources |
-| `--member-shapes SIGMA\|none` | sample member shapes with this width, or fix them |
-| `--fix-relation sigma=129,cutkpc=33` | hold relation parameters fixed |
-| `--drop-halos ID[,ID]` | leave large-scale components out |
-| `--imaging hst\|jwst` | imaging for the cluster figures |
-| `--skip-plots` | no figures or tables after sampling |
+| add member kinematics | `MemberPopulationConfig(kinematics_sources=("G26",))` |
+| sample member shapes | `ScalingModelConfig(member_shape_scatter=0.1)` |
+| hold relation parameters fixed | `ScalingModelConfig(fixed_relation_fields=("sigma", "cutkpc"))` |
+| drop a large-scale component | rebuild `LensModelConfig.large_halos` without it |
+| start from a previous run | `SearchConfig(warm_start="results/demo/v1")` |
+| skip figures and tables | `RuntimeConfig(skip_plots=True)` |
+
+(lenstool-par)=
+## From a Lenstool `.par` file
+
+{func}`~lenscluster.lenstool_par.config_from_lenstool_par` reads a Lenstool parameter file and returns a
+`LensClusterSolverConfig` with library defaults outside the lens model:
+
+```python
+from lenscluster.lenstool_par import config_from_lenstool_par
+
+config = config_from_lenstool_par(
+    "model.par",
+    image_catalog="images.yaml",       # YAML image catalog (default: the multfile, if it is YAML)
+    member_catalog="members.cat",      # default: the potfile's filein, next to the .par file
+    output_dir="results",              # run directory: output_dir/run_name
+    run_name=None,                     # default: the file name without .par
+)
+```
+
+What it reads:
+
+| `.par` block | becomes |
+|---|---|
+| `runmode` `reference` | `ReferenceFrameConfig` |
+| `cosmology` / `cosmologie` (`H0`, `omega`, `lambda`, `wX`) | `CosmologyConfig` |
+| `potentiel` with `profil 81` | `DPIEHaloConfig`; `core_radius`/`cut_radius` in arcsec converted to kpc at `z_lens`, `*_kpc` radii kept |
+| `potentiel` with `profil 14` | `ShearHaloConfig` |
+| `limit` | the halo's `priors` |
+| `potfile` (`mag0`, `core`/`corekpc`, `sigma`, `cut`/`cutkpc`, `type`, `z_lens`) | `MemberPopulationConfig` |
+| `potfile` `vdslope`, `slope` | relation exponents $\alpha = 1/\mathrm{vdslope}$, $\beta = 2/\mathrm{slope}$ |
+| `image` `sigposArcsec` | `ImageConstraintsConfig.sigma_inst_arcsec` |
+
+Limits keep their Lenstool flags: 0 fixed, 1 uniform (`lower upper step`), 3 normal (`mean std`), 9 truncated normal
+(`mean std lower [upper]`). A field without a limit stays fixed, as in Lenstool. A starting value outside its limit is
+moved to the nearest bound.
+
+Things to know:
+
+- The solver reads multiple images from YAML catalogs only. Convert the `multfile` once with
+  `scripts/convert_lenstool_catalog.py`.
+- Only dPIE (`profil 81`) and shear (`profil 14`) potentials are read. Add NFW halos or a mass sheet in Python.
+- One `potfile` is read. Configure several member populations in Python.
+- What the `.par` file fixes stays fixed: relation slopes given with flag 0, and the member core
+  (`ScalingModelConfig.fit_corekpc=False`). Free them on the returned configuration if you want them sampled:
+
+```python
+config = replace(config, scaling=replace(config.scaling, fixed_relation_fields=(), fit_corekpc=True))
+```
+
+- The `.par` file does not set the likelihood, search or sampler. Apply the recommended settings above.
+- Reading the file starts JAX (for the distance calculation), so call
+  {func}`~lenscluster.cpu_runtime.configure_cpu_runtime` before it.

@@ -9,22 +9,22 @@ catalogs/<cluster>/<source>/
     images.yaml          multiple images (format lenscluster-images/1)
     members.yaml|.cat    cluster members
     README.*             the source's own notes
-    source/              the published files the YAML was converted from
+    source/              the published files the YAML was converted from (Lenstool .par and catalogs)
     history/             earlier versions of the YAML, kept for the record
 ```
 
 ## Available catalogs
 
-| folder | `run.xsh` entry | images | members | from |
-|---|---|---|---|---|
-| `hera/` | `HERA` | images.yaml | members.yaml | FF-SIMS Hera, with 7-band truth magnitudes |
-| `ares/` | `ARES` | images.yaml | members.yaml | FF-SIMS Ares |
-| `m0416/canucs2025/` | `M0416_CANUCS2025` | images.yaml (knots, parities) | members.yaml (DR1 light shapes, Granata 2026 kinematics) | Rihtarsic et al. 2025 |
-| `m0416/bergamini2023/` | `M0416_BERGAMINI2023` | images.yaml | members.cat | Bergamini et al. 2023 |
-| `m0416/diego2024/` | comparison only | images.ecsv / .fits | | Diego et al. 2024 (PEARLS) |
-| `as1063/bergamini2019/` | `AS1063` | images.yaml | members.cat | Bergamini et al. 2019 |
-| `as1063/diego2026/` | `AS1063_JWST` | images.yaml | members.yaml (Beauchesne 2025) | Diego et al. 2026 |
-| `as1063/caminha2016/` | not an entry | | | Caminha et al. 2016 |
+| folder | images | members | from |
+|---|---|---|---|
+| `hera/` | images.yaml | members.yaml | FF-SIMS Hera, with 7-band truth magnitudes |
+| `ares/` | images.yaml | members.yaml | FF-SIMS Ares |
+| `m0416/canucs2025/` | images.yaml (knots, parities) | members.yaml (DR1 light shapes, Granata 2026 kinematics) | Rihtarsic et al. 2025 |
+| `m0416/bergamini2023/` | images.yaml | members.cat | Bergamini et al. 2023 |
+| `m0416/diego2024/` | images.ecsv / .fits | | Diego et al. 2024 (PEARLS) |
+| `as1063/bergamini2019/` | images.yaml | members.cat | Bergamini et al. 2019 |
+| `as1063/diego2026/` | images.yaml | members.yaml (Beauchesne 2025) | Diego et al. 2026 |
+| `as1063/caminha2016/` | | | Caminha et al. 2016 |
 
 Positions of the real clusters are ICRS RA/Dec in degrees. Hera and Ares positions are offsets about (0, 0) in degrees
 (the Lenstool `reference 3 0 0` convention), not sky coordinates. `catalogs/README.md` records the astrometric frames
@@ -118,7 +118,7 @@ Member
 : A list of measurements `{source, sigma, err, sn, notes}` with `sigma` and `err` in km/s. A kinematics source gives
   its `reference`, a `quantity` (`sigma_ap` within a circular aperture of `aperture_arcsec`; `sigma_0` within
   $R_e/8$; `sigma_e` within $R_e$), and optionally `aperture_arcsec`. Measurements enter the likelihood only for the
-  sources listed in `MemberPopulationConfig.kinematics_sources` (`run.xsh --kinematics G26`).
+  sources listed in `MemberPopulationConfig.kinematics_sources`, for example `("G26",)`.
 
 Member names are strings, so quote numeric names. A name repeated in `members` is an error.
 

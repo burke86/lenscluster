@@ -1,19 +1,23 @@
 # Running a fit
 
-{func}`lenscluster.pipeline.run` runs a fit in two stages. `run.xsh` builds the configuration and calls it; from Python,
-call `run(config, stage="both")` or the stages separately with {func}`~lenscluster.pipeline.run_init` and
-{func}`~lenscluster.pipeline.run_final`.
+{func}`lenscluster.pipeline.run` runs a fit in two stages, init and final. Run both, or one at a time:
 
-```bash
-xonsh run.xsh M0416_CANUCS2025 --dry-run
-xonsh run.xsh M0416_CANUCS2025 --campaign nov --run-label shared-grf
-xonsh run.xsh M0416_CANUCS2025 --campaign nov --run-label shared-grf --stage final
+```python
+from lenscluster.pipeline import dry_run, run
+
+dry_run(config)                   # describe the model, write nothing
+result = run(config)              # init + final
+init = run(config, stage="init")  # the search alone
+result = run(config, stage="final")  # sample from a completed init
 ```
+
+{func}`~lenscluster.pipeline.run_init` and {func}`~lenscluster.pipeline.run_final` are the two stages as separate
+functions.
 
 ## Dry run
 
-`--dry-run` (or {func}`~lenscluster.pipeline.dry_run`) builds the model and prints, as JSON, the number of parameters,
-the provisional member classification, the search and sampling sizes, and the CPU plan. It writes nothing.
+{func}`~lenscluster.pipeline.dry_run` builds the model and prints, as JSON, the number of parameters,
+the provisional member classification, and the search and sampling sizes. It writes nothing.
 
 ## Init stage
 
@@ -57,8 +61,11 @@ whose median $|\det A|$ at the images exceeds `SearchConfig.max_median_abs_deter
 
 ### Warm start
 
-```bash
-xonsh run.xsh M0416_CANUCS2025 --run-label v2 --warm-start results/nov/m0416/v1
+```python
+from dataclasses import replace
+
+config = replace(config, search=replace(config.search, warm_start="results/demo/v1"),
+                 paths=replace(config.paths, run_name="v2"))
 ```
 
 The saved start of a previous run, matched by parameter name, replaces the search; the polish and chain-start step
@@ -91,13 +98,28 @@ plan, and {func}`lenscluster.cpu_runtime.configure_cpu_runtime` must run before 
 ```python
 from lenscluster.cpu_runtime import configure_cpu_runtime
 
-configure_cpu_runtime(4, "parallel")    # before the first JAX import
+configure_cpu_runtime(4, "parallel")    # at the top of the script, before JAX starts
 ```
 
-`run.xsh` does this for you (4 chains by default, the `cores` variable at the top of the script).
+Building the configuration from a `.par` file starts JAX, so call it before that too. A late call raises an error
+rather than silently running the chains on one device.
 
-## Fast runs
+## Quick looks
 
-`--fast` changes several settings for exploration: system GP blocks, far-field members allowed down to 2 cut radii from
-an image, classification at the current model, member shapes fixed, and 500 + 250 NUTS draws per chain. A warning
-banner is printed before and after the run. Check the audit's far-field error before trusting a fast run.
+For exploration, shorten the search and the chains and use independent GP blocks:
+
+```python
+from lenscluster.config import SamplingConfig
+
+quick = replace(
+    config,
+    search=replace(config.search, n_starts=32),
+    sampling=SamplingConfig(warmup=150, samples=100),
+    likelihood=replace(config.likelihood, gp_blocks="system", gp_knee_project_modes=()),
+    members=replace(config.members, far_field_cut_radii=2.0),
+    paths=replace(config.paths, run_name="quick"),
+)
+```
+
+A quick run checks that a model works; publish full runs. Check the audit's far-field error before trusting a run with
+a looser far-field guard.

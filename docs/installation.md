@@ -11,30 +11,11 @@ The dependencies in `pyproject.toml` include two forks that are installed from G
 - `jaxtronomy` from `dutra/JAXtronomy@feat-pseudojaffe-compact-profiles` (the JAX lens profiles), and
 - `lenstronomy` from `dutra/lenstronomy@feat-lenscluster-models` (the exact-image solver and plotting).
 
-The launchers `run.xsh` and `run_mock.xsh` are [xonsh](https://xon.sh) scripts. xonsh is not a package dependency;
-install it into the same environment:
-
-```bash
-python -m pip install xonsh
-```
-
-## Existing environments
-
-On the group machines the code runs in an existing conda environment: `lenstronomy` on Linux, `lenscluster` on Mac.
-Call that environment's interpreter directly rather than creating a new environment:
-
-```bash
-/home/dutra/.conda/envs/lenstronomy/bin/xonsh run.xsh HERA --dry-run
-/home/dutra/.conda/envs/lenstronomy/bin/python -m pytest tests
-```
-
-The examples in these pages write `python` and `xonsh` for brevity.
-
 ## Data
 
-The image and member catalogs are tracked under `catalogs/` and need no download (see {doc}`catalogs`). Imaging is not
-tracked. The JWST, HST and FF-SIMS mosaics, and the FF-SIMS truth maps used for truth recovery, are fetched into
-`data/imaging/<cluster>/<source>/` with:
+The image and member catalogs of the supported clusters are tracked under `catalogs/` and need no download (see
+{doc}`catalogs`). Imaging is not tracked. The JWST, HST and FF-SIMS mosaics, and the FF-SIMS truth maps used for truth
+recovery, are fetched into `data/imaging/<cluster>/<source>/` with:
 
 ```bash
 python scripts/download_imaging.py download                     # JWST mosaics and FF-SIMS files
@@ -43,8 +24,8 @@ python scripts/download_imaging.py unpack lenscluster_imaging.zip # or restore a
 ```
 
 The FF-SIMS site has been offline since 2026, so the Hera and Ares images and truth maps come from an archive made by
-`download_imaging.py zip` (or `--ffsims-source DIR`). Fits run without imaging: figures that need a mosaic are reported as missing and skipped. See {doc}`scripts` for the
-options.
+`download_imaging.py zip` (or `--ffsims-source DIR`). Fits run without imaging: figures that need a mosaic are
+reported as missing and skipped. See {doc}`scripts` for the options.
 
 ## Tests
 

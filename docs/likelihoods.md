@@ -5,20 +5,20 @@ $b_i = \theta_i - \alpha(\theta_i)$, and the likelihood compares the images of e
 $\beta$. The likelihoods differ in how they model the residuals, that is, which errors they assume besides the
 catalog astrometry.
 
-Choose a likelihood with `LikelihoodConfig.likelihood_mode` and `gp_kernel`, or with `run.xsh --likelihood`:
+Choose a likelihood with `LikelihoodConfig.likelihood_mode` and `gp_kernel`:
 
-| `run.xsh --likelihood` | `likelihood_mode` | `gp_kernel` | model |
+| name | `likelihood_mode` | `gp_kernel` | model |
 |---|---|---|---|
-| `grf_gp` (default) | `gp_image_plane` | `knee` | Gaussian random field of unmodeled mass + image-plane GP |
-| `gp_image_plane` | `gp_image_plane` | `image_plane` | image-plane GP within each family |
-| `smoothed` | `smoothed` (library default) | | per-image source-plane floors |
+| GRF (production) | `gp_image_plane` | `knee` | Gaussian random field of unmodeled mass + image-plane GP |
+| image-plane GP | `gp_image_plane` | `image_plane` | image-plane GP within each family |
+| smoothed (library default) | `smoothed` | | per-image source-plane floors |
 
 In all three, the source positions are sampled as whitened offsets from the conditional source centroid, and the
 conditional expectation of the absolute Jacobian determinant normalizes the density.
 
 ## GRF of unmodeled mass (`grf_gp`)
 
-The default in `run.xsh`. The residual of image $i$ (family redshift weight $w_i$, magnification matrix $A_i$) is
+The likelihood of the production fits. The residual of image $i$ (family redshift weight $w_i$, magnification matrix $A_i$) is
 
 $$
 F_i = b_i - \beta_{k(i)} = w_i\, \delta\alpha(\theta_i) + A_i\, \big(d(\theta_i) + e_i\big),
@@ -50,7 +50,7 @@ $P_\kappa$, tabulated) and $\sigma_{\mathrm{fl}}$ (`gp_floor_arcsec`, 1.5 mas) i
 
 ### Covariance blocks
 
-`gp_blocks` (`run.xsh --gp-blocks`) sets which images share one field:
+`gp_blocks` sets which images share one field:
 
 `all`
 : One shared mass field over every image (default for full runs). The field-wide translation, convergence and shear
@@ -58,7 +58,7 @@ $P_\kappa$, tabulated) and $\sigma_{\mathrm{fl}}$ (`gp_floor_arcsec`, 1.5 mas) i
 
 `system`
 : An independent field per system (all knots of one galaxy), with no projection. About five times cheaper per
-  gradient, and the default with `--fast`. Its posterior differs from the shared field's, so use it for quick tests.
+  gradient, and useful for quick looks. Its posterior differs from the shared field's, so use it for quick tests.
 
 `family`
 : An independent field per family.
@@ -67,15 +67,33 @@ The init search runs on system blocks either way; the chain-start step and NUTS 
 
 ### Hyperparameters
 
-The sampled hyperparameters and their `run.xsh` priors:
+The sampled hyperparameters are $\sigma_\alpha$, the knee $\lambda_t$, the image-plane $\ell$,
+$\sigma_{\mathrm{shared}}$ and $\sigma_{\mathrm{white}}$; the slope $\gamma$ is fixed at 4 unless
+`gp_knee_gamma_prior` and `gp_knee_gamma_sigma` free it. The production fits use these settings:
 
-| parameter | prior in `run.xsh` | option |
-|---|---|---|
-| $\sigma_\alpha$ | log-normal, median 0.08", width 0.5, up to 0.5" | |
-| knee $\lambda_t$ | log-normal, median 6", width 0.6, on 2.5–8" | `--gp-knee-fixed`, `--gp-band-max` |
-| slope $\gamma$ | fixed at 4 | `--gp-knee-gamma G\|free\|flat` |
-| $\ell$ | log-normal, median 1", width 0.4, on 0.4–3" | |
-| $\sigma_{\mathrm{shared}}$, $\sigma_{\mathrm{white}}$ | log-normal (library defaults) | |
+```python
+from lenscluster.config import LikelihoodConfig, LogNormalPriorConfig
+
+grf_likelihood = LikelihoodConfig(
+    likelihood_mode="gp_image_plane",
+    gp_kernel="knee",
+    gp_blocks="all",                                            # "system" for quick looks
+    gp_knee_project_modes=("translation", "convergence", "shear"),  # only with gp_blocks="all"
+    sigma_sel_prior=None,
+    gp_knee_gamma=4.0,
+    gp_knee_gamma_prior=None,                                   # (2.0, 6.0) with gp_knee_gamma_sigma=0.5 samples it
+    gp_knee_scales_arcsec=(0.2, 100.0),
+    gp_knee_prior=LogNormalPriorConfig(median=6.0, log_sigma=0.6, lower=2.5, upper=8.0),
+    gp_knee_start_arcsec=6.0,
+    gp_sigma_alpha_prior=LogNormalPriorConfig(median=0.08, log_sigma=0.5, upper=0.5),
+    gp_sigma_alpha_start_arcsec=0.08,
+    gp_knee_ell_prior=LogNormalPriorConfig(median=1.0, log_sigma=0.4, lower=0.4, upper=3.0),
+    gp_knee_ell_start_arcsec=1.0,
+)
+config = replace(config, likelihood=grf_likelihood)
+```
+
+`gp_knee_fixed_arcsec` holds the knee at one value instead of sampling it.
 
 The knee prior keeps the field at the galaxy scale: left free, the knee moved to 14–25" and absorbed the halo-scale
 misfit. A slope of 2 corresponds to truncated isothermal lumps, 4 to NFW-like cusps, and 6 to cored lumps.
@@ -110,14 +128,14 @@ $$
 the propagated measurement error with $\sigma_{\mathrm{meas}}^2 = \sigma_{\mathrm{inst}}^2 + \sigma_{\mathrm{extra}}^2$,
 an isotropic residual-deflection scatter $\sigma_{\mathrm{def}}$, and a feature-selection term with stretching weight
 $R_i$. $\sigma_{\mathrm{extra}}$, $\sigma_{\mathrm{def}}$, $\sigma_{\mathrm{sel}}$ and $\lambda_{\mathrm{sel}}$ are
-sampled. Set `sigma_sel_prior=None` to drop the selection term (as `run.xsh` does) or `sigma_extra_prior=None` to drop
+sampled. Set `sigma_sel_prior=None` to drop the selection term (as the production fits do) or `sigma_extra_prior=None` to drop
 $\sigma_{\mathrm{extra}}$.
 
 ## Astrometric errors
 
 $\sigma_{\mathrm{inst}}$ comes from each image's `sigma` in the catalog, otherwise from
 `ImageConstraintsConfig.sigma_inst_arcsec`. `LikelihoodConfig.sigma_inst_arcsec` overrides it for every image.
-`run.xsh` sets a 1 mas floor so that the white scatter $\sigma_{\mathrm{white}}$ is inferred rather than assumed; the
+The production fits set `ImageConstraintsConfig(sigma_inst_arcsec=0.001)`, a 1 mas floor, so that the white scatter $\sigma_{\mathrm{white}}$ is inferred rather than assumed; the
 "chi-square (catalog errors)" line of the run summary is not meaningful at that value.
 
 ## Other terms

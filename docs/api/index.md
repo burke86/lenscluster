@@ -9,5 +9,6 @@ remaining modules (`evaluator`, `state`, `search`, `sampling`, the plotting modu
 config
 pipeline
 catalogs
+mock_validation
 runtime
 ```

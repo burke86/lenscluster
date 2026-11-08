@@ -52,3 +52,11 @@ Diagnostics and figures
 .. autoclass:: lenscluster.config.ImageCatalogCutoutConfig
 .. autoclass:: lenscluster.config.RGBDisplayConfig
 ```
+
+## From a Lenstool `.par` file
+
+```{eval-rst}
+.. autofunction:: lenscluster.lenstool_par.config_from_lenstool_par
+.. autofunction:: lenscluster.lenstool_par.read_lenstool_par
+.. autofunction:: lenscluster.lenstool_par.prior_from_limit
+```

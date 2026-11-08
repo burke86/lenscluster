@@ -1,8 +1,8 @@
 # Outputs
 
-A run writes everything under its run root, `results/<campaign>/<cluster>/<run-label>/` for `run.xsh`, or
-`<output_dir>/<run_name>/` from {class}`~lenscluster.config.RunPathsConfig`. Figure names start with
-`RunPathsConfig.figure_prefix` (the cluster key in `run.xsh`, for example `m0416_critical_curves.pdf`).
+A run writes everything under its run root, `<output_dir>/<run_name>/` from
+{class}`~lenscluster.config.RunPathsConfig`. Figure names start with `RunPathsConfig.figure_prefix`, for example
+`m0416_critical_curves.pdf`.
 
 ## Directory layout
 
@@ -69,7 +69,7 @@ GP runs write, with plotting on:
 - `gp_shared_vs_white.pdf`: relative-displacement noise and a joint uncertainty ellipse;
 - `gp_scale_posteriors.pdf`: shared and white amplitude posteriors (mas).
 
-Shared-field runs (`gp_blocks="all"`) also write `total_grf_dimensionless_power.pdf` and
+Shared-field GRF runs (`gp_blocks="all"`) also write `total_grf_dimensionless_power.pdf` and
 `gp_correction_correlation.pdf` at the highest-probability draw, with the maps in
 `final/tables/conditional_field_maps.*`. For these runs the truth maps, magnification recovery, aperture profiles,
 critical curves and caustics include the conditional mean GRF at each posterior draw. System- and family-block runs do
@@ -105,7 +105,7 @@ import json
 import numpy as np
 import pandas as pd
 
-run = "results/nov/m0416/shared-grf"
+run = "results/demo/hera"
 summary = pd.read_csv(f"{run}/final/tables/posterior_summary.csv")
 posterior = np.load(f"{run}/final/artifacts/posterior.npz")
 fit = json.load(open(f"{run}/final/tables/run_summary.json"))
