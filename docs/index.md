@@ -1,21 +1,41 @@
-# lenscluster
+# lenscluster Documentation
 
-Strong-lensing mass models of galaxy clusters with a single-stage Bayesian solver: dPIE halos and a scaling-relation
-member population, a Gaussian random field of unmodelled mass with a knee convergence spectrum plus an image-plane
-Gaussian process as the likelihood, and NUTS for the posterior.
+lenscluster builds Bayesian strong-lensing mass models of galaxy clusters with JAX. The lens is a sum of cluster-scale
+halos (dPIE or elliptical NFW), an optional external shear and mass sheet, and a population of cluster-member dPIE
+subhalos that follow luminosity scaling relations, with per-member deviations from the relation. Multiple-image
+positions constrain the model through an image-plane likelihood; the default adds a Gaussian random field of
+unmodeled mass with a knee convergence spectrum. A multi-start MAP search finds the posterior mode, and NUTS samples
+the posterior from there.
+
+The code runs on real clusters (MACS J0416, Abell S1063) and on the simulated FF-SIMS clusters Hera and Ares, and
+ships a mock-validation harness that generates analytic clusters, fits them and scores the recovery.
+
+Start with {doc}`installation` and {doc}`quickstart`. The remaining pages describe each part in more detail.
 
 ```{toctree}
 :maxdepth: 2
-:caption: Contents
+:caption: Getting started
 
-getting-started
+installation
+quickstart
 ```
 
-## Where things are
+```{toctree}
+:maxdepth: 2
+:caption: User guide
 
-- `run.xsh <cluster>`: fit a real or simulated cluster (Hera, Ares, AS1063, AS1063_JWST, M0416_BERGAMINI2023, M0416_CANUCS2025).
-- `run_mock.xsh --campaign NAME`: generate mock clusters, fit them and score the recovery.
-- `catalogs/<cluster>/<source>/`: the image and member catalogs.
-- `scripts/download_imaging.py`: the mosaics and truth maps under `data/imaging/`.
+catalogs
+configuration
+likelihoods
+pipeline
+outputs
+mock-validation
+scripts
+```
 
-The repository README holds the detailed workflow notes until they move here.
+```{toctree}
+:maxdepth: 2
+:caption: Reference
+
+api/index
+```
